@@ -135,8 +135,12 @@ API消费冻结 sharing 0.1，与旧 DTO 不混用。共享descriptor URL-free�
 
 发码/撤销只用 `src/public-admin-main.ts` 的**stopped/drained离线入口**，需 `M3_ADMIN_OFFLINE=1`；后续宿主脚本还检查Compose API已停，运行API writer lease存在则拒绝SQLite写。不会在运行中的in-memory state背后改DB，不新增公共admin端点。初始化只接受空目录，issue仅空namespace，不覆写已有code文件/身份/额度；CSPRNG32bytes码、current-owner0600文件、0700父目录，24h以内、1项目/3Run。session<=1h且不晚于code；公开协调限15消息、6/分钟，登录IP/code限流。撤销/expiry使现有session与preview bearer失效；排队/活跃任务通过权威cancel对账，未确认停止不释放锁、不退已用次数。
 
-新模型任务需认证的实时 `/internal/isolation/v1/capabilities` header/body与当前expected toolchain/image/policy/cache/probe/platform全部匹配；host_local、unknown、不匹配或不可达均拒绝。API不访问Docker socket/broker、不把synthetic readiness fixture当实际OS证明。公开Origin/Host必须精确；可信proxy IP只由`M3_TRUST_PROXY`指定，不能trust所有X-Forwarded头。
+新代码任务准入/派发需认证的实时 `/internal/isolation/v1/capabilities` header/body与当前expected toolchain/image/policy/cache/probe/platform全部匹配；host_local、unknown、不匹配或不可达均拒绝。API不访问Docker socket/broker、不把synthetic readiness fixture当实际OS证明。公开Origin/Host必须精确；可信proxy IP只由`M3_TRUST_PROXY`指定，不能trust所有X-Forwarded头。
 
 实现线已通过API check/build、63/63（旧55+public8）：共享解析/零业务写、receipt/epoch、cap轮换/旧403、originHost、隔离tuple gate、强码/TTL/单项目、离线writer拒写、stopped revoke与真实3秒expiry、登录限流、拒旧namespace。测试是独立HTTP Fake/隔离fixtures，无provider或公网；Docker/context/gateway/broker与外部双隧道门禁另待主管实际验收。
 
 主管独立通过本阶段API check、63/63全包和build。自然语言仍由M1 Router判断；零模型宿主帮助只针对既有typed sharing_help/status或deployment_help解析，不新增关键词路由。expiry复用所有非终态的既有取消对账/fence；HTTP Fake并不替代Docker整job停止证据。
+
+M1 Router 独立通道保留：自然语言 ask/咨询/进度不依赖 job OS proof，仍受身份、体验码TTL、协调预算与限流约束。auto 变更可保存有界排队意图，但无当前匹配 proof 不派 Prepare/Worker、不计生成 used；恢复继续原队列，不重跑 Router。普通 healthy job busy 不应撤销隔离证明，实际 busy/ask/queued 的 Docker 联调另由主管验收。
+
+上述独立Router补修由主管另行通过API check与public10/10定向回归；前一完整63项与本次10项不相加声称完整65项重跑。

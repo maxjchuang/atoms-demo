@@ -189,7 +189,7 @@ export async function createApi(options: ApiOptions) {
       if ((origin && origin !== ownOrigin && !permitted.includes(origin)) || (!origin && request.headers['sec-fetch-site'] === 'cross-site')) fail(403, 'FORBIDDEN', 'Cross-origin mutation denied');
     }
   });
-  app.addHook('preHandler',async request=>{if(!options.publicProfile||request.method!=='POST'||!/(?:\/runs|\/messages|\/accept|\/refresh|\/retry)$/.test(request.url))return;authorize(request);const input=(request.body as {input?:{kind?:string}}|undefined)?.input;if(request.url.endsWith('/messages')&&['status','sharing_help'].includes(input?.kind??''))return;if(!await publicReady())fail(503,'RUNTIME_UNAVAILABLE','隔离执行环境尚未通过当前策略验收');});
+  app.addHook('preHandler',async request=>{if(!options.publicProfile||request.method!=='POST'||!/(?:\/runs|\/accept)$/.test(request.url))return;authorize(request);const input=(request.body as {input?:{kind?:string}}|undefined)?.input;if(request.url.endsWith('/messages')&&['status','sharing_help'].includes(input?.kind??''))return;if(!await publicReady())fail(503,'RUNTIME_UNAVAILABLE','隔离执行环境尚未通过当前策略验收');});
   app.setErrorHandler((error, _request, reply) => {
     const known = error instanceof HttpError;
     const validation = (error as Error).name === 'ZodError' || (error as { statusCode?: number }).statusCode === 400;
@@ -521,6 +521,7 @@ export async function createApi(options: ApiOptions) {
         // Existing work still retains its lock. A health error is not a stop confirmation.
       }
       const isolationReady=options.publicProfile?await publicReady():true;
+      if(options.publicProfile)for(const record of store.state.runs.filter(r=>!terminal(r.dto.status)&&r.dto.status==='queued'&&!r.dto.executionId)){if(record.isolationWaiting===!isolationReady||(isolationReady&&!record.isolationWaiting))continue;store.transaction(()=>{record.isolationWaiting=!isolationReady;const message={id:id('message'),projectId:record.dto.projectId,runId:record.dto.id,role:'assistant' as const,status:'complete' as const,content:isolationReady?'隔离执行环境已就绪，将按原队列继续；没有重新调用项目 Router。':'正在等待当前隔离执行策略与环境验收就绪。修改意图已保存排队，尚未派发代码生成或消耗生成次数。',createdAt:now()};store.state.messages.push(message);emit(message.projectId,message.runId,{type:'message.updated',payload:message});});}
       for (const project of runtimeReady&&isolationReady ? store.state.projects : []) {
         if (project.dto.activeRunId) continue;
         const record = store.state.runs.find((entry) => entry.dto.projectId === project.dto.id && entry.dto.status === 'queued' && !entry.dto.executionId);
@@ -585,7 +586,7 @@ export async function createApi(options: ApiOptions) {
   sharing=registerSharing({app,store,profile:options.publicProfile,authorize,ownProject,ownVersion,fail,freshVersion,now});
   coordination=registerCoordination({app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,id,now,hash,canonical,fail,
     delivery:options.legacyFixtureMode?undefined:delivery,
-    codeActive:options.publicProfile?codeActive:undefined,canDispatch:options.publicProfile?publicReady:undefined,deploymentFacts:()=>sharing.hostFacts(),
+    codeActive:options.publicProfile?codeActive:undefined,deploymentFacts:()=>sharing.hostFacts(),
     messageLimit:options.coordinationMessageLimit??(options.publicProfile?15:undefined),messagesPerMinute:options.coordinationMessagesPerMinute??(options.publicProfile?6:undefined),
     authorize,ownProject,ownRun,mutation,sessionDto,workspace:workspaceFor,createRun:createRunCore,cancelRun:cancelRunCore,
     versionInfo:freshVersion,

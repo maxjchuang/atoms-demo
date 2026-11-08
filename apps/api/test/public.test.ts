@@ -7,7 +7,7 @@ import {randomBytes,randomUUID} from 'node:crypto';
 import {createApi} from '../src/server.js';
 import {initializePublicNamespace,offlinePublicCode} from '../src/public-admin.js';
 import {createFakeDeliveryRuntime} from '../src/fake-delivery-runtime.js';
-import {fakeConsult} from '../src/fake-coordinator.js';
+import {fakeConsult,fakeChange} from '../src/fake-coordinator.js';
 import {parsePublicDeployment,type PublicDeployment} from '../src/public-profile.js';
 import type {IsolationCapabilitiesDto} from '@atoms/contracts/isolation';
 import {isolationReady,isolationHostLocal} from '@atoms/contracts/isolation-fixtures';
@@ -66,5 +66,15 @@ test('public startup never imports unmarked existing data, weak secrets, or mism
  const f=await fixture();try{const base={dataDir:f.dataDir,agentUrl:'http://127.0.0.1:1',serviceToken:randomBytes(32).toString('base64url'),previewSecret:randomBytes(32).toString('base64url'),previewOrigin:'http://127.0.0.1:3002',autoSchedule:false,publicProfile:{deployment:()=>f.deployment}};
  await assert.rejects(createApi({...base,serviceToken:'weak'}),/weak internal secrets/);await assert.rejects(createApi({...base,publicProfile:{deployment:()=>({...f.deployment,dataNamespaceId:'namespace_wrong'})}}),/namespace mismatch/);
  const directory=await mkdtemp(join(tmpdir(),'atoms-not-public-'));try{await assert.rejects(createApi({...base,dataDir:directory}),/marker required before opening SQLite/);assert.equal((await import('node:fs')).existsSync(join(directory,'api.sqlite')),false);}finally{await rm(directory,{recursive:true,force:true});}
+ }finally{await f.close();}
+});
+
+test('natural read-only Router ask remains independent when job isolation is unavailable',async()=>{
+ const f=await fixture();try{const p=await f.project();f.setCaps({...isolationHostLocal});f.runtime.coordinator.setFactory(fakeConsult);const accepted=await f.request('POST',`/api/v2/projects/${p.id}/messages`,{input:{kind:'text',content:'帮我解释目前方案，先不要修改'},mode:'ask'});assert.equal(accepted.status,202);await f.api.tickCoordination();const turn=(await f.request('GET',`/api/v2/coordination-turns/${accepted.data.turn.id}`)).data;assert.equal(turn.status,'completed');assert.equal(turn.result.kind,'consult');assert.equal(f.runtime.coordinator.calls,1);assert.equal(f.runtime.prepareCalls,0);assert.equal(f.runtime.executeCalls,0);assert.equal(f.api.store.state.runs.length,0);const account=(await f.request('GET','/api/v2/session')).data;assert.equal(account.coordinationQuota.used,1);assert.equal(account.session.quota.runsUsed,0);
+ }finally{await f.close();}
+});
+test('auto change can queue bounded intent without OS proof; recovery dispatches once without repeating Router or charging early',async()=>{
+ const f=await fixture();try{const p=await f.project();f.setCaps({...isolationHostLocal});f.runtime.coordinator.setFactory(fakeChange);const accepted=await f.request('POST',`/api/v2/projects/${p.id}/messages`,{input:{kind:'text',content:'增加便签搜索功能'},mode:'auto'});assert.equal(accepted.status,202);await f.api.tickCoordination();const turn=(await f.request('GET',`/api/v2/coordination-turns/${accepted.data.turn.id}`)).data;assert.equal(turn.result.admission,'run_queued');const runId=turn.result.runId;await f.api.tick();await f.api.tick();assert.equal(f.runtime.prepareCalls,0);assert.equal(f.runtime.executeCalls,0);assert.equal(f.runtime.coordinator.calls,1);const account=(await f.request('GET','/api/v2/session')).data;assert.equal(account.session.quota.runsUsed,0);assert.equal(account.session.quota.runsReserved,1);assert.equal(f.api.store.state.messages.filter(m=>m.runId===runId&&m.content.includes('正在等待当前隔离')).length,1);
+ f.setCaps({...isolationReady,toolchainId:f.runtime.toolchain.id});for(let i=0;i<4;i++)await f.api.tick();assert.equal((await f.request('GET',`/api/v1/runs/${runId}`)).data.status,'succeeded');assert.equal(f.runtime.coordinator.calls,1);assert.equal(f.runtime.prepareCalls,1);assert.equal(f.runtime.executeCalls,1);assert.equal((await f.request('GET','/api/v2/session')).data.session.quota.runsUsed,1);
  }finally{await f.close();}
 });

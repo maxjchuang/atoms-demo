@@ -55,7 +55,7 @@ app_preview 的 expiresAt 必须晚于 issuedAt 且不超过900秒；API实际�
 
 build_entry 的 null 不承诺隧道寿命，尤其不能解释为永不过期；UI需说明停服务/重建域名即失效。URL不得包含体验码、登录session、owner令牌；向同事发工作台入口不等于给出体验码或账户邀请。
 
-共享 URL 字符串仅接受HTTPS，无 userinfo/query/fragment/控制字符/空白；preview 路径固定 `/p/<opaque-payload>.<opaque-signature>/index.html`，build 路径为 `/`。API必须再把 origin 与可信配置做**精确 authority比较**（scheme/host/port），不能用字符串域名后缀或模型文字。跨域、内部地址、open redirect、任意 path/URL 参数无解析权限。
+共享 URL 字符串仅接受HTTPS，无 userinfo/query/fragment/控制字符/空白；preview 路径固定 `/p/<opaque-payload>.<opaque-signature>/index.html`，build 路径为 `/`。URL原文也必须符合路径，不接受空userinfo、反斜杠或经 `..`/编码/正规化才变成合法preview/root的别名；不能仅用URL解析后的pathname放行。API必须再把 origin 与可信配置做**精确 authority比较**（scheme/host/port），不能用字符串域名后缀或模型文字。跨域、内部地址、open redirect、任意 path/URL 参数无解析权限。
 
 POST 只进行 capability 解析/签发，不产生消息、协调Turn、Run、模型调用、生成/协调额度消费或share业务写入。重复请求可取得 fresh 短期 cap，不用旧 mutation 幂等缓存复用过期或旧代际 URL。若实现选择接收 Idempotency-Key，它不能跳过当前 epoch/expiry 验证，不代表增加业务对象。浏览器复制前应重新取descriptor/resolve；网络丢回应安全重试不能变成执行。
 

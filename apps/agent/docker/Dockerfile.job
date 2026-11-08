@@ -1,4 +1,8 @@
 FROM public.ecr.aws/docker/library/node@sha256:9e5d714311940c098479ec352029af6df1d9a2dc4269b29373c616f51640dd67 AS pinned-node
+FROM pinned-node AS watchdog-build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+COPY watchdog.c watchdog-probe.c /build/
+RUN gcc -O2 -Wall -Wextra -Werror /build/watchdog.c -o /watchdog && gcc -O2 -Wall -Wextra -Werror /build/watchdog-probe.c -o /watchdog-probe && chmod 0555 /watchdog /watchdog-probe
 FROM mcr.microsoft.com/playwright@sha256:0dbd754198e27995355163ddb7e4e0d727eb841eade98df3432cd4daea772e91
 COPY --from=pinned-node /usr/local/bin/node /usr/local/bin/node
 COPY --from=pinned-node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
@@ -13,13 +17,14 @@ COPY template/ /opt/template/
 RUN cd /opt/template && pnpm install --frozen-lockfile --ignore-workspace --ignore-pnpmfile --ignore-scripts --registry=https://registry.npmjs.org --store-dir=/opt/offline-store --config.enable-global-virtual-store=false --config.package-import-method=copy
 COPY contracts/ /opt/runner/node_modules/@atoms/contracts/
 COPY verifier/ /opt/verifier/
-COPY job.ts idle.mjs /opt/runner/
+COPY job.ts /opt/runner/
+COPY --from=watchdog-build /watchdog /watchdog-probe /opt/runner/
 RUN ln -s /opt/runner/node_modules /opt/verifier/node_modules && ln -s /opt/template/node_modules/typescript /opt/runner/node_modules/typescript
 RUN chmod -R a+rX /ms-playwright /opt/offline-store /opt/template /opt/runner /opt/verifier
-USER 10001:10001
+USER 10002:10002
 WORKDIR /job
 ENV HOME=/job/home TMPDIR=/tmp NODE_ENV=development
-ENTRYPOINT ["node","/opt/runner/idle.mjs"]
+ENTRYPOINT ["/opt/runner/watchdog"]
 
 ARG SOURCE_HASH
 LABEL atoms.owner="atoms-v03" atoms.role="untrusted-job" atoms.source-hash=$SOURCE_HASH

@@ -40,7 +40,7 @@ ATOMS_DATA_ROOT=data/review-real pnpm dev
 
 首版统一入口：[协议基线 v0.1.0（Markdown）](docs/protocol-baseline-v0.1.md)。
 
-下一阶段为 **M1 项目协调 → M2 可信交付 → M3 隔离公网**。[v0.2 项目消息协调协议](docs/protocol-v0.2.md)、[能力差距与路线图](docs/capability-roadmap.md)及独立 Schema/fixture 已完成 G0 冻结：主代理亲自复验 contracts check 和 40/40 测试，原 v1 index/fixture/tests 无修改。M1 服务实现待开始，尚未实现消息 Router；统一基线提交后再进入三个独立 worktree 分线开发。
+下一阶段为 **M1 项目协调 → M2 可信交付 → M3 隔离公网**。[v0.2 项目消息协调协议](docs/protocol-v0.2.md)、[能力差距与路线图](docs/capability-roadmap.md)及独立 Schema/fixture 已完成 G0 冻结，宿主 action 补充后共享契约为 42 项测试，原 v1 index/fixture/tests 不变。M1 正在独立 worktree 实现；API 方向的独立测试和集成入口见 [M1 实施记录](docs/m1-coordination-status.md)。独立 API/Fake 验证不等于项目持久 Router 或整个 M1 已完成，最终三方与真实模型结果由主代理汇总。
 
 1. [架构与职责](docs/architecture.md)
 2. [公共 HTTP 协议](docs/public-api.md)

@@ -15,7 +15,7 @@ export interface RunRecord { dto: RunDto; prompt: string; codeId: string; starte
 export interface CoordinationRecord { dto: CoordinationTurnDto; codeId: string; operation: StartCoordinationRequestDto['operation'];
   inputContent: string; replyTo?: StartCoordinationRequestDto['replyTo']; request?: StartCoordinationRequestDto; requestHash?: string;
   sourceSeq: number; started: boolean; cancelCommand?: {commandId: string}; disconnected?: boolean;
-  requestedContextVersionId?:string|null }
+  requestedContextVersionId?:string|null; putPending?:boolean; cancelUncertainNotified?:boolean }
 export interface CoordinationState { turns: CoordinationRecord[]; messages: ConversationMessageDto[]; events: ConversationEventDto[];
   proposals: ChangeProposalDto[]; clarifications: ClarificationDto[]; memories: ProjectMemoryViewDto[];
   revisions: Record<string, number> }

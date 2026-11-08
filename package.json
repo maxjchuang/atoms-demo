@@ -13,6 +13,8 @@
     "test:contracts": "pnpm --filter @atoms/contracts test",
     "test:e2e": "pnpm --filter @atoms/web test:e2e",
     "test:integration": "pnpm --filter @atoms/contracts exec tsx ../../tests/integration/minimal-loop.mjs",
-    "test:integration:real": "pnpm --filter @atoms/contracts exec tsx ../../tests/integration/minimal-loop.mjs --real"
+    "test:integration:real": "pnpm --filter @atoms/contracts exec tsx ../../tests/integration/minimal-loop.mjs --real",
+    "test:coordination": "pnpm --filter @atoms/contracts exec tsx ../../tests/integration/coordination-loop.mjs",
+    "test:coordination:real": "pnpm --filter @atoms/contracts exec tsx ../../tests/integration/coordination-loop.mjs --real"
   }
 }

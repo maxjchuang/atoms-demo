@@ -138,7 +138,7 @@ pnpm --filter @atoms/web exec playwright test e2e/delivery.spec.ts
 
 Mock 通过真实 fetch/MSW 边界消费共享 fixtures，`/__mock/delivery/seed` 仅用于指定合成情景；不能证明真实模型、浏览器解释器或干净构建已执行。模拟 ZIP 是明确的空 ZIP，只验证前端授权与指纹流程，不当作可运行源码。测试会等待 Mock 启动完成，未声明 API fail-closed，不落到 live 服务。
 
-实际 Fake 三服务浏览器脚本已准备，默认不会运行。须主管先提供独立工作台/API/Agent、确认 Fake Router/Worker 和 M2 execution flavor；拒绝 localhost:5173、拒绝 MSW。可显式复用 G3 已完成项目，只验证报告/证据/精确 ZIP/diff/刷新，零新 Run；不传项目时会经 UI 新建一轮 Fake 生成。
+实际 Fake 三服务浏览器脚本已准备，默认不会运行。须主管先提供独立工作台/API/Agent、确认 Fake Router/Worker 和 M2 execution flavor；拒绝 localhost:5173、拒绝 MSW。必须显式指定已有且已结束执行的项目，只读验证报告/日志/PNG/精确 ZIP/diff/预览/刷新；缺少项目直接拒绝，工具不再提供新建生成分支。
 
 ```bash
 ATOMS_FAKE_SERVICES=1 ATOMS_WEB_URL=http://localhost:<隔离工作台端口> \
@@ -157,3 +157,18 @@ M2 实际 Fake HTTP 浏览器只读验收（2026-11-08）：在主管 integratio
 另一次补充只读浏览器检查退出 0：真实预览 React root 已加载且存在可见交互控件；PNG 证据通过工作台 descriptor/指纹/MIME 校验后以 blob 展示，实际解码 1280×876。补充检查拦截除登录外全部 API 写请求，无此类请求；前后 runsUsed=2、runsReserved=0、协调 used=0/reserved=0、conversationRevision=2、当前版本和完整版本列表均不变。两次检查均未提交消息或创建 Run，没有 MSW；Fake 模型与真实构建/DSL/clean 服务不等于真实 DSH 模型证据。
 
 实际截图与结果保存在 integration 的 `apps/web/review-artifacts/m2-services/`：`preview-quality.png`、`report.png`、`diff.png`、`preview-loaded.png`、`png-evidence.png`、`result.json`、`readonly-supplement.json`。本次不验证历史失败 Run 的 UI 可选入口、回滚、第三轮修改、OS 沙箱或公网部署；不把这些只读证据扩称完整 G3/G4。
+
+## 已完成真实任务的只读浏览器审计
+
+同一个脚本支持互斥的 `ATOMS_FAKE_SERVICES=1` 或 `ATOMS_READONLY_REAL_SERVICES=1`。两种模式都必须指定已有项目与隔离 URL，拒绝 live 5173，不启动任何服务/模型。真实模式不要求 Fake banner，但要求最终尝试显式 `sourceProvenance=model_output/dsh`；缺省、Fake、synthetic 或仅受控注入来源都不能冒认真实模型。API 已发布 complete 或 partial 均可检查，partial 具体 gap 保持可见。
+
+```bash
+# 仅在主管已结束模型任务、启动隔离真实服务之后手工调用
+ATOMS_READONLY_REAL_SERVICES=1 ATOMS_WEB_URL=http://localhost:<隔离端口> \
+  ATOMS_DELIVERY_PROJECT=<已有真实M2项目ID> ATOMS_DEMO_CODE=<体验码> \
+  pnpm --filter @atoms/web exec node --import tsx scripts/check-delivery-services.mjs
+```
+
+浏览器 context route 在发出请求前只允许 GET/HEAD 与同工作台 origin 的精确 `POST /api/v1/sessions` 登录（不接受额外 query/尾斜杠）；其他写请求先 abort，任何写尝试都使审计失败。禁用 Service Worker。前后比较构建/问答额度、消息 ID 与 revision、任务与版本指针/列表，必须不变。结果记录 `mode=fake|readonly_real`、实际来源、具体 gap、0 新消息/Run 和写拦截记录；Fake 输出仍在 `review-artifacts/m2-services/`，真实只读输出单独在 `review-artifacts/m2-readonly-real-services/`。exit 0 表示完整只读审计通过，exit 1 表示未通过；不会静默降为 Mock/Fake。
+
+工具更新验证：54 项 Web 单元测试/check 通过（含双模式写禁止、参数互斥/live 拒绝、DSH 来源负例）；现有 5185 Fake 项目只读完整回归退出 0、计数不变。双模式浏览器 guard 对不存在任务的取消探针均在服务端前 abort（服务端写入 0），没有真正取消任务或触发模型。真实 DSH 的只读成功验收仍须主管后续提供已有真实项目，不用这些 Fake/合成测试冒充。

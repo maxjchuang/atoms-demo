@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts", "./fixtures": "./src/fixtures.ts",
     "./conversation": "./src/conversation.ts", "./conversation-fixtures": "./src/conversation-fixtures.ts",
-    "./delivery": "./src/delivery.ts", "./delivery-fixtures": "./src/delivery-fixtures.ts"
+    "./delivery": "./src/delivery.ts", "./delivery-fixtures": "./src/delivery-fixtures.ts",
+    "./delivery-projection": "./src/delivery-projection.ts", "./delivery-projection-fixtures": "./src/delivery-projection-fixtures.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",

@@ -41,7 +41,7 @@ async function install(workspace: string, home: string, signal: AbortSignal) {
   await mkdir(home, { recursive: true });
   return await new Promise<{ success: boolean; log: string }>((resolve, reject) => {
     if (signal.aborted) return reject(new Error('Clean export cancelled'));
-    const child = spawn('pnpm', ['install', '--frozen-lockfile', '--ignore-scripts', '--registry=https://registry.npmjs.org', '--config.node-linker=isolated', '--config.enable-global-virtual-store=false', '--config.virtual-store-dir=node_modules/.pnpm', '--config.manage-package-manager-versions=false', '--config.package-import-method=copy', '--reporter=append-only'],
+    const child = spawn('pnpm', ['install', '--frozen-lockfile', '--ignore-workspace', '--ignore-pnpmfile', '--ignore-scripts', '--registry=https://registry.npmjs.org', '--config.node-linker=isolated', '--config.enable-global-virtual-store=false', '--config.virtual-store-dir=node_modules/.pnpm', '--config.manage-package-manager-versions=false', '--config.package-import-method=copy', '--reporter=append-only'],
       { cwd: workspace, env: { PATH: process.env.PATH, HOME: home, NODE_ENV: 'development', CI: 'true', npm_config_registry: 'https://registry.npmjs.org' }, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     let log = ''; const collect = (data: Buffer) => { log = (log + data.toString()).slice(-100000); }; child.stdout.on('data', collect); child.stderr.on('data', collect);
     const stop = () => { try { if (child.pid && process.platform !== 'win32') process.kill(-child.pid, 'SIGKILL'); else child.kill('SIGKILL'); } catch {} };

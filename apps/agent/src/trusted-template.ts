@@ -18,7 +18,7 @@ export async function trustedTemplate() {
   if (/bnpm|code\.byted|workspace:|https?:\/\/[^\s]*@/.test(lock.toString())) throw new Error('Template lock is not portable/public');
   const pkg = JSON.parse(packageBytes.toString());
   const files: Record<string, string> = { ...templateFiles, 'package.json': packageBytes.toString(), 'pnpm-lock.yaml': lock.toString(),
-    'README.md': '# Generated React application\n\nRequires Node >=22.19.0 and pnpm 10.33.0.\n\nAfter extracting source.zip, run `cd source` (the ZIP preserves the source/ directory).\n\nRun `pnpm install --frozen-lockfile --ignore-scripts --registry=https://registry.npmjs.org`, `pnpm run typecheck`, and `pnpm run build`.\n' };
+    'README.md': '# Generated React application\n\nRequires Node >=22.19.0 and pnpm 10.33.0.\n\nAfter extracting source.zip, run `cd source` (the ZIP preserves the source/ directory).\n\nRun `pnpm install --frozen-lockfile --ignore-workspace --ignore-pnpmfile --ignore-scripts --registry=https://registry.npmjs.org`, `pnpm run typecheck`, and `pnpm run build`.\n' };
   const descriptor = ToolchainDescriptor.parse({ id: TOOLCHAIN_ID, templateId: 'template_react_export_v1',
     templateHash: inventoryHash(Object.entries(files).map(([name, text]) => ({ path: name, bytes: Buffer.byteLength(text), sha256: sha256(text) }))),
     packageJsonHash: sha256(packageBytes), lockfileHash: sha256(lock), scriptsHash: sha256(canonicalDeliveryJson(pkg.scripts)),

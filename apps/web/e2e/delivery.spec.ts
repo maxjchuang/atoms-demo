@@ -126,3 +126,32 @@ test('authorized screenshot is displayed only from verified bytes, not a model U
   await seed(page, 'screenshot'); await report(page); await panel(page).getByRole('button', { name: '查看截图', exact: true }).first().click();
   const image = panel(page).getByAltText('当前所选尝试的验证截图'); await expect(image).toBeVisible(); await expect(image).toHaveAttribute('src', /^blob:/);
 });
+
+for (const scenario of ['projection-mixed', 'projection-auto']) for (const viewport of [{ width: 1440, height: 1000 }, { width: 1366, height: 768 }]) test(`${scenario} groups leaves before canonical summaries at ${viewport.width}`, async ({ page }) => {
+  await page.setViewportSize(viewport); await seed(page, scenario); const summary = page.getByTestId('delivery-summary').first();
+  await expect(summary).toContainText(scenario === 'projection-mixed' ? '部分交付' : '约定验收完成');
+  if (scenario === 'projection-mixed') {
+    await expect(summary.locator('.concrete-gaps > li')).toHaveCount(3);
+    await expect(summary.locator('.concrete-gaps > li').first()).toContainText('Required human verification subitem');
+    await expect(summary.locator('.concrete-gaps')).toContainText('Human must review this concrete required subitem.');
+    expect(await summary.innerText()).not.toMatch(/criterion_leaf|Host-owned aggregate/);
+    await expect(summary).toContainText('已通过的自动子项不受影响');
+  }
+  await page.screenshot({ path: `review-artifacts/m2/${scenario}-preview-${viewport.width}-mock.png` });
+  await report(page); await expect(panel(page).locator('.criterion-row')).toHaveCount(8);
+  await expect(panel(page).locator('.concrete-criterion')).toHaveCount(5); await expect(panel(page).locator('.aggregate-criterion')).toHaveCount(3);
+  expect(await panel(page).locator('.criterion-row').first().getAttribute('class')).toContain('concrete-criterion');
+  expect(await panel(page).innerText()).not.toMatch(/Host-owned aggregate|criterion_leaf/);
+  if (scenario === 'projection-mixed') {
+    await expect(panel(page).locator('.aggregate-criterion').first()).toContainText('需人工判断');
+    await expect(panel(page).locator('.aggregate-criterion').first()).toContainText('未运行');
+    await panel(page).locator('.aggregate-criterion').first().getByText('完整目标与原始汇总依据', { exact: true }).click();
+    await expect(panel(page).locator('.aggregate-criterion').first()).toContainText('Host-owned aggregate');
+    await expect(panel(page).locator('.aggregate-criterion').first()).toContainText('criterion_leaf_manual'); await page.screenshot({ path: `review-artifacts/m2/${scenario}-audit-${viewport.width}-mock.png` });
+    await panel(page).locator('.aggregate-criterion').first().getByText('完整目标与原始汇总依据', { exact: true }).click();
+  } else await expect(panel(page).locator('.aggregate-criterion').first()).toContainText('通过');
+  await expect(panel(page).locator('.case-result')).toHaveCount(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  expect(await panel(page).evaluate(element => getComputedStyle(element).fontSize)).toBe('14px');
+  await panel(page).evaluate(element => { element.scrollTop = 0; }); await page.screenshot({ path: `review-artifacts/m2/${scenario}-report-${viewport.width}-mock.png` });
+});

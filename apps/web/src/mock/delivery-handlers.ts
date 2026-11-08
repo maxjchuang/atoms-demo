@@ -1,5 +1,6 @@
 import { http, HttpResponse, delay } from 'msw';
 import { DeliveryReadView, DeliveryReport, ExportReadView, VersionDiffPage, EvidenceDescriptor, deriveCriterionGaps, deriveDeliveryQuality, type DeliveryReportDto } from '@atoms/contracts/delivery';
+import { mixedProjection, automaticProjection } from './projection-reports';
 import * as fixture from '@atoms/contracts/delivery-fixtures';
 import { mockExecutionStore as execution } from './handlers';
 const base = '/api/delivery/v1';
@@ -25,7 +26,7 @@ function remap<T>(value: T, projectId: string, runId: string, executionId: strin
 }
 async function reportFor(subject: NonNullable<ReturnType<typeof locate>>): Promise<DeliveryReportDto> {
   const { config, record, run } = subject;
-  const source = config.scenario === 'controlled' ? fixture.controlledSourceReport : ['partial', 'manual'].includes(config.scenario) ? fixture.partial : config.scenario === 'optional-failure' ? fixture.optionalFailure : config.scenario === 'blocked' ? fixture.requiredFailure : config.scenario === 'repair' ? fixture.repaired : config.scenario === 'source-changed' ? fixture.sourceChanged : config.scenario === 'export-failure' ? fixture.exportFailure : config.scenario === 'planning-failure' ? fixture.planningFailure : config.scenario === 'cancelled' ? fixture.cancelled : config.scenario === 'provisional' ? fixture.provisional : fixture.complete;
+  const source = config.scenario === 'projection-mixed' ? mixedProjection : config.scenario === 'projection-auto' ? automaticProjection : config.scenario === 'controlled' ? fixture.controlledSourceReport : ['partial', 'manual'].includes(config.scenario) ? fixture.partial : config.scenario === 'optional-failure' ? fixture.optionalFailure : config.scenario === 'blocked' ? fixture.requiredFailure : config.scenario === 'repair' ? fixture.repaired : config.scenario === 'source-changed' ? fixture.sourceChanged : config.scenario === 'export-failure' ? fixture.exportFailure : config.scenario === 'planning-failure' ? fixture.planningFailure : config.scenario === 'cancelled' ? fixture.cancelled : config.scenario === 'provisional' ? fixture.provisional : fixture.complete;
   const report = remap(structuredClone(source), record.project.id, run?.id ?? 'run_mock_source', run?.executionId ?? 'execution_mock_source');
   report.id = `delivery_${run?.id ?? record.project.id}`;
   if (config.scenario === 'manual' && report.bundle) report.bundle.plan.coverage.forEach(coverage => { if (coverage.method === 'unsupported') { coverage.method = 'manual'; coverage.reason = '模拟人工验收项：拖拽交互的可用性仍需人工判断，保留必需要求。'; } });

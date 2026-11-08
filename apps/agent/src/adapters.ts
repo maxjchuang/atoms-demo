@@ -5,11 +5,13 @@ import { Plan, type StartExecutionDto } from '@atoms/contracts';
 import { collectText } from './files.js';
 import { fakeApplication } from './template.js';
 import { verifyDshToolPolicy } from './dsh-policy.js';
-import { requestStructuredJson, type ModelResult } from './structured-output.js';
+import { requestStructuredJson, StructuredOutputError, type ModelResult } from './structured-output.js';
 import type { DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
 import { applySourceEdit, type FileChange } from './source-edits.js';
-import { NativeUsageAccounting, UsageAccountingError, nativeEventIdentity, type NativeTokenUsage } from './native-usage.js';
+import { NativeRequestAccounting, UsageAccountingError, nativeEventIdentity, type NativeTokenUsage } from './native-usage.js';
 import type { BrowserTestPlanDto } from '@atoms/contracts/delivery';
+import { structuredDiagnostic, writeModelDiagnostic } from './model-diagnostics.js';
+import { structuredRetryAdmission } from './retry-admission.js';
 import { fakeCalculatorFiles } from './delivery-examples.js';
 
 export type PlanValue = ReturnType<typeof Plan.parse>;
@@ -21,7 +23,9 @@ export interface AdapterContext {
   request: StartExecutionDto; workspace: string; home: string;
   signal: AbortSignal; report: (content: string) => void;
   meter: (usage: { modelSteps?: number; inputTokens?: number; outputTokens?: number }) => void;
-  remainingOutputTokens: () => number;
+  remainingOutputTokens: () => number; remainingActiveMs?: () => number;
+  beginModelRequest?: () => void; settleModelRequest?: () => void; markUsageUnknown?: () => void;
+  usageIsKnown?: () => boolean; observedUsage?: () => { modelSteps: number; outputTokens: number };
   fileChanged: (event: FileChange) => void;
   runAnswers: ResolvedRunQuestion[];
   frozenTestPlan?: BrowserTestPlanDto; deliveryProfileId?: string;
@@ -80,7 +84,7 @@ export class FakeDshAdapter implements ModelAdapter {
 export class DshAdapter implements ModelAdapter {
   readonly mode = 'dsh' as const;
   private harnesses = new Map<string, { close(): Promise<void> }>();
-  constructor(private options: { apiKey?: string; model?: string }) { }
+  constructor(private options: { apiKey?: string; model?: string; harnessFactory?: (options: DeepSeekHarnessOptions) => import('@deepseek-ai/dsh-sdk-client').DeepSeekHarness }) { }
   ready() { return Boolean(this.options.apiKey); }
   private async withSession(context: AdapterContext, role: 'router' | 'worker', prompt: string): Promise<ModelResult> {
     abort(context.signal);
@@ -95,7 +99,7 @@ export class DshAdapter implements ModelAdapter {
     await writeFile(patch, ['tool-fs', 'tool-working-directory', 'persistent-bash', 'persistent-pwsh']
       .map((id) => `- id: ${id}\n  disabled: true\n`).join('\n'));
     verifyDshToolPolicy(context.home, patch);
-    const harness = new DeepSeekHarness({
+    const harness = (this.options.harnessFactory || ((options) => new DeepSeekHarness(options)))({
       profile: 'sdk-minimal', patches: [patch], cwd: context.workspace, processCwd: context.workspace,
       dshHome: context.home, provider: 'deepseek-official', model: this.options.model || 'deepseek-flash',
       reasoningEffort: 'low' as DeepSeekHarnessOptions['reasoningEffort'],
@@ -107,7 +111,7 @@ export class DshAdapter implements ModelAdapter {
     });
     this.harnesses.set(context.request.executionId, harness);
     const onAbort = () => { void harness.close(); };
-    const accounting = new NativeUsageAccounting();
+    const accounting = new NativeRequestAccounting();
     context.signal.addEventListener('abort', onAbort, { once: true });
     try {
       await harness.start();
@@ -116,6 +120,8 @@ export class DshAdapter implements ModelAdapter {
       const saved = existsSync(sessionRecord) ? JSON.parse(await readFile(sessionRecord, 'utf8')) as { sessionId: string } : null;
       const session = saved ? await harness.resumeSession(saved.sessionId) : harness.session(sessionName);
       context.report(`${roleLabel}模型会话已就绪，开始请求${role === 'router' ? '实现计划' : 'React 多文件代码'}。`);
+      accounting.begin(); context.beginModelRequest?.();
+      await writeModelDiagnostic(context.home, { stage: 'request_started', id: context.request.executionId, role, remaining: { activeMs: context.remainingActiveMs?.() ?? context.request.budget.maxWallTimeMs, outputTokens: context.remainingOutputTokens() } });
       const result = await session.run(prompt, { onNotification(notification) {
           if (notification.method !== 'session.event') return;
           const event = notification.params.event as { type?: string; seq?: unknown; data?: { turn?: unknown; step?: unknown; usage?: NativeTokenUsage } } | undefined;
@@ -127,9 +133,10 @@ export class DshAdapter implements ModelAdapter {
           }
         },
       });
+      accounting.assertObservable(); context.settleModelRequest?.();
       abort(context.signal);
-      accounting.assertObservable();
       await writeFile(sessionRecord, JSON.stringify({ sessionId: result.sessionId }));
+      await writeModelDiagnostic(context.home, { stage: 'response_received', id: context.request.executionId, role, finishReason: result.finishReason, textLength: result.finalResponse.length, usageKnown: true, remaining: { activeMs: context.remainingActiveMs?.() ?? context.request.budget.maxWallTimeMs, outputTokens: context.remainingOutputTokens() } });
       await appendFile(path.join(context.home, 'atoms-diagnostics.jsonl'), JSON.stringify({
         time: new Date().toISOString(), executionId: context.request.executionId, role,
         sessionId: result.sessionId, finishReason: result.finishReason, responseLength: result.finalResponse.length,
@@ -137,11 +144,14 @@ export class DshAdapter implements ModelAdapter {
       if (result.finishReason === 'error' || result.finishReason === 'aborted') throw new Error(`DSH turn ${result.finishReason}`);
       return { text: result.finalResponse, finishReason: result.finishReason };
     } catch (error) {
+      if (accounting.isUnknown()) context.markUsageUnknown?.();
+      await writeModelDiagnostic(context.home, { stage: 'request_failed', id: context.request.executionId, role, finishReason: null, textLength: null, errorClass: error instanceof UsageAccountingError ? 'UsageAccountingError' : 'RequestError', interruption: context.signal.reason === 'budget' ? 'budget' : context.signal.aborted ? 'cancelled' : 'sdk_or_transport', usageKnown: !accounting.isUnknown(), remaining: { activeMs: context.remainingActiveMs?.() ?? context.request.budget.maxWallTimeMs, outputTokens: context.remainingOutputTokens() } });
       if (context.signal.aborted) throw new Error('DSH execution aborted');
       if (error instanceof UsageAccountingError) throw new Error('模型用量不可核验，已停止本轮执行以保持预算边界。');
       // SDK diagnostics may contain provider requests. Keep them out of visitor events.
       throw new Error('DSH 请求失败：请检查模型访问、会话和网络配置。');
     } finally {
+      if (accounting.isUnknown()) context.markUsageUnknown?.();
       await appendFile(path.join(context.home, 'token-accounting.jsonl'), JSON.stringify({
         time: new Date().toISOString(), executionId: context.request.executionId, role, ...accounting.metadata(),
       }) + '\n').catch(() => {});
@@ -151,13 +161,27 @@ export class DshAdapter implements ModelAdapter {
     }
   }
   private async json(context: AdapterContext, role: 'router' | 'worker', prompt: string) {
-    return requestStructuredJson(role, (retry) => this.withSession(context, role, prompt + (retry
-      ? '\nYour last output was empty, truncated, or malformed JSON. Return a complete compact JSON object only. Reduce code size, avoid long commentary, and always finish all string values and braces.' : '')),
-    (error) => {
-      const reason = error.reason === 'output_limit' ? '输出达到本次响应上限，未形成完整结果'
-        : error.reason === 'empty_response' ? '未返回可用的结构化结果' : '返回结果不符合 JSON 格式';
-      context.report(`${role === 'router' ? '规划模型' : '编码模型'}${reason}；开始结构化重试（1/1）。`);
-    });
+    let previousMs = 0; let previousOutputTokens = 0;
+    try {
+      return await requestStructuredJson(role, async (retry) => {
+        const before = context.observedUsage?.(); const startedAt = Date.now();
+        const response = await this.withSession(context, role, prompt + (retry
+          ? '\nYour last output was malformed JSON. Return one complete compact JSON object only; do not copy the malformed answer. No Markdown or commentary. Close each array with ] before closing its object with }.' : ''));
+        previousMs = Date.now() - startedAt; previousOutputTokens = Math.max(0, (context.observedUsage?.().outputTokens ?? 0) - (before?.outputTokens ?? 0));
+        return response;
+      }, async (error) => {
+        await writeModelDiagnostic(context.home, { stage: 'structured_rejected', id: context.request.executionId, role, ...structuredDiagnostic(error), remaining: { activeMs: context.remainingActiveMs?.() ?? context.request.budget.maxWallTimeMs, outputTokens: context.remainingOutputTokens() } });
+        const used = context.observedUsage?.();
+        const admission = structuredRetryAdmission({ usageKnown: context.usageIsKnown?.() ?? true, remainingMs: context.remainingActiveMs?.() ?? context.request.budget.maxWallTimeMs,
+          remainingOutputTokens: context.remainingOutputTokens(), remainingModelSteps: context.request.budget.maxModelSteps - (used?.modelSteps ?? 0), previousMs, previousOutputTokens });
+        if (!admission.allowed) { await writeModelDiagnostic(context.home, { stage: 'retry_skipped', id: context.request.executionId, role, errorCategory: admission.reason }); throw new Error('结构化重试剩余预算不足或用量未知，未发起额外模型请求。'); }
+        const reason = error.reason === 'output_limit' ? '输出达到本次响应上限，未形成完整结果' : error.reason === 'empty_response' ? '未返回可用的结构化结果' : '返回结果不符合 JSON 格式';
+        context.report(`${role === 'router' ? '规划模型' : '编码模型'}${reason}；开始结构化重试（1/1）。`);
+      });
+    } catch (error) {
+      if (error instanceof StructuredOutputError) await writeModelDiagnostic(context.home, { stage: 'structured_rejected', id: context.request.executionId, role, ...structuredDiagnostic(error) });
+      throw error;
+    }
   }
   async plan(context: AdapterContext) {
     context.report('项目负责人正在整理实现计划与验收项。');

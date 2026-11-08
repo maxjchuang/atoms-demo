@@ -55,7 +55,7 @@ export class DeliveryExecutionRuntime {
     return DeliveryExecutionSnapshot.parse({ protocolVersion: '0.1.0', execution: item.snapshot, binding: { id: binding.id, hash: binding.hash }, phase: !['succeeded', 'failed', 'cancelled', 'interrupted'].includes(item.snapshot.status) && this.state(id).phase === 'clean_export' ? 'clean_export' : phase,
       report: report ? { deliveryId: report.id, reportHash: report.hash, reportRevision: report.revision, sourceSnapshotHash: report.attempts.at(-1)?.sourceBeforeHash ?? null } : null,
       cumulativeUsage: { activeMs: binding.planningUsage.activeMs + activeMs, modelSteps: binding.planningUsage.modelSteps + usage.modelSteps,
-        inputTokens: binding.planningUsage.inputTokens + usage.inputTokens, outputTokens: binding.planningUsage.outputTokens + usage.outputTokens } });
+        inputTokens: item.usageKnown === false ? null : binding.planningUsage.inputTokens + usage.inputTokens, outputTokens: item.usageKnown === false ? null : binding.planningUsage.outputTokens + usage.outputTokens } });
   }
   async initialize(item: RecordValue, workspace: string) {
     const template = await trustedTemplate(); if (!sameToolchain(item.delivery!.bundle.binding.toolchain, template.descriptor)) throw new Error('Trusted template fingerprint mismatch');

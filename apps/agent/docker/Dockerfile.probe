@@ -1,0 +1,6 @@
+FROM public.ecr.aws/docker/library/node@sha256:9e5d714311940c098479ec352029af6df1d9a2dc4269b29373c616f51640dd67
+LABEL atoms.owner="atoms-v03" atoms.role="isolation-probe"
+COPY probe.mjs /opt/atoms-v03/probe.mjs
+USER 10001:10001
+WORKDIR /job
+ENTRYPOINT ["node","/opt/atoms-v03/probe.mjs"]

@@ -33,7 +33,7 @@ async function until(test: () => Promise<boolean>, timeoutMs: number, signal: Ab
 }
 
 /** Fixed interpreter: never evals strings or accepts model URLs/JS/commands. */
-export async function runBrowserPlan(options: { dist: string; plan: BrowserTestPlanDto; evidenceDir: string; signal: AbortSignal }) {
+export async function runBrowserPlan(options: { dist: string; plan: BrowserTestPlanDto; evidenceDir: string; signal: AbortSignal; chromiumSandbox?: boolean }) {
   const plan = BrowserTestPlan.parse(options.plan); await mkdir(options.evidenceDir, { recursive: true });
   const server = createServer(async (req, res) => {
     try {
@@ -55,7 +55,7 @@ export async function runBrowserPlan(options: { dist: string; plan: BrowserTestP
   try {
     const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
       || (existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined);
-    browser = await chromium.launch({ headless: true, executablePath, env: browserEnvironment() });
+    browser = await chromium.launch({ headless: true, executablePath, chromiumSandbox: options.chromiumSandbox ?? false, env: browserEnvironment() });
     for (const planned of plan.cases) {
       const logPath = `${planned.id}.log`; const screenshotPath = `${planned.id}.png`;
       const states: Result['steps'] = planned.steps.map((entry) => ({ stepId: entry.id, status: 'not_run' }));

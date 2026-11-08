@@ -10,18 +10,23 @@ import type { DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
 import { applySourceEdit, type FileChange } from './source-edits.js';
 
 export type PlanValue = ReturnType<typeof Plan.parse>;
+export type GenerationQuestion = { kind: 'question'; title: string; description: string; options: string[]; allowText: boolean };
+export type GenerationResult = string | GenerationQuestion;
+export type ResolvedRunQuestion = { question: { title: string; description: string; options: { id: string; label: string }[] };
+  answer: { kind: 'approve_plan' } | { kind: 'select'; optionId: string } | { kind: 'text'; text: string } };
 export interface AdapterContext {
   request: StartExecutionDto; workspace: string; home: string;
   signal: AbortSignal; report: (content: string) => void;
   meter: (usage: { modelSteps?: number; inputTokens?: number; outputTokens?: number }) => void;
   remainingOutputTokens: () => number;
   fileChanged: (event: FileChange) => void;
+  runAnswers: ResolvedRunQuestion[];
 }
 export interface ModelAdapter {
   readonly mode: 'fake' | 'dsh';
   ready(): boolean;
   plan(context: AdapterContext): Promise<PlanValue>;
-  generate(context: AdapterContext, plan: PlanValue, errors?: string): Promise<string>;
+  generate(context: AdapterContext, plan: PlanValue, errors?: string): Promise<GenerationResult>;
   close(executionId: string): Promise<void>;
 }
 const abort = (signal: AbortSignal) => { if (signal.aborted) throw new Error('Execution aborted'); };
@@ -35,9 +40,12 @@ export class FakeDshAdapter implements ModelAdapter {
     return { summary: context.request.prompt, tasks: ['实现 React 多文件交互', '执行类型、构建与浏览器检查'],
       acceptance: [{ id: 'acceptance_smoke', description: '网页可加载且无运行时异常' }] };
   }
-  async generate(context: AdapterContext, _plan: PlanValue, errors?: string) {
+  async generate(context: AdapterContext, _plan: PlanValue, errors?: string): Promise<GenerationResult> {
     abort(context.signal);
     context.meter({ modelSteps: 1 });
+    const count = Number(context.request.prompt.match(/\[questions:(\d)\]/)?.[1] || (context.request.prompt.includes('[question]') ? 1 : 0));
+    if (context.runAnswers.length < count) return { kind: 'question', title: '请确认便签配色',
+      description: '当前实现需要明确配色，请选择暖色或深色。', options: ['暖色', '深色'], allowText: true };
     if (/\[slow\]/.test(context.request.prompt)) {
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(resolve, 1500);
@@ -47,7 +55,9 @@ export class FakeDshAdapter implements ModelAdapter {
     const current = await collectText(context.workspace);
     const retained = (current['src/App.tsx']?.includes('aria-label="搜索便签"') ? ' 搜索' : '')
       + (current['src/style.css']?.includes('#20211e') ? ' 深色' : '');
-    const files = fakeApplication(context.request.projectId, context.request.prompt + retained, Boolean(errors));
+    const confirmed = context.runAnswers.map((item) => item.answer.kind === 'text' ? item.answer.text
+      : item.answer.kind === 'select' ? item.question.options.find((option) => item.answer.kind === 'select' && option.id === item.answer.optionId)?.label || '' : '').join(' ');
+    const files = fakeApplication(context.request.projectId, context.request.prompt + retained + confirmed, Boolean(errors));
     context.report(`准备应用 ${Object.keys(files).length} 个确定性样例源文件。`);
     let changed = 0;
     for (const [name, content] of Object.entries(files)) {
@@ -139,11 +149,22 @@ export class DshAdapter implements ModelAdapter {
     const raw = await this.json(context, 'router', `Return JSON matching {"summary":string,"tasks":string[],"acceptance":[{"id":"acceptance_name","description":string}]}. Plan a React frontend app. Keep at most 5 tasks. No external backend, packages or deployment.\nProject memory: ${context.request.mandate.projectMemory}\nUser request: ${context.request.prompt}`);
     return Plan.parse(raw);
   }
-  async generate(context: AdapterContext, plan: PlanValue, errors?: string) {
+  async generate(context: AdapterContext, plan: PlanValue, errors?: string): Promise<GenerationResult> {
     context.report(errors ? 'Worker 正在根据真实检查结果修复代码。' : 'Worker 正在实现 React 多文件应用。');
     const source = await collectText(context.workspace);
-    const raw = await this.json(context, 'worker', `Return JSON {"summary":string,"files":{"src/App.tsx":string,"src/components/Example.tsx":string,"src/style.css":string}}. All file values are complete UTF-8 source text, not patches. Keep the app compact: at most 250 source lines total and concise CSS. Only paths inside src/ or index.html are allowed. Use React 19 + TypeScript + plain CSS. Available packages: react, react-dom only. Do not change package.json, vite.config.ts, tsconfig.json, credentials, or dependency files. Use relative imports and no network. The entry is src/main.tsx. For persistence use localStorage key prefixed atoms:${context.request.projectId}:. Preserve existing working features unless user asks otherwise. Split UI into at least two React files.\nUser: ${context.request.prompt}\nPlan: ${JSON.stringify(plan)}\nCurrent sources: ${JSON.stringify(source)}\n${errors ? `Verification errors to repair:\n${errors.slice(0, 20000)}` : ''}`);
-    const output = raw as { summary?: unknown; files?: unknown };
+    const raw = await this.json(context, 'worker', `Return JSON {"summary":string,"files":{"src/App.tsx":string,"src/components/Example.tsx":string,"src/style.css":string}}. If genuinely missing user information prevents implementation, instead return {"question":{"title":string,"description":string,"options":[string],"allowText":boolean}} and no files. Ask one concrete necessary question, do not ask about facts already answered below or reasonable defaults. All file values are complete UTF-8 source text, not patches. Keep the app compact: at most 250 source lines total and concise CSS. Only paths inside src/ or index.html are allowed. Use React 19 + TypeScript + plain CSS. Available packages: react, react-dom only. Do not change package.json, vite.config.ts, tsconfig.json, credentials, or dependency files. Use relative imports and no network. The entry is src/main.tsx. For persistence use localStorage key prefixed atoms:${context.request.projectId}:. Preserve existing working features unless user asks otherwise. Split UI into at least two React files.\nUser: ${context.request.prompt}\nPlan: ${JSON.stringify(plan)}\nResolved implementation questions: ${JSON.stringify(context.runAnswers.map((item) => ({ question: item.question.description, answer: item.answer.kind === 'text' ? item.answer.text : item.answer.kind === 'select' ? item.question.options.find((option) => item.answer.kind === 'select' && item.answer.optionId === option.id)?.label : 'plan approved' })))}\nCurrent sources: ${JSON.stringify(source)}\n${errors ? `Verification errors to repair:\n${errors.slice(0, 20000)}` : ''}`);
+    const output = raw as { summary?: unknown; files?: unknown; question?: unknown };
+    if (output?.question && typeof output.question === 'object' && !Array.isArray(output.question)) {
+      const question = output.question as Record<string, unknown>;
+      if (typeof question.title !== 'string' || typeof question.description !== 'string'
+        || !Array.isArray(question.options) || question.options.length > 5
+        || question.options.some((option) => typeof option !== 'string' || option.length > 240)
+        || typeof question.allowText !== 'boolean' || (!question.allowText && question.options.length === 0)) {
+        throw new Error('DSH returned an invalid implementation question');
+      }
+      return { kind: 'question', title: question.title.slice(0, 240), description: question.description.slice(0, 3000),
+        options: question.options as string[], allowText: question.allowText };
+    }
     if (!output || typeof output.summary !== 'string' || !output.files || typeof output.files !== 'object' || Array.isArray(output.files)) throw new Error('DSH returned invalid source JSON');
     const edits = Object.entries(output.files as Record<string, unknown>);
     if (edits.length === 0 || edits.length > 50) throw new Error('Source edit count exceeds budget');

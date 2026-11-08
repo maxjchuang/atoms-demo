@@ -4,15 +4,20 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
-  AgentEvent, AgentInputRequest, ArtifactManifest, CancelExecutionRequest, ExecutionSnapshot,
+  AgentEvent, AgentInputRequest, ArtifactManifest, CancelExecutionRequest, ExecutionSnapshot, ErrorCode,
   PROTOCOL_VERSION, StartExecutionRequest,
   type AgentEventDto, type ArtifactManifestDto, type ExecutionSnapshotDto, type StartExecutionDto,
 } from '@atoms/contracts';
 import type { RuntimeEvent, Check } from '@atoms/contracts';
-import { FakeDshAdapter, DshAdapter, type ModelAdapter, type PlanValue, type AdapterContext } from './adapters.js';
+import { COORDINATION_DEFAULTS } from '@atoms/contracts/conversation';
+import { FakeDshAdapter, DshAdapter, type ModelAdapter, type PlanValue, type AdapterContext, type ResolvedRunQuestion } from './adapters.js';
 import { listFiles, putFile, safeFile, sha256 } from './files.js';
 import { mediaType, verifyApplication } from './verify.js';
 import { templateFiles } from './template.js';
+import { CoordinatorRuntime } from './coordinator.js';
+import { CoordinationError } from './coordination-context.js';
+import type { CoordinatorAdapter } from './coordinator-adapters.js';
+import { CoordinationProtocolVersion } from '@atoms/contracts/conversation';
 
 type RuntimeBody = ReturnType<typeof RuntimeEvent.parse>;
 type CheckValue = ReturnType<typeof Check.parse>;
@@ -22,6 +27,8 @@ type RecordValue = {
   started: boolean; plan: PlanValue | null; planConfirmed: boolean; queueOrder: number;
   activeMs: number; waitingAt: number | null;
   usage: { modelSteps: number; inputTokens: number; outputTokens: number };
+  ordinaryQuestions: number; answers: ResolvedRunQuestion[];
+  repairRoundsUsed: number; verificationErrors: string | null; repairClaimed: boolean;
 };
 const terminal = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 const now = () => new Date().toISOString();
@@ -34,6 +41,7 @@ class HttpError extends Error {
 export interface AgentOptions {
   dataDir: string; serviceToken: string; apiInternalUrl?: string;
   mode?: 'fake' | 'dsh'; apiKey?: string; model?: string; adapter?: ModelAdapter;
+  coordinationMode?: 'fake' | 'dsh'; coordinatorAdapter?: CoordinatorAdapter;
 }
 
 export class AgentRuntime {
@@ -109,6 +117,7 @@ export class AgentRuntime {
         status: 'accepted', phase: null, revision: 1, lastSourceSeq: 0, pendingAttention: null, artifactId: null, updatedAt: now() },
       events: [], commands: {}, started: false, plan: null, planConfirmed: request.mode === 'build',
       queueOrder: Date.now(), activeMs: 0, waitingAt: null, usage: { modelSteps: 0, inputTokens: 0, outputTokens: 0 },
+      ordinaryQuestions: 0, answers: [], repairRoundsUsed: 0, verificationErrors: null, repairClaimed: false,
     };
     this.records.set(pathId, item);
     this.update(item, {}); const snapshot = clone(item.snapshot); this.schedule();
@@ -128,7 +137,12 @@ export class AgentRuntime {
     if ((answer.kind === 'approve_plan' && question.kind !== 'plan_confirmation')
       || (answer.kind === 'select' && !question.options.some((option) => option.id === answer.optionId))
       || (answer.kind === 'text' && !question.allowText)) throw new HttpError(400, 'INVALID_REQUEST', 'Answer does not match question');
-    item.planConfirmed = true; item.waitingAt = null; item.queueOrder = Date.now();
+    if (question.kind === 'plan_confirmation') item.planConfirmed = true;
+    else {
+      item.answers ??= [];
+      item.answers.push({ question: { title: question.title, description: question.description, options: structuredClone(question.options) }, answer: structuredClone(answer) });
+    }
+    item.waitingAt = null; item.queueOrder = Date.now();
     this.update(item, { status: 'accepted', pendingAttention: null });
     this.emit(item, { type: 'attention.resolved', payload: { attentionId: question.id } });
     item.commands[input.commandId] = { hash, snapshot: clone(item.snapshot) }; this.persist();
@@ -201,6 +215,7 @@ export class AgentRuntime {
       remainingOutputTokens: () => item.request.budget.maxOutputTokens - (item.usage?.outputTokens || 0),
       report: (content) => this.emit(item, { type: 'message.completed', payload: { messageId: `message_${randomUUID().replaceAll('-', '')}`, content } }),
       fileChanged: (change) => this.emit(item, { type: 'file.changed', payload: change }),
+      runAnswers: item.answers ?? [],
       meter: (usage) => {
         item.usage ??= { modelSteps: 0, inputTokens: 0, outputTokens: 0 };
         for (const key of ['modelSteps', 'inputTokens', 'outputTokens'] as const) item.usage[key] += usage[key] || 0;
@@ -213,7 +228,8 @@ export class AgentRuntime {
       },
     };
     try {
-      this.update(item, { status: 'running', pendingAttention: null, phase: 'planning' });
+      this.update(item, { status: 'running', pendingAttention: null,
+        phase: !item.plan || !item.planConfirmed ? 'planning' : item.verificationErrors ? 'repairing' : 'generating' });
       if (!item.started) { item.started = true; this.emit(item, { type: 'execution.started', payload: {} }); }
       if (!item.plan) {
         context.report(item.request.input.kind === 'template' ? '正在准备受控 React 模板。' : '正在载入并校验上一版本源码快照。');
@@ -230,16 +246,33 @@ export class AgentRuntime {
         this.update(item, { status: 'waiting_input', pendingAttention: attention, phase: 'planning' });
         this.emit(item, { type: 'attention.created', payload: attention }); return;
       }
-      let summary = ''; let checks: CheckValue[] = []; let errors: string | null = null;
-      for (let round = 0; round <= item.request.budget.maxRepairRounds; round++) {
+      let summary = ''; let checks: CheckValue[] = []; let errors: string | null = item.verificationErrors ?? null;
+      item.repairRoundsUsed ??= 0; item.repairClaimed ??= false; item.ordinaryQuestions ??= 0;
+      while (true) {
         if (controller.signal.aborted) throw new Error('Execution aborted');
-        this.update(item, { phase: round === 0 ? 'generating' : 'repairing' });
-        this.emit(item, { type: 'phase.changed', payload: { phase: round === 0 ? 'generating' : 'repairing' } });
-        summary = await this.adapter.generate(context, item.plan, errors || undefined);
+        if (errors && !item.repairClaimed) {
+          if (item.repairRoundsUsed >= item.request.budget.maxRepairRounds) throw new HttpError(422, 'VERIFICATION_FAILED', '验证失败且修复次数已用完：' + errors.slice(-1000));
+          item.repairRoundsUsed++; item.repairClaimed = true; this.persist();
+        }
+        this.update(item, { phase: errors ? 'repairing' : 'generating' });
+        this.emit(item, { type: 'phase.changed', payload: { phase: errors ? 'repairing' : 'generating' } });
+        const generated = await this.adapter.generate(context, item.plan, errors || undefined);
+        if (typeof generated !== 'string') {
+          if (item.ordinaryQuestions >= COORDINATION_DEFAULTS.maxOrdinaryRunQuestions) throw new HttpError(422, 'BUDGET_EXCEEDED', '执行中的问题次数已达到上限，未扩大任务预算。');
+          item.ordinaryQuestions++; item.waitingAt = Date.now();
+          const attention = { id: `attention_${sha256(id).slice(0, 24)}_${item.ordinaryQuestions}`, runId: item.request.runId,
+            revision: item.ordinaryQuestions, kind: 'question' as const, title: generated.title,
+            description: generated.description, options: generated.options.map((label, index) => ({ id: `option_${index + 1}`, label })),
+            allowText: generated.allowText, createdAt: now() };
+          this.update(item, { status: 'waiting_input', pendingAttention: attention });
+          this.emit(item, { type: 'attention.created', payload: attention }); return;
+        }
+        summary = generated;
         this.update(item, { phase: 'verifying' });
         const verified = await verifyApplication(workspace, evidence, controller.signal,
           (check) => this.emit(item, { type: 'check.completed', payload: check }), context.report);
         checks = verified.checks; errors = verified.errors;
+        item.verificationErrors = errors; item.repairClaimed = false; this.persist();
         if (!errors) break;
       }
       if (errors) throw new HttpError(422, 'VERIFICATION_FAILED', '验证失败且修复次数已用完：' + errors.slice(-1000));
@@ -281,7 +314,7 @@ export class AgentRuntime {
       } else {
         item.snapshot.status = 'failed';
         const code = controller.signal.aborted ? 'BUDGET_EXCEEDED'
-          : error instanceof HttpError && error.code === 'VERIFICATION_FAILED' ? 'VERIFICATION_FAILED' : 'INTERNAL_ERROR';
+          : error instanceof HttpError ? ErrorCode.parse(error.code) : 'INTERNAL_ERROR';
         this.emit(item, { type: 'execution.failed', payload: { code,
           message: error instanceof Error ? error.message.slice(0, 1500) : '执行失败' } });
       }
@@ -314,14 +347,36 @@ async function jsonBody(req: IncomingMessage) {
 }
 export function createAgentServer(options: AgentOptions) {
   const runtime = new AgentRuntime(options);
+  const coordinator = new CoordinatorRuntime({ ...options, mode: options.coordinationMode ?? options.mode });
   const server = createServer(async (req, res) => {
     const json = (status: number, data: unknown) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); };
-    res.setHeader('x-atoms-protocol-version', PROTOCOL_VERSION);
+    const url = new URL(req.url || '/', 'http://runtime');
+    const coordinationRequest = url.pathname.startsWith('/internal/v2/');
+    res.setHeader(coordinationRequest ? 'x-atoms-coordination-version' : 'x-atoms-protocol-version', coordinationRequest ? CoordinationProtocolVersion : PROTOCOL_VERSION);
     try {
       const expected = Buffer.from(`Bearer ${options.serviceToken}`); const actual = Buffer.from(req.headers.authorization || '');
       if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new HttpError(401, 'UNAUTHENTICATED', 'Internal service authentication required');
+      if (coordinationRequest) {
+        if (req.headers['x-atoms-coordination-version'] !== CoordinationProtocolVersion) throw new CoordinationError(400, 'INVALID_REQUEST', 'Unsupported coordination version');
+        const route = url.pathname.match(/^\/internal\/v2\/coordination-turns\/([a-z][a-z0-9_-]{2,127})(?:\/(events|cancel))?$/);
+        if (!route) throw new CoordinationError(404, 'NOT_FOUND', 'Coordination route not found');
+        const [, turnId, action] = route;
+        if (!action && req.method === 'PUT') {
+          const result = coordinator.start(await jsonBody(req), turnId); return json(result.created ? 201 : 200, result.snapshot);
+        }
+        if (!action && req.method === 'GET') return json(200, coordinator.get(turnId).snapshot);
+        if (action === 'events' && req.method === 'GET') {
+          const after = Number(url.searchParams.get('after') || 0), limit = Number(url.searchParams.get('limit') || 100);
+          if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new CoordinationError(400, 'INVALID_REQUEST', 'Invalid coordination cursor');
+          return json(200, coordinator.events(turnId, after, limit));
+        }
+        if (action === 'cancel' && req.method === 'POST') {
+          const ended = ['completed', 'failed', 'cancelled', 'interrupted'].includes(coordinator.get(turnId).snapshot.status);
+          return json(ended ? 200 : 202, await coordinator.cancel(turnId, await jsonBody(req)));
+        }
+        throw new CoordinationError(404, 'NOT_FOUND', 'Coordination route not found');
+      }
       if (req.headers['x-atoms-protocol-version'] !== PROTOCOL_VERSION) throw new HttpError(400, 'INVALID_REQUEST', 'Unsupported protocol version');
-      const url = new URL(req.url || '/', 'http://runtime');
       if (url.pathname === '/internal/v1/health' && req.method === 'GET') return json(200, {
         protocolVersion: PROTOCOL_VERSION, ready: runtime.adapter.ready(),
         capabilities: { templates: ['react-vite-v1'], cancel: true, attention: true, artifacts: true },
@@ -350,18 +405,19 @@ export function createAgentServer(options: AgentOptions) {
       throw new HttpError(404, 'NOT_FOUND', 'Route not found');
     } catch (error) {
       const invalid = error && typeof error === 'object' && 'issues' in error;
-      const code = error instanceof HttpError ? error.code : invalid ? 'INVALID_REQUEST' : 'INTERNAL_ERROR';
-      const status = error instanceof HttpError ? error.status : invalid ? 400 : 500;
-      json(status, { error: { code, message: error instanceof HttpError ? error.message : invalid ? 'Request does not match protocol' : 'Internal runtime error',
+      const known = error instanceof HttpError || error instanceof CoordinationError;
+      const code = known ? error.code : invalid ? 'INVALID_REQUEST' : 'INTERNAL_ERROR';
+      const status = known ? error.status : invalid ? 400 : 500;
+      json(status, { error: { code, message: known ? error.message : invalid ? 'Request does not match protocol' : 'Internal runtime error',
         retryable: status === 503, requestId: `request_${randomUUID().replaceAll('-', '')}` } });
     }
   });
-  return { server, runtime,
+  return { server, runtime, coordinator,
     async listen(port = 0, host = '127.0.0.1') {
       await new Promise<void>((resolve) => server.listen(port, host, resolve));
       const address = server.address(); if (!address || typeof address === 'string') throw new Error('No runtime address');
       return `http://${host}:${address.port}`;
     },
-    async close() { await runtime.close(); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); },
+    async close() { await Promise.all([runtime.close(), coordinator.close()]); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); },
   };
 }

@@ -486,7 +486,7 @@ export async function createApi(options: ApiOptions) {
     });
     if (artifactToPublish) {
       try { await publish(record, artifactToPublish); }
-      catch(error) {if(record.delivery){if(transportError(error))reportRuntimeConnection(record.dto.id,false);else delivery.invalid(record);}else store.transaction(() => { const current = store.state.runs.find((entry) => entry.dto.id === record.dto.id)!; if (!terminal(current.dto.status)) finish(current, current.dto.status === 'cancelling' ? 'cancelled' : 'failed', 'ARTIFACT_INVALID', '候选产物未通过完整性校验'); }); }
+      catch(error) {if(record.delivery){if(transportError(error))reportRuntimeConnection(record.dto.id,false);else delivery.invalid(record,error);}else store.transaction(() => { const current = store.state.runs.find((entry) => entry.dto.id === record.dto.id)!; if (!terminal(current.dto.status)) finish(current, current.dto.status === 'cancelling' ? 'cancelled' : 'failed', 'ARTIFACT_INVALID', '候选产物未通过完整性校验'); }); }
     }
   };
   const tick = async () => {
@@ -524,7 +524,7 @@ export async function createApi(options: ApiOptions) {
       for (const reference of store.state.runs.filter((entry) => entry.dto.executionId && !terminal(entry.dto.status))) {
         let record = store.state.runs.find((entry) => entry.dto.id === reference.dto.id)!;
         const path = `/internal/v1/executions/${record.dto.executionId}`;
-        if(record.delivery){try{await delivery.tick(record,ingest,publish);reportRuntimeConnection(record.dto.id,true);}catch(error){if(transportError(error))reportRuntimeConnection(record.dto.id,false);else delivery.invalid(record);}continue;}
+        if(record.delivery){try{await delivery.tick(record,ingest,publish);reportRuntimeConnection(record.dto.id,true);}catch(error){if(transportError(error))reportRuntimeConnection(record.dto.id,false);else delivery.invalid(record,error);}continue;}
         try {
           // PUT is an idempotent outbox delivery, including after response loss or API restart.
           await runtime(path, 'PUT', record.request);

@@ -4,6 +4,7 @@ import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {isPublicDeliveryLockfile} from '../src/delivery.js';
 import {createApi,hash} from '../src/server.js';
 import {fakeChange} from '../src/fake-coordinator.js';
 import {createFakeRuntime} from '../src/fake-runtime.js';
@@ -38,7 +39,7 @@ test('delivery default pipeline freezes real hashes and publishes one verified Z
 test('partial is automatically published with actual gaps; invalid clean plan/report/archive cannot replace preview',async()=>{
  const f=await fixture();try{const p=await f.project();f.runtime.setFault('partial');const first=await f.run(p.id);const done=await f.settle(first.id);assert.equal(done.status,'succeeded');assert.match((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion.summary,/部分交付/);
  const view=(await f.request('GET',`/api/delivery/v1/runs/${first.id}`)).data;assert.equal(view.quality,'partial');assert.ok(view.gaps.length);
- for(const fault of ['clean_plan','report_subject','archive']){f.runtime.setFault(fault);const r=await f.run(p.id,fault);assert.equal((await f.settle(r.id)).status,'failed');assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion.id,done.resultVersionId);}
+ for(const fault of ['clean_plan','report_subject','archive']){f.runtime.setFault(fault);const r=await f.run(p.id,fault);assert.equal((await f.settle(r.id)).status,'failed');if(fault==='archive')assert.equal(f.api.store.state.runs.find(record=>record.dto.id===r.id)!.delivery!.invalidReason,'ARCHIVE_CHECKSUM_MISMATCH');assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion.id,done.resultVersionId);}
  }finally{await f.close();}
 });
 test('preparation response loss/restart reuses immutable request and billable work is charged only once',async()=>{
@@ -116,4 +117,15 @@ test('late failure report is fetched after terminal event without replay; unknow
  f.runtime.setFault('');await f.api.tick();const view=(await f.request('GET',`/api/delivery/v1/runs/${r.id}`)).data;assert.equal(view.quality,'blocked');assert.equal(view.report.lifecycle,'failed');assert.equal(f.runtime.prepareCalls,1);assert.equal(f.runtime.executeCalls,1);
  f.runtime.setHold(false);f.runtime.setFault('unknown_usage');const second=await f.run(p.id,'未知最终token');assert.equal((await f.settle(second.id)).status,'failed');assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion,null);
  }finally{await f.close();}
+});
+
+test('public pnpm lock setting names are not dependency schemes; local protocols and private registry values remain rejected',()=>{
+ const publicLock="lockfileVersion: '9.0'\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\nimporters:\n  .:\n    dependencies:\n      react:\n        specifier: 19.2.0\n        version: 19.2.0\n";
+ assert.equal(isPublicDeliveryLockfile(publicLock),true);
+ for(const value of ['file:../local-package','file:/tmp/package','file:///tmp/package','link:../sibling','workspace:*','workspace:^']){
+  assert.equal(isPublicDeliveryLockfile(publicLock+`  version: ${value}\n`),false,value);
+  assert.equal(isPublicDeliveryLockfile(publicLock+`  resolution: {tarball: '${value}'}\n`),false,value);
+ }
+ assert.equal(isPublicDeliveryLockfile(publicLock+'  resolution: {tarball: https://registry.npmjs.org/react/-/react-19.2.0.tgz}\n'),true);
+ for(const url of ['https://private.example/react.tgz','https://registry.npmjs.org.evil.example/react.tgz','https://secret@registry.npmjs.org/react.tgz','https://registry.npmjs.org/react.tgz?token=credential','http://registry.npmjs.org/react.tgz'])assert.equal(isPublicDeliveryLockfile(publicLock+`  resolution: {tarball: "${url}"}\n`),false,url);
 });

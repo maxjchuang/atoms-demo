@@ -17,6 +17,14 @@ type Host={app:FastifyInstance;store:Store;dataDir:string;agentUrl:string;servic
 const terminal=(s:string)=>['succeeded','failed','cancelled','interrupted'].includes(s);
 const p=(r:FastifyRequest,key:string)=>String((r.params as Record<string,string>)[key]);
 const q=(r:FastifyRequest)=>r.query as Record<string,string|undefined>;
+/** Inspect dependency protocol values, not suffixes of YAML setting names. */
+export function isPublicDeliveryLockfile(lock:string):boolean {
+ if(/(?:^|[\s"'[{,@])(?:workspace|file|link):(?=[^\s"'{}\],])/m.test(lock))return false;
+ for(const match of lock.matchAll(/https?:\/\/[^\s"'{}>,]+/g)){
+  try{const url=new URL(match[0]);if(url.protocol!=='https:'||url.hostname!=='registry.npmjs.org'||url.port||url.username||url.password||url.search||url.hash)return false;}catch{return false;}
+ }
+ return true;
+}
 export function registerDelivery(h:Host){
  const {store,app,hash,id,now,fail}=h;
  const digest=(v:Record<string,unknown>)=>hash(D.deliveryHashBody(v));
@@ -107,7 +115,7 @@ export function registerDelivery(h:Host){
   if(sourceHash(manifest.files)!==manifest.sourceSnapshotHash)throw new Error('Export source hash mismatch');
   const packageFile=zip['source/package.json'];const pkg=JSON.parse(Buffer.from(packageFile).toString());
   if(hash(D.canonicalDeliveryJson(pkg.scripts))!==manifest.scriptsHash||!String(pkg.packageManager??'').startsWith('pnpm@'))throw new Error('Untrusted package scripts or package manager');
-  const lock=Buffer.from(zip['source/pnpm-lock.yaml']).toString();if(/workspace:|file:|link:|https?:\/\/(?!registry\.npmjs\.org(?:\/|\b))/.test(lock))throw new Error('Nonpublic lockfile');
+  const lock=Buffer.from(zip['source/pnpm-lock.yaml']).toString();if(!isPublicDeliveryLockfile(lock))throw new Error('Nonpublic lockfile');
   const path=join(r.delivery!.reportDirectory!,'source.zip');await writeFile(path,bytes);persist(()=>{current(r.dto.id).delivery!.archiveFile=path;});
  };
  const verifyCandidate=async(r:RunRecord,manifest:ArtifactManifestDto,directory:string)=>{
@@ -230,7 +238,7 @@ export function registerDelivery(h:Host){
   versions:request.context.facts.versions.map(v=>{const stored=store.state.versions.find(x=>x.dto.id===v.id)!,r=origin(stored);return {versionId:v.id,quality:r?.delivery?(r.delivery.invalid?'blocked':r.delivery.verified?r.delivery.report?.quality??'pending':'pending'):'legacy_unverified',report:r?.delivery?.report?{id:r.delivery.report.id,hash:r.delivery.report.hash}:null,sourceSnapshotHash:r?.delivery?.report?.attempts.at(-1)?.sourceBeforeHash??null,provenance:provenance(stored,r),gaps:r?.delivery?.report?.gaps??[]};}),
   runs:request.context.facts.runs.map(v=>{const r=store.state.runs.find(x=>x.dto.id===v.id)!;return {runId:v.id,quality:r.delivery?(r.delivery.invalid?'blocked':r.delivery.verified||r.delivery.report?.quality==='blocked'?r.delivery.report?.quality??'pending':'pending'):'legacy_unverified',report:r.delivery?.report?{id:r.delivery.report.id,hash:r.delivery.report.hash}:null,gaps:r.delivery?.report?.gaps??[]};}),availableActions:[]}) as Record<string,unknown>));
  return {tick,verifyCandidate,archive,view,provenance,facts,signed,request,loadReport,
-  invalid(r:RunRecord){persist(()=>{const currentRecord=current(r.dto.id);currentRecord.delivery!.invalid='Evidence validation failed';if(!terminal(currentRecord.dto.status)){if(!currentRecord.delivery!.prepare||currentRecord.delivery!.runtimeStopped)h.finish(currentRecord,currentRecord.dto.status==='cancelling'?'cancelled':'failed','ARTIFACT_INVALID','交付证据未通过完整性校验，保留当前版本。');else{currentRecord.cancelCommand??={commandId:id('command')};h.updateRun(currentRecord,{status:'cancelling',pendingAttention:null,pendingAnswer:null});}}});},
+  invalid(r:RunRecord,error?:unknown){persist(()=>{const currentRecord=current(r.dto.id);const reasons:Record<string,string>={'Nonpublic lockfile':'LOCKFILE_NONPUBLIC_REFERENCE','Archive checksum mismatch':'ARCHIVE_CHECKSUM_MISMATCH','Archive contents manifest mismatch':'ARCHIVE_CONTENTS_MISMATCH','Candidate source/dist mismatch':'SOURCE_DIST_BINDING_MISMATCH','Report subject mismatch':'REPORT_SUBJECT_MISMATCH','Report changed frozen bundle':'FROZEN_BUNDLE_MISMATCH','Unknown or exceeded total usage':'BUDGET_USAGE_INVALID','Canonical hash mismatch':'OBJECT_HASH_MISMATCH'};currentRecord.delivery!.invalidReason=error instanceof Error&&error.name==='ZodError'?'CONTRACT_INVALID':error instanceof Error?reasons[error.message]??'DELIVERY_VALIDATION_FAILED':'DELIVERY_VALIDATION_FAILED';currentRecord.delivery!.invalid='Evidence validation failed';if(!terminal(currentRecord.dto.status)){if(!currentRecord.delivery!.prepare||currentRecord.delivery!.runtimeStopped)h.finish(currentRecord,currentRecord.dto.status==='cancelling'?'cancelled':'failed','ARTIFACT_INVALID','交付证据未通过完整性校验，保留当前版本。');else{currentRecord.cancelCommand??={commandId:id('command')};h.updateRun(currentRecord,{status:'cancelling',pendingAttention:null,pendingAnswer:null});}}});},
   async restoreCheck(v:VersionRecord){if(!v.deliveryOriginRunId)return;const r=origin(v);if(!r?.delivery?.report?.exportManifest)throw new Error('Missing restore provenance');for(const f of r.delivery.report.exportManifest.files){const bytes=await readFile(join(v.directory,f.path));if(bytes.length!==f.bytes||hash(bytes)!==f.sha256)throw new Error('Restore source changed');}}
  };
 }

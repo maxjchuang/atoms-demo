@@ -13,7 +13,7 @@ const listHash=(files:ReturnType<typeof fingerprints>)=>sha(D.canonicalDeliveryJ
 export function createFakeDeliveryRuntime(token='delivery-test-token'){
  const app=Fastify();const coordinator=addFakeCoordinator(app);const coordinationWrappers=new Map<string,D.DeliveryCoordinationRequestDto>();
  const pkg=Buffer.from(JSON.stringify({name:'synthetic-delivery-fixture',private:true,packageManager:'pnpm@10.13.1',scripts:{build:'synthetic-test-only'}}));
- const lock=Buffer.from('lockfileVersion: \'9.0\'\nsettings:\n  autoInstallPeers: false\nimporters:\n  .: {}\n');
+ const lock=Buffer.from('lockfileVersion: \'9.0\'\nsettings:\n  autoInstallPeers: false\n  excludeLinksFromLockfile: false\nimporters:\n  .: {}\n');
  const toolchain=D.ToolchainDescriptor.parse({id:'toolchain_react_v1',templateId:'react-vite-v1',templateHash:sha('synthetic-template'),packageJsonHash:sha(pkg),scriptsHash:sha(D.canonicalDeliveryJson(JSON.parse(pkg.toString()).scripts)),lockfileHash:sha(lock),nodeVersion:process.version,pnpmVersion:'10.13.1',os:process.platform,arch:process.arch,registry:'https://registry.npmjs.org',lifecycleScripts:'disabled'});
  type Prep={request:D.PrepareDeliveryPlanRequestDto;snapshot:D.PlanPreparationSnapshotDto;events:ReturnType<typeof D.PlanningSourceEvent.parse>[];report?:D.DeliveryReportDto};
  type Execution={wrapper:D.DeliveryExecutionRequestDto;report:D.DeliveryReportDto;events:AgentEventDto[];files:Record<string,Buffer>;manifest:ArtifactManifestDto;raw:string;archive:Buffer;cancelled:boolean};

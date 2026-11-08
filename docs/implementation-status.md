@@ -4,22 +4,24 @@
 
 完整运行要求 **Node.js 24.9.0+、pnpm 10.33.0**；目前在 macOS arm64 / Node.js 26.5.0 验证。Node 22 只能覆盖部分基础能力，不满足当前固定 DSH 版本要求。
 
-最新增量：[M1 项目协调实施记录](m1-coordination-status.md)。主代理已在隔离集成 worktree 验证全仓 check/142 项节点测试、Fake HTTP 全链路，以及六轮真实 Router + Fake Worker。Web 浏览器最终验收与缓存输入预算计量修正仍待收尾，不提前标全部 M1 通过。此前过程反馈的 79 项及历史 G3/UI 证据保留在下表和 [过程反馈记录](progress-feedback.md)。
+最新增量：[M1 项目协调实施记录](m1-coordination-status.md)。M1 应用门禁及本机 live 安全升级均已完成：主管验证 Fake HTTP、六轮真实 Router + Fake Worker、分段浏览器和缓存计量修正。148 项（contracts 42 / API 30 / Agent 34 / Web 42）有主管独立通过记录；全仓 check/build 此前通过，补修 Agent check/34 再过。本机升级已排空停服、全目录备份、安装/重启与数据健康校验，最后文档提交推送待主管；这不是公网部署。此前 79 项及历史 G3/UI 证据保留。
 
-原设计复核后的范围见 [能力差距与路线图](capability-roadmap.md) 和 [v0.2 消息协调协议](protocol-v0.2.md)。原 v1 index/fixture/tests 未变；M1 项目协调已经实现并进入最终验收，不再是仅有每 Run Planner 的旧状态。下文旧真实代码成功记录保留，但应限定为 G4 最小子集；M1 真实验收使用 Fake Worker，不能补齐真实回滚后代码修改，完整 G4 仍待 M2。
+原设计复核后的范围见 [能力差距与路线图](capability-roadmap.md) 和 [v0.2 消息协调协议](protocol-v0.2.md)。原 v1 index/fixture/tests 未变；M1 项目协调已完成应用验收并由主管实际升级本机 live，不再是仅有每 Run Planner 的旧状态。下文旧真实代码成功记录保留，限定为 G4 最小子集；M1 真实验收使用 Fake Worker，不能补齐真实回滚后代码修改，完整 G4 仍待 M2。M2/M3 目前只有候选设计，未实施。
 
-### 最新 M1 证据与未闭合项
+### 最新 M1 证据与部署边界
 
 | 项目 | 当前结果 | 来源 |
 | --- | --- | --- |
-| 节点测试 | 142 项通过：contracts 42 / API 30 / Agent 28 / Web 42；全仓 check 通过 | 主代理亲自复验，缓存计量修正后需补最终回归 |
+| 节点测试 | 当前各包合计 148：42 / 30 / 34 / 42 均有主管独立通过记录；历史全仓 142 项及补修 Agent check + 34/34，含新增 6 计量用例 | 主管亲自复验，保留分段来源；全仓 check/build 此前通过 |
 | Fake HTTP 链路 | 六组通过，包含 Web HTTP 服务；实际 API/Agent v2 + FakeRouter/FakeDSH + 真实构建/smoke | 主代理亲自运行；不等于 Web 浏览器 E2E |
 | 六轮真实消息 Router | 全部通过，真实 DSH/DeepSeek Router + Fake Worker；记忆纠正和 API/Agent 重启 canonical memory 保留 | 主代理显式启动并验收，证据 `atoms-m1-integration-Ty23Ah` |
 | 本次用量 | 非缓存输入 9,094 + 缓存读取 16,640 = 有效输入 25,734；输出 1,401；总量 27,135；6 modelSteps | 本次真实样例计量复核，非绝对费用保证 |
-| 计量缺口 | 发现原 Worker/Router 输入预算遗漏 cacheRead，Agent 正修复并独立测试 | 不重跑收费样例，不提前称修复通过 |
-| Web 最终浏览器 | 独立 5185 / 真实 HTTP 服务验收中 | 等待主代理最终结果 |
+| 计量修正 | 原 Worker/Router 漏缓存读已修；cache read/write 算有效输入、settled 去重，原生六轮向量等 6 新回归通过 | 主管复验 Agent check + 34/34；不重跑模型、不回写旧 ledger |
+| Web 分段验收 | 首轮咨询零 Run/计划确认刷新/Fake 构建与 iframe 交互持久化/ask 不建 Run和接受 V2；复用轮稳定咨询 UI+暖色记忆刷新；source-only exit 0，精确来源可见且 0 消息/0 Run，revision/latestRunID/quota 不变 | 主管已视觉 review；中间两次 first()/重复文案测试假设失败已修，无对应产品故障 |
 
-真实样例目录：`/var/folders/xk/61y0rx650b1b6pf9wyc5p_tr0000gn/T/atoms-m1-integration-Ty23Ah`。本机旧 live 数据未因隔离验收被迁移或重置，安全升级和备份由主代理统一执行。
+真实样例目录：`/var/folders/xk/61y0rx650b1b6pf9wyc5p_tr0000gn/T/atoms-m1-integration-Ty23Ah`。有效输入 25,734 / 输出 1,401 / 总量 27,135 保留原生向量核对口径，旧 ledger 不回写。本机截图位于隔离集成目录 `apps/web/review-artifacts/m1-services/{consult,memory-and-preview,memory-source}.png`，不把分段证据称为一条无中断脚本。
+
+主管已实际升级本机 live：停服前后 drain=0，完整目录备份至 `data/backups/review-real-pre-m1-20261108` 且备份当时 diff -qr 一致；main ff 到 `732695e`、offline frozen 安装通过，真实 DSH 服务已重启。Web 5173 / API 3001 health 均 200。升级后仍为项目 2、Run 5、版本 5、消息 55、非终态 0；主管核对 legacy `codes/sessions/projects/runs/versions/messages/events/sourceEvents` 与备份 JSON 字节一致。协调字段增量迁移，无自动新 Run/重跑，数据和额度保留，密钥未入 diff。最后文档推送待主管；不将本机升级称为 M3 公网交付。
 
 ## 1. 当前实现
 
@@ -127,6 +129,6 @@ pnpm dev:demo
 - 独立预览主机上的不同项目仍共享浏览器 origin 存储，需要项目命名空间；没有严格多租户存储隔离。
 - 临时域名受进程、网络和电脑休眠影响，无持续可用性保证。
 - DSH 底座版本固定；扩展点和模型能力需以兼容性记录及真实测试为依据。
-- M1 新消息路由已实现并有真实 Router 样例证据；不要继续把它写成所有输入都建 Run。有限样例不保证所有表达分类正确，Web 最终验收与缓存输入计量修正仍待闭合，不代表通用 Super-agent 或 M2/M3 完成。
+- M1 应用门禁和本机 live 升级已完成，消息路由/分段浏览器/缓存计量及旧数据迁移已验收；最后文档推送待主管。有限真实 Router 样例不保证所有表达分类正确，不代表通用 Super-agent 或 M2/M3 完成。
 
 当前阶段 check/test/build、最新 Fake 集成、真实模型最小集成与已有真实产物的只读行为验收均有上述实际结果。后续代码变更应按影响范围重新验证，G5 仍作为单独后续阶段。

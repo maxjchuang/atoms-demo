@@ -121,7 +121,7 @@ The isolated controlled-repair smoke tool is ready for supervisor review: [CONTR
 
 ### M3 Docker execution (local gates; public deployment is a separate API gate)
 
-Set `AGENT_EXECUTION_BACKEND=docker_linux`, `BROKER_URL=http://broker:4310`, and `AGENT_BROKER_TOKEN_FILE=/run/agent-secrets/broker-token`. The Agent must not have the Docker socket. Broker runs `node --import tsx src/isolation/broker.ts`, with its own `AGENT_BROKER_TOKEN_FILE`, `BROKER_DATA_DIR=/var/lib/atoms-v03-broker`, `JOB_IMAGE=atoms-v03-job:linux-v1` and Docker access. Trusted images use UID 1000; isolated jobs use UID 10001. `Dockerfile.control` and `Dockerfile.broker` start Node directly so TERM reaches the service. Secret files may also supply `ATOMS_SERVICE_TOKEN_FILE` and, only for explicitly authorized real runs, `DEEPSEEK_API_KEY_FILE=/run/provider-secret/provider-key`; use a separate provider-only volume mounted solely into the trusted model Agent. Fake mode never reads the provider file.
+Set `AGENT_EXECUTION_BACKEND=docker_linux`, `BROKER_URL=http://broker:4310`, and `AGENT_BROKER_TOKEN_FILE=/run/agent-secrets/broker-token`. The Agent must not have the Docker socket. Broker runs `node --import tsx src/isolation/broker.ts`, with its own `AGENT_BROKER_TOKEN_FILE`, `BROKER_DATA_DIR=/var/lib/atoms-v03-broker`, `JOB_IMAGE=atoms-v03-job:linux-v1` and Docker access. Trusted images use UID 1000; the fixed isolated runner uses UID 10001 and its independent native PID1 watchdog uses UID 10002. `Dockerfile.control` and `Dockerfile.broker` start Node directly so TERM reaches the service. Secret files may also supply `ATOMS_SERVICE_TOKEN_FILE` and, only for explicitly authorized real runs, `DEEPSEEK_API_KEY_FILE=/run/provider-secret/provider-key`; use a separate provider-only volume mounted solely into the trusted model Agent. Fake mode never reads the provider file.
 
 Build only new `atoms-v03-*` images, from an explicit source-only context:
 
@@ -133,7 +133,7 @@ pnpm --filter @atoms/agent exec tsx src/isolation/build-control-images.ts
 The following administrator-only tests do not load `.env`, call a model, or contact public app services. Run sequentially (the development VM has about 5.77 GiB RAM):
 
 ```sh
-pnpm --filter @atoms/agent exec tsx src/isolation/smoke-policy.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-policy-job.ts
 pnpm --filter @atoms/agent exec tsx src/isolation/smoke-browser.ts
 pnpm --filter @atoms/agent exec tsx src/isolation/smoke-offline.ts
 pnpm --filter @atoms/agent exec tsx src/isolation/smoke-runtime.ts
@@ -143,6 +143,7 @@ pnpm --filter @atoms/agent exec tsx src/isolation/smoke-canaries.ts
 pnpm --filter @atoms/agent exec tsx src/isolation/smoke-runtime-cancel.ts
 pnpm --filter @atoms/agent exec tsx src/isolation/smoke-runtime-restart.ts
 pnpm --filter @atoms/agent exec tsx src/isolation/smoke-deadline.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-watchdog.ts
 pnpm --filter @atoms/agent exec tsx src/isolation/smoke-services.ts
 ```
 
@@ -157,3 +158,7 @@ This is not an HTTP feature or an environment switch that declares success. Drai
 Linux clean export extracts the **exact source ZIP** into a fresh private job, installs from the image-bound verified offline pnpm store with frozen lock and scripts disabled, then typechecks/builds and runs the same frozen DSL in a separate sandboxed browser job. This is an offline-store Linux mode, not a claim of live network installation. The archive keeps its public registry lock and remains independently installable. No platform node_modules or host compiler/browser fallback is used.
 
 主管最终独立复验：Agent check、78/78全量（120.9s）及build通过；实际Docker绝对deadline与trusted service TERM/stop/文件凭证边界分别在Gk8MYc、82K5TR通过。其余独立Linux/原DSL/精确ZIP、资源、真实跨plane/peer canary、HTTP取消、Broker及Agent强杀恢复记录见项目M3状态。部署内certifier与API最终拓扑/公网仍须后续验收，不把这些本地证据称G5。
+
+The certifier pins the inspected image ID into every child `JOB_IMAGE`, and uses private `BROKER_DATA_DIR/certifier-tmp` scratch instead of the small service `/tmp`. It never forwards model credentials, broker tokens, or arbitrary Node options. Allow at least 2 GiB free broker-data space and 100k inodes; compiler installs and caches remain in bounded per-job tmpfs, not operator scratch. Its current matrix has 11 gates including independent watchdog expiry.
+
+独立watchdog补修后主管重新通过check、完整80/80（125.7s）及build。新image精确digest下，Broker永不恢复/权限与CPU干扰watchdog正例QHC6q4、FakeRuntime→原6DSL修复→精确ZIPclean ee6nuh、当前job policy gHZVXh由主管独立通过；旧78项/旧镜像证据保留为历史，不代替当前认证。当前operator policy入口使用smoke-policy-job.ts；早期Node probe image脚本只保留历史来源。部署broker认证仍须实际执行，readiness不由此文字设置。

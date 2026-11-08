@@ -140,7 +140,11 @@ export async function createApi(options: ApiOptions) {
     return `${options.previewOrigin.replace(/\/$/, '')}/p/${payload}.${signature}/index.html`;
   };
   const freshVersion = (record: VersionRecord) => {
-    if (Date.parse(record.dto.previewExpiresAt) - Date.now() < 60000) {
+    const expiresAtMs = Date.parse(record.dto.previewExpiresAt);
+    // The cached URL must still match this signing key, exact version/expiry and trusted origin.
+    // A valid current URL is reused so ordinary polling does not reload the preview.
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs - Date.now() < 60000
+      || record.dto.previewUrl !== signedPreview(record.dto.id, record.dto.previewExpiresAt)) {
       // URL cache metadata only; no business revision/event changes.
       const expiresAt = new Date(Math.ceil((Date.now() + 7200000) / 60000) * 60000).toISOString();
       record.dto = { ...record.dto, previewExpiresAt: expiresAt, previewUrl: signedPreview(record.dto.id, expiresAt) };

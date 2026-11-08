@@ -35,6 +35,9 @@
     "m3:certify": "node scripts/m3-certify.mjs",
     "m3:tunnels": "node scripts/m3-tunnels.mjs",
     "m3:smoke-real": "pnpm --filter @atoms/api exec tsx ../../scripts/m3-smoke-real.mjs",
-    "m3:test-stage2": "node --test scripts/m3-stage2.test.mjs"
+    "m3:test-stage2": "node --test scripts/m3-stage2.test.mjs",
+    "m3:build-connector": "node scripts/m3-build-connector.mjs",
+    "m3:test-connector": "node --test scripts/m3-docker-transport.test.mjs",
+    "m3:probe-connector-network": "node scripts/m3-connector-probe.mjs"
   }
 }

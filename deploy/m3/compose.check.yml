@@ -48,7 +48,7 @@ services:
     environment: {M3_GATEWAY_ROLE: workbench, M3_DEPLOYMENT_FILE: /run/m3/deployment.json, M3_PAUSED_FILE: /run/m3/paused, M3_UPSTREAM: 'http://api:3001/'}
     volumes: [config:/run/m3:ro]
     ports: ['127.0.0.1:18080:8080']
-    networks: {control: {ipv4_address: 172.31.93.2}}
+    networks: {control: {ipv4_address: 172.31.93.2}, edge: {aliases: [workbench-gateway]}}
   preview-gateway:
     <<: *safe
     image: ${M3_GATEWAY_IMAGE:?Run the owned gateway build first}
@@ -57,7 +57,7 @@ services:
     environment: {M3_GATEWAY_ROLE: preview, M3_DEPLOYMENT_FILE: /run/m3/deployment.json, M3_UPSTREAM: 'http://api:3002/'}
     volumes: [config:/run/m3:ro]
     ports: ['127.0.0.1:18081:8080']
-    networks: {control: {ipv4_address: 172.31.93.6}}
+    networks: {control: {ipv4_address: 172.31.93.6}, edge: {aliases: [preview-gateway]}}
   admin:
     <<: *safe
     profiles: [admin]
@@ -80,6 +80,7 @@ services:
     command: [pnpm, --filter, '@atoms/api', exec, tsx, ../../deploy/m3/bootstrap-runtime.mjs, initialize]
     volumes: [api-data:/data/api, api-secrets:/run/api-secrets, agent-secrets:/run/agent-secrets, broker-secrets:/run/broker-secrets, config:/run/m3]
 networks:
+  edge: {driver: bridge, labels: {atoms.owner: atoms-v03, atoms.role: connector-edge}}
   control: {ipam: {config: [{subnet: 172.31.93.0/28}]}}
 volumes:
   api-data: {labels: {atoms.owner: atoms-v03}}

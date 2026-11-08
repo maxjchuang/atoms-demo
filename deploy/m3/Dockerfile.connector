@@ -1,0 +1,11 @@
+# Official pinned Linux/arm64 Node supplies only the CA certificate bundle.
+FROM public.ecr.aws/docker/library/node:26.5.0-bookworm-slim@sha256:9e5d714311940c098479ec352029af6df1d9a2dc4269b29373c616f51640dd67 AS certificates
+RUN node -e "require('node:fs').writeFileSync('/ca-certificates.crt',require('node:tls').rootCertificates.join('\\n')+'\\n')"
+FROM scratch
+LABEL atoms.owner="atoms-v03" atoms.role="tunnel-connector" org.opencontainers.image.source="https://github.com/cloudflare/cloudflared" org.opencontainers.image.version="2026.10.7" atoms.binary-sha256="3df43aedc9ff291d1735b5cb576cb97e0b157488796db2e32b28aecabb445775"
+COPY --from=certificates /ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --chmod=0555 cloudflared-linux-arm64 /usr/local/bin/cloudflared
+USER 65532:65532
+ENV HOME=/tmp SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENTRYPOINT ["/usr/local/bin/cloudflared"]
+CMD ["--version"]

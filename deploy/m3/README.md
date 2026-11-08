@@ -65,3 +65,29 @@ Supervisor independently repeated this core snapshot: six unit/HTTP guard tests;
 ### Persistent runtime mode versus initial credential authorization
 
 `--real` authorizes initial raw-key ingress; it is not a restart mode toggle. The host persists current-owner0600 `runtime-mode.json` (project/mode/providerConfigured, no credential). A configured dsh public profile survives ordinary `m3:up` and tunnel-renewal followed by `m3:up` without `--real`/key path, retaining dsh and not reading/reinjecting the key. If the installed file/SDK fails, startup fails rather than switching Fake. A Fake gateway manifest against saved dsh, or explicit `--fake` downgrade, is rejected. The first public start requires explicit `--fake` test or guarded `--real` initial ingress; a check project remains the explicit synthetic profile. After initial ingress, normal restart does not read the raw provider file again. There is no implicit provider rotation or identity/quota reset in this correction.
+
+## Explicit Docker Quick Tunnel transport (native AMFI compatibility alternative)
+
+Native Homebrew and separately verified official Darwin client startup failed under host AMFI; original binaries/logs/system policy are retained. This implementation does not disable AMFI or alter device security. An explicit `--transport docker` runs the official **Linux arm64** client inside Docker; native does not silently fall back.
+
+```sh
+pnpm m3:build-connector --project atoms-m3-public
+pnpm m3:test-connector
+pnpm m3:probe-connector-network        # isolated synthetic network only; no tunnel
+# Root only, after reviewed gateway-only edge update and actual OS proof:
+ATOMS_ALLOW_M3_PUBLIC_TUNNELS=1 pnpm m3:tunnels start --transport docker --project atoms-m3-public
+ATOMS_ALLOW_M3_PUBLIC_TUNNELS=1 pnpm m3:tunnels renew --transport docker --project atoms-m3-public
+ATOMS_ALLOW_M3_PUBLIC_TUNNELS=1 pnpm m3:tunnels stop --project atoms-m3-public
+```
+
+The pinned official [2026.10.7 release](https://github.com/cloudflare/cloudflared/releases/tag/2026.10.7) Linux asset is 37,667,293 bytes, SHA256 `3df43aedc9ff291d1735b5cb576cb97e0b157488796db2e32b28aecabb445775`. Build validates saved official release metadata plus actual bytes/ELF arm64. The final scratch image has only that client and the public CA roots exported from the pinned official Node26.5 base; TLS verification remains enabled. Image identity, binary hash, source tag and build context are saved to private `connector-image.json`; it must exist in the actual public operator directory. Observed local `--version` succeeded offline, image `atoms-v03-cloudflared:2026.10.7-3df43aedc9ff`, ID `sha256:f4f7af4406f5244c63d10bd5cd45a44c3a3800ff1403e9a6f2cb479fabc8240a`. A CA export test failed first because slim had no OS CA file; no tunnel was attempted, and the fix uses public pinned Node CA data without weakening TLS.
+
+Only gateways gain a second dedicated `edge` bridge; API/Agent/Broker/admin remain off it. The edge has outbound NAT for Cloudflare but no published ports; connectors have only edge membership, fixed targets `http://workbench-gateway:8080` and `http://preview-gateway:8080`, and no target/network/env overrides. The manager must explicitly recreate only these reviewed gateways to apply their edge membership; the implementation agent did not recreate the current public stack. Missing edge is a preflight error, never permission to join the control bridge or target API/internal ports.
+
+Connectors run UID65532, readonly root, capsALL dropped/no-new-privileges, 128MiB/0.5CPU/64PIDs, small noexec tmpfs and bounded logs. There are no provider/internal tokens, mounts of data/secrets/socket, or host ports. Journaled immutable container ID/image ID/edge network ID/context/owner-project-role-nonce are all checked for status/stop/renew; unknown identities refuse cleanup. Native PID identity checks remain for old records, and all prior failed logs remain unchanged. Both transports retain exact-origin auth, fresh epoch/signing-key renewal, owner/quotas, and dual cursor polling; default invocation still prints a plan.
+
+Local isolated network proof passed: two actual gateway containers on test edge+control, a synthetic API only on control, and a no-mount node probe on edge. Both gateway health paths returned200; API DNS and direct control-IP connection were denied. All `atoms-m3-connector-check-*` temporary containers/networks/config volume were removed. This is a local topology proof, not a Quick Tunnel/G5 result. No actual Cloudflare tunnel or provider call was executed by this implementation line.
+
+The negative network test uses its own **live** control TCP sentinel (not the stopped public API): control-side positive probes before and after both return200 with the exact sentinel body; edge-side probes reach both GW health endpoints200 while API DNS and direct control IP are null/denied. The recorded local proof is `~/.atoms-m3/check/connector-network-probe.json`. A separate actual `docker create`-only identity check of the pinned connector image passed before start, including the created-state network-ID handling; that stopped container/network was removed without ever starting its tunnel command. Docker's fixed default PATH is permitted alongside HOME/SSL_CERT_FILE; arbitrary credential environment remains forbidden.
+
+Supervisor independently repeated connector4/core-mode9/Stage2-guard5 tests, plus the live-sentinel isolated network probe (`atoms-m3-connector-check-f65526e5`: control before/after200, both gateways200, edge control DNS/IP denied). Official Linux asset SHA/ELF and network-none `--version` were independently verified by a fresh owned build; public operator manifest records image `sha256:aaba27562f4e6b020852c5a8b470fcbba969d1a5cdc3d8a53ab446b7cfee6487`, context `095b6b00265dba6605181a91062c55ceede32563795b730a70f4a88f9a292743`. These are not tunnel/G5 successes; actual public start remains manager-controlled.

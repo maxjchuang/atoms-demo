@@ -1,0 +1,10 @@
+# Exact row IDs for DSH 0.2.2-rc.1 sdk-minimal. No model-facing filesystem,
+# working-directory, or persistent shell tools are permitted in this app.
+- id: tool-fs
+  disabled: true
+- id: tool-working-directory
+  disabled: true
+- id: persistent-bash
+  disabled: true
+- id: persistent-pwsh
+  disabled: true

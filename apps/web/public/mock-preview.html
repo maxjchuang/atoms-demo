@@ -1,0 +1,7 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>*{box-sizing:border-box}body{margin:0;padding:40px;background:#f8f3e8;color:#665744;font-family:system-ui}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:26px;margin:5px 0}p{color:#a69a87;font-size:12px}button{border:0;padding:10px 16px;border-radius:8px;background:#746653;color:white;cursor:pointer}small{font-size:10px;color:#b3a48c}.notes{display:flex;flex-wrap:wrap;gap:18px;margin-top:30px}article{width:170px;min-height:150px;padding:20px;background:#f5d98c;border-radius:3px;box-shadow:0 5px 12px #58452c0a;transform:rotate(-2deg)}article:nth-child(2n){background:#e4c5bb;transform:rotate(2deg)}article:nth-child(3n){background:#cbd4b8}textarea{border:0;background:none;width:100%;height:90px;resize:none;font:14px/1.8 system-ui;color:#736042;outline:none}</style><header><div><small>MOCK PREVIEW · 模拟应用</small><h1>灵感便签墙</h1><p>给每一个稍纵即逝的想法，留一个位置。</p></div><button id="add">＋ 新增便签</button></header><div class="notes" id="notes"><article><textarea>把灵感写下来 ✦
+
+今天也要创造一点什么。</textarea></article><article><textarea>周末的小计划
+
+去散步，读一本书。</textarea></article><article><textarea>下一个好点子
+
+从一张便签开始。</textarea></article></div><script>document.getElementById('add').onclick=function(){const a=document.createElement('article');const t=document.createElement('textarea');t.value='新的想法';a.appendChild(t);document.getElementById('notes').appendChild(a);t.focus()}</script></html>

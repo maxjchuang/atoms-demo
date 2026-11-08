@@ -25,7 +25,7 @@ try {
   await page.getByRole('button', { name: '进入创作空间' }).click();
   await expect(page.getByRole('dialog')).toBeHidden();
   await page.goto(`${process.env.ATOMS_WEB_URL ?? 'http://localhost:5173'}/#/projects/${projectId}`);
-  await expect(page.locator('.feedback-card')).toBeVisible();
+  await page.getByRole('tab', { name: '构建活动' }).click(); await expect(page.locator('.feedback-card')).toBeVisible();
   await expect(page.getByText('正在恢复执行历史…', { exact: true })).toBeHidden();
   await page.locator('.activity-details summary').click();
   await expect(page.locator('.execution-timeline li.file').first()).toBeVisible();

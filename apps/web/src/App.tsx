@@ -8,7 +8,10 @@ import type { z } from 'zod';
 import { api, HttpError } from './api';
 import { applyEvents, isTerminal, phaseLabels, statusLabels } from './state';
 import { mergeActivityEvents, readActivityHistory, type ApiSync } from './activity';
-import { RunFeedback } from './RunFeedback';
+import { coordinationApi } from './coordination-api';
+import { ProjectConversation } from './ProjectConversation';
+import { hydrateConversation, applyConversationEvents, applyExecutionEvents, mergeOlderMessages, upsertRevision, type ConversationView } from './conversation-state';
+import { CoordinationMode, type CoordinationWorkspaceDto, type SubmitMessageRequestDto, type ProjectMemoryViewDto } from '@atoms/contracts/conversation';
 
 type SessionDto = z.infer<typeof Session>;
 type View = 'home' | 'projects';
@@ -33,6 +36,11 @@ export function App() {
   const [versions, setVersions] = useState<VersionDto[]>([]);
   const [draft, setDraft] = useState('');
   const [mode, setMode] = useState<'build' | 'plan'>('build');
+  const [messageMode, setMessageMode] = useState<z.infer<typeof CoordinationMode>>('auto');
+  const [coordination, setCoordination] = useState<ConversationView | null>(null);
+  const coordinationRef = useRef<ConversationView | null>(null);
+  const [memory, setMemory] = useState<ProjectMemoryViewDto | null>(null);
+  const [messageQuota, setMessageQuota] = useState<{ limit: number; reserved: number; used: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -43,7 +51,7 @@ export function App() {
   const [sync, setSync] = useState<ApiSync>({ status: 'syncing', lastSuccessAt: null });
   const [login, setLogin] = useState(false);
   const [code, setCode] = useState('');
-  const [pending, setPending] = useState<{ prompt: string; mode: 'build' | 'plan'; projectId: string | null } | null>(null);
+  const [pending, setPending] = useState<{ prompt: string; mode: 'build' | 'plan'; messageMode: z.infer<typeof CoordinationMode>; projectId: string | null } | null>(null);
   const [tab, setTab] = useState<'preview' | 'code' | 'versions'>('preview');
   const [mobilePreview, setMobilePreview] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
@@ -51,6 +59,7 @@ export function App() {
   const [source, setSource] = useState('');
   const [query, setQuery] = useState('');
   const generation = useRef(0);
+  const olderRequest = useRef<Promise<void> | null>(null);
   const mock = import.meta.env.MODE === 'mock';
   const updateWorkspace = useCallback((next: WorkspaceSnapshotDto | null) => {
     const previous = workspaceRef.current;
@@ -72,11 +81,46 @@ export function App() {
       if (generation.current === context && currentProjectId() === id) setHistoryLoading(false);
     }
   }, [recordActivity]);
+
+  const commitConversation = useCallback((next: ConversationView | null) => {
+    coordinationRef.current = next; setCoordination(next);
+    if (next) updateWorkspace(next.workspace.execution);
+  }, [updateWorkspace]);
+  const ensureLinks = useCallback(async (id: string, context: number) => {
+    const current = coordinationRef.current;
+    if (!current || current.workspace.execution.project.id !== id) return;
+    const missing = [...new Set(current.messages.map(message => message.coordinationTurnId).filter((value): value is string => !!value))]
+      .filter(turnId => !current.turns.some(turn => turn.id === turnId));
+    const turns = (await Promise.all(missing.map(turnId => coordinationApi.turn(turnId).catch(() => null)))).filter((value): value is NonNullable<typeof value> => value !== null);
+    if (generation.current !== context || currentProjectId() !== id || !coordinationRef.current) return;
+    let next = { ...coordinationRef.current, turns: upsertRevision(coordinationRef.current.turns, turns) };
+    commitConversation(next);
+    const proposals = [...new Set(next.turns.flatMap(turn => turn.result?.kind === 'change_proposal' ? [turn.result.proposalId] : []))]
+      .filter(value => !next.proposals.some(proposal => proposal.id === value));
+    const questions = [...new Set(next.turns.flatMap(turn => turn.result?.kind === 'clarify' ? [turn.result.clarificationId] : []))]
+      .filter(value => !next.clarifications.some(question => question.id === value));
+    const [proposalValues, questionValues] = await Promise.all([
+      Promise.all(proposals.map(value => coordinationApi.proposal(value).catch(() => null))),
+      Promise.all(questions.map(value => coordinationApi.clarification(value).catch(() => null))),
+    ]);
+    if (generation.current !== context || currentProjectId() !== id || !coordinationRef.current) return;
+    next = { ...coordinationRef.current,
+      proposals: upsertRevision(coordinationRef.current.proposals, proposalValues.filter((value): value is NonNullable<typeof value> => value !== null)),
+      clarifications: upsertRevision(coordinationRef.current.clarifications, questionValues.filter((value): value is NonNullable<typeof value> => value !== null)) };
+    commitConversation(next);
+  }, [commitConversation]);
+  const acceptSnapshot = useCallback((next: CoordinationWorkspaceDto) => {
+    const current = coordinationRef.current;
+    if (current?.workspace.execution.project.id === next.execution.project.id
+      && (current.workspace.executionEventCursor > next.executionEventCursor || current.workspace.conversationEventCursor > next.conversationEventCursor)) return;
+    commitConversation(hydrateConversation(current, next));
+  }, [commitConversation]);
+
   const refreshProjects = useCallback(async () => { const result = await api.projects(); setProjects(result.items); }, []);
   useEffect(() => {
     let alive = true;
-    void api.session().then(async (value) => {
-      if (!alive) return; setSession(value); await refreshProjects();
+    void coordinationApi.session().then(async (value) => {
+      if (!alive) return; setSession(value.session); setMessageQuota(value.coordinationQuota); await refreshProjects();
     }).catch((e) => { if (alive && !(e instanceof HttpError && e.status === 401)) setError(errorMessage(e)); });
     const listener = () => { setProjectId(currentProjectId()); setError(''); setConnection(''); };
     addEventListener('hashchange', listener);
@@ -95,66 +139,80 @@ export function App() {
 
   useEffect(() => {
     const ownGeneration = ++generation.current;
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout>;
-    let failures = 0;
-    updateWorkspace(null); setVersions([]); setTab('preview'); setActivityEvents([]);
+    let alive = true; let timer: ReturnType<typeof setTimeout>; let failures = 0; let polling = false; let wakeRequested = false;
+    updateWorkspace(null); commitConversation(null); setMemory(null); setVersions([]); setTab('preview'); setActivityEvents([]);
     setHistoryError(''); setHistoryLoading(false); setSync({ status: 'syncing', lastSuccessAt: null });
     if (!projectId) { setLoading(false); return; }
     setLoading(true);
     const isCurrent = () => alive && generation.current === ownGeneration;
     async function snapshot() {
-      const [next, history] = await Promise.all([api.workspace(projectId!), api.versions(projectId!)]);
+      const [next, history, decisions, account] = await Promise.all([
+        coordinationApi.workspace(projectId!), api.versions(projectId!), coordinationApi.memory(projectId!), coordinationApi.session(),
+      ]);
       if (!isCurrent()) return;
-      updateWorkspace(next); setVersions(history.items); setLoading(false);
+      acceptSnapshot(next); setVersions(history.items); setMemory(decisions); setSession(account.session); setMessageQuota(account.coordinationQuota); setLoading(false);
       setSync({ status: 'ok', lastSuccessAt: Date.now() }); setConnection('');
-      await hydrateActivity(projectId!, next.eventCursor, ownGeneration);
+      await hydrateActivity(projectId!, next.executionEventCursor, ownGeneration);
+      await ensureLinks(projectId!, ownGeneration);
     }
     async function poll() {
       if (!isCurrent()) return;
+      if (polling) { wakeRequested = true; return; }
+      polling = true;
       try {
-        const current = workspaceRef.current;
-        if (!current || current.project.id !== projectId) { await snapshot(); }
+        if (!coordinationRef.current || coordinationRef.current.workspace.execution.project.id !== projectId) await snapshot();
         else {
-          const shouldPoll = !!current.activeRun || current.queuedRuns.length > 0 || (current.latestRun && !isTerminal(current.latestRun));
-          const expires = current.currentVersion && Date.parse(current.currentVersion.previewExpiresAt) < Date.now() + 60000;
-          if (shouldPoll) {
-            let after = current.eventCursor;
-            let more = true;
-            while (more && isCurrent()) {
-              const page = await api.events(projectId!, after);
-              if (!isCurrent()) return;
-              setSync({ status: 'ok', lastSuccessAt: Date.now() });
-              recordActivity(projectId!, page.items);
-              const before = workspaceRef.current!;
-              const next = applyEvents(before, page.items);
-              updateWorkspace(next); after = page.nextCursor; more = page.hasMore;
-              if (page.items.some((item) => item.event.type === 'version.published' || (item.event.type === 'run.updated' && isTerminal(item.event.payload)))) {
-                await snapshot(); await refreshProjects();
-                const value = await api.session(); if (isCurrent()) setSession(value);
-              }
-            }
-          } else if (expires) await snapshot();
+          let refresh = false, more = true;
+          while (more && isCurrent()) {
+            const after = coordinationRef.current!.workspace.executionEventCursor;
+            const page = await api.events(projectId!, after);
+            if (!isCurrent()) return;
+            recordActivity(projectId!, page.items);
+            commitConversation(applyExecutionEvents(coordinationRef.current!, page.items));
+            more = page.hasMore;
+            refresh ||= page.items.some(item => item.event.type === 'version.published' || item.event.type === 'run.updated' && isTerminal(item.event.payload));
+          }
+          more = true;
+          while (more && isCurrent()) {
+            const after = coordinationRef.current!.workspace.conversationEventCursor;
+            const page = await coordinationApi.events(projectId!, after);
+            if (!isCurrent()) return;
+            commitConversation(applyConversationEvents(coordinationRef.current!, page.items));
+            more = page.hasMore;
+            refresh ||= page.items.some(item => item.event.type === 'turn.updated' && !['queued', 'processing', 'cancelling'].includes(item.event.payload.status));
+          }
+          if (isCurrent()) {
+            setSync({ status: 'ok', lastSuccessAt: Date.now() });
+            const version = coordinationRef.current!.workspace.execution.currentVersion;
+            if (refresh || version && Date.parse(version.previewExpiresAt) < Date.now() + 60000) await snapshot();
+          }
         }
         failures = 0; if (isCurrent()) setConnection('');
       } catch (e) {
         if (!isCurrent()) return;
-        failures++;
-        setSync((previous) => ({ ...previous, status: 'interrupted' }));
+        failures++; setSync(previous => ({ ...previous, status: 'interrupted' }));
         if (e instanceof HttpError && e.status === 401) { setSession(null); setLogin(true); }
-        else if (e instanceof HttpError && e.status === 404) { setError(errorMessage(e)); setLoading(false); return; }
-        else {
-          setConnection(errorMessage(e));
-          try { await snapshot(); } catch { /* Retain last usable preview while offline. */ }
-        }
+        else if (e instanceof HttpError && e.status === 404) { setError(errorMessage(e)); setLoading(false); polling = false; return; }
+        else { setConnection(errorMessage(e)); try { await snapshot(); } catch { /* Preserve prior preview and conversation. */ } }
       }
-      if (isCurrent()) timer = setTimeout(poll, Math.min(10000, (document.hidden ? 3000 : 1000) * 2 ** Math.min(failures, 3)));
+      polling = false;
+      const state = coordinationRef.current?.workspace;
+      const active = !!state?.execution.activeRun || !!state?.execution.queuedRuns.length || !!state?.pendingCoordinationTurns.length;
+      const interval = document.hidden ? 3000 : active ? 1000 : 5000;
+      if (isCurrent()) timer = setTimeout(poll, wakeRequested ? 0 : Math.min(10000, interval * 2 ** Math.min(failures, 3)));
+      wakeRequested = false;
     }
+    const wake = () => { clearTimeout(timer); void poll(); };
+    addEventListener('atoms-coordination-wake', wake);
     void poll();
-    return () => { alive = false; clearTimeout(timer); };
-  }, [projectId, updateWorkspace, refreshProjects, hydrateActivity, recordActivity]);
+    return () => { alive = false; clearTimeout(timer); removeEventListener('atoms-coordination-wake', wake); };
+  }, [projectId, updateWorkspace, commitConversation, acceptSnapshot, refreshProjects, hydrateActivity, recordActivity, ensureLinks]);
 
   const currentVersion = workspace?.currentVersion;
+  const basicPassed = currentVersion ? ['typecheck', 'build', 'smoke'].filter(kind => currentVersion.checks.filter(check => check.kind === kind).at(-1)?.status === 'passed').length : 0;
+  const behavior = currentVersion?.checks.filter(check => check.kind === 'behavior').at(-1);
+  const behaviorResult = behavior ? ({ passed: '已记录通过结果', failed: '存在失败结果', not_run: '未执行', skipped: '已跳过' })[behavior.status] : '未记录';
+  const verificationBoundary = currentVersion ? `当前版本基础检查 ${basicPassed}/3 项通过；功能行为${behaviorResult}。基础检查不等于全部功能验收，请查看版本检查结果与覆盖范围。` : '暂无验收结果。基础检查不等于功能验收，请在交付后查看版本检查结果与覆盖范围。';
   useEffect(() => {
     let alive = true; setFiles([]); setSelectedFile(''); setSource('');
     if (!currentVersion) return;
@@ -178,20 +236,50 @@ export function App() {
   const open = (id: string) => { location.hash = `/projects/${id}`; setProjectId(id); };
   async function loadCurrent(id = projectId) {
     if (!id) return;
-    const [next, history] = await Promise.all([api.workspace(id), api.versions(id)]);
+    const context = generation.current;
+    const [next, history, decisions, account] = await Promise.all([
+      coordinationApi.workspace(id), api.versions(id), coordinationApi.memory(id), coordinationApi.session(),
+    ]);
     if (currentProjectId() !== id) return;
-    updateWorkspace(next); setVersions(history.items);
+    acceptSnapshot(next); setVersions(history.items); setMemory(decisions); setSession(account.session); setMessageQuota(account.coordinationQuota);
     setSync({ status: 'ok', lastSuccessAt: Date.now() });
-    await hydrateActivity(id, next.eventCursor, generation.current); await refreshProjects();
+    await hydrateActivity(id, next.executionEventCursor, context); await ensureLinks(id, context); await refreshProjects();
+    dispatchEvent(new Event('atoms-coordination-wake'));
+  }
+  async function loadOlder() {
+    if (olderRequest.current) return olderRequest.current;
+    const current = coordinationRef.current;
+    if (!projectId || !current?.olderCursor) return;
+    const ownId = projectId, context = generation.current;
+    const operation = (async () => {
+      const page = await coordinationApi.messages(ownId, current.olderCursor!);
+      if (currentProjectId() !== ownId || generation.current !== context || !coordinationRef.current) return;
+      commitConversation(mergeOlderMessages(coordinationRef.current, page.items, page.nextCursor));
+      await ensureLinks(ownId, context);
+    })();
+    olderRequest.current = operation;
+    try { await operation; } finally { if (olderRequest.current === operation) olderRequest.current = null; }
+  }
+  async function revealMessage(id: string) {
+    for (let page = 0; page < 100; page++) {
+      if (coordinationRef.current?.messages.some(message => message.id === id)) return true;
+      if (!coordinationRef.current?.olderCursor) return false;
+      await loadOlder();
+    }
+    return false;
+  }
+  async function submitMessage(body: SubmitMessageRequestDto) {
+    if (!projectId) return;
+    await action(async () => { await coordinationApi.submit(projectId, body); });
   }
   async function submitPrompt(prompt: string, requestedMode = mode) {
     if (!prompt.trim() || busy) return;
-    if (!session) { setPending({ prompt, mode: requestedMode, projectId }); setLogin(true); return; }
+    if (!session) { setPending({ prompt, mode: requestedMode, messageMode, projectId }); setLogin(true); return; }
     setBusy(true); setError('');
     try {
       let id = projectId;
       if (!id) { const project = await api.createProject(prompt.trim().slice(0, 32)); id = project.id; open(id); }
-      await api.createRun(id, prompt.trim(), requestedMode);
+      await coordinationApi.submit(id, { input: { kind: 'text', content: prompt.trim() }, mode: messageMode, runMode: requestedMode });
       setDraft(''); await refreshProjects();
       open(id); await loadCurrent(id);
     } catch (e) { setError(errorMessage(e)); if (e instanceof HttpError && e.status === 401) { setSession(null); setLogin(true); } }
@@ -200,18 +288,18 @@ export function App() {
   async function redeem(event: FormEvent) {
     event.preventDefault(); if (busy) return; setBusy(true); setError('');
     try {
-      const value = await api.redeem(code.trim()); setSession(value); setLogin(false); setCode(''); await refreshProjects();
+      const value = await api.redeem(code.trim()); setSession(value); const account = await coordinationApi.session(); setMessageQuota(account.coordinationQuota); setLogin(false); setCode(''); await refreshProjects();
       if (pending) {
         const request = pending; setPending(null);
         const id = request.projectId ?? (await api.createProject(request.prompt.trim().slice(0, 32))).id;
-        open(id); await api.createRun(id, request.prompt, request.mode); setDraft(''); await refreshProjects(); await loadCurrent(id);
+        open(id); await coordinationApi.submit(id, { input: { kind: 'text', content: request.prompt }, mode: request.messageMode, runMode: request.mode }); setDraft(''); await refreshProjects(); await loadCurrent(id);
       } else if (projectId) await loadCurrent();
     } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   }
   async function action(operation: () => Promise<unknown>) {
     if (busy) return; setBusy(true); setError('');
-    try { await operation(); await loadCurrent(); } catch (e) { setError(errorMessage(e)); }
+    try { await operation(); await loadCurrent(); } catch (e) { setError(errorMessage(e)); try { await loadCurrent(); } catch { /* Keep the original error. */ } }
     finally { setBusy(false); }
   }
   const activeRun = workspace?.activeRun ?? workspace?.latestRun;
@@ -240,7 +328,7 @@ export function App() {
       {mock && <div className="mock-banner"><ShieldCheck size={13}/> 独立 Mock 模式 · 所有生成与验证记录均为模拟数据</div>}
       {!mock && import.meta.env.VITE_RUNTIME_MODE === 'fake' && <div className="mock-banner"><ShieldCheck size={13}/> 演示执行 · Fake DSH 生成，构建与验证实际执行</div>}
       <header className="topbar"><div className="breadcrumb">{projectId ? <><button onClick={() => home('projects')}>我的项目</button><ChevronRight size={14}/><span>{workspace?.project.title ?? '加载项目'}</span></> : <span>把想法变成可以使用的作品</span>}</div>
-        <div className="top-actions"><span className="engine-badge"><span/>DeepSeek Harness</span>{session && <span className="credits"><Zap size={14}/>{Math.max(0, session.quota.runLimit - session.quota.runsUsed - session.quota.runsReserved)}<span>次构建</span></span>}</div></header>
+        <div className="top-actions"><span className="engine-badge"><span/>DeepSeek Harness</span>{messageQuota && <span className="credits message-credits"><MessageSquare size={14}/>{Math.max(0, messageQuota.limit - messageQuota.used - messageQuota.reserved)}<span>条消息</span></span>}{session && <span className="credits"><Zap size={14}/>{Math.max(0, session.quota.runLimit - session.quota.runsUsed - session.quota.runsReserved)}<span>次构建</span></span>}</div></header>
       {(error || connection) && <div role="alert" className={`notice ${connection && !error ? 'connection' : ''}`}><span>{error || connection}</span><button aria-label="关闭提示" onClick={() => { setError(''); setConnection(''); }}><X size={15}/></button></div>}
 
       {!projectId ? <div className="dashboard">
@@ -248,8 +336,8 @@ export function App() {
           <div className="hero-pill"><Sparkles size={13}/>从灵感，到你的下一个产品</div>
           <div className="agent-stack">{agents.map((agent) => <div key={agent.letter} title={agent.name} className="agent-orb" style={{ background: agent.color }}>{agent.letter}<span/></div>)}</div>
           <h1>你来想象，<em>我们来构建。</em></h1><p className="hero-description">把想法告诉你的 AI 团队，让它成为一个真正可用的应用。</p>
-          <Composer value={draft} setValue={setDraft} mode={mode} setMode={setMode} busy={busy} onSubmit={() => void submitPrompt(draft)} placeholder="描述你想构建的应用，例如：一个可以拖拽的灵感便签墙…"/>
-          <div className="hero-footnote"><ShieldCheck size={13}/>规划、编写、验证，每一步都看得见<span>·</span>支持持续修改与版本回滚</div>
+          <Composer value={draft} setValue={setDraft} mode={mode} setMode={setMode} messageMode={messageMode} setMessageMode={setMessageMode} busy={busy} onSubmit={() => void submitPrompt(draft)} placeholder="描述你想构建的应用，例如：一个可以拖拽的灵感便签墙…"/>
+          <div className="hero-footnote"><ShieldCheck size={13}/>支持 React 前端与浏览器本地数据<span>·</span>当前不自动公网部署</div>
           <div className="suggestions"><span>试试这些灵感</span>{['便签墙', '任务看板', '习惯打卡'].map((label, index) => <button key={label} onClick={() => setDraft(examples[index].text)}>{label}<ArrowRight size={12}/></button>)}</div>
         </section>}
         <section className="projects-section">
@@ -262,20 +350,24 @@ export function App() {
       </div> : <div className="workspace-content">
         {loading && !workspace ? <div className="loading-state"><LoaderCircle className="spin"/>正在恢复你的项目…</div> : workspace && <>
           <section className="conversation-panel"><div className="conversation-heading"><div><span className="agent-avatar-small">M</span><div><strong>项目负责人</strong><small>规划 · 协调 · 交付</small></div></div><span className="online-dot">任务协调</span></div>
-            <div className="conversation-scroll">
-              <div className="conversation-intro"><Sparkles size={18}/><p>一起把这个想法做出来。<br/><span>我会协调构建过程，并在需要你时提出具体问题。</span></p></div>
-              {workspace.messages.map((message) => <div key={message.id} className={`message ${message.role}`}><span className={`message-avatar ${message.role}`}>{message.role === 'user' ? '你' : 'M'}</span><div><small>{message.role === 'user' ? '你' : '项目负责人'}</small><p>{message.content}{message.status === 'streaming' && <span className="typing-dot"/>}</p></div></div>)}
-              {displayRun && <RunFeedback run={displayRun} events={activityEvents} sync={sync} historyLoading={historyLoading} historyError={historyError} busy={busy} onCancel={() => void action(() => api.cancel(displayRun.id))}/>}
-              {workspace.activeRun?.pendingAttention && <AttentionCard run={workspace.activeRun} busy={busy} onAnswer={(answer) => void action(() => api.answer(workspace.activeRun!.id, answer))}/>}
-              {workspace.queuedRuns.length > 0 && <div className="queue-card"><Clock3 size={15}/>{workspace.queuedRuns.length} 个需求等待当前任务完成后执行</div>}
-            </div>
-            <div className="workspace-composer"><Composer compact value={draft} setValue={setDraft} mode={mode} setMode={setMode} busy={busy} onSubmit={() => void submitPrompt(draft)} placeholder={workspace.activeRun ? '补充新需求，将在当前任务后排队执行…' : '描述你想继续修改的地方…'}/><small>新需求会保存为独立任务，不会覆盖当前执行。</small></div>
+            {coordination && <ProjectConversation view={coordination} memory={memory} versions={versions} events={activityEvents} sync={sync} historyLoading={historyLoading} historyError={historyError} busy={busy}
+              onSubmit={submitMessage} onLoadOlder={loadOlder} onRevealMessage={revealMessage}
+              onCancelTurn={turn => action(async () => { const receipt = await coordinationApi.cancel(turn.id, turn.revision); if (receipt.disposition === 'already_dispatched') setError('该消息已创建构建任务。停止回答不会停止构建，请使用“停止构建”。'); })}
+              onRetryTurn={turn => action(() => coordinationApi.retry(turn.id, turn.revision))}
+              onCancelRun={run => action(() => api.cancel(run.id))}
+              onAnswerRun={(run, answer) => action(() => api.answer(run.id, answer))}
+              onAccept={(proposal, strategy) => action(() => coordinationApi.accept(proposal.id, proposal.revision, strategy))}
+              onRefreshProposal={proposal => action(() => coordinationApi.refreshProposal(proposal.id, proposal.revision))}
+              onDismissProposal={proposal => action(() => coordinationApi.dismissProposal(proposal.id, proposal.revision))}
+              onDismissClarification={question => action(() => coordinationApi.dismissClarification(question.id, question.revision))}
+              onCorrectMemory={text => { setMessageMode('ask'); setDraft(`更正项目约定“${text}”，仅更新项目记忆，不修改应用。新的约定是：`); document.querySelector<HTMLTextAreaElement>('.workspace-composer textarea')?.focus(); }}/>}
+            <div className="workspace-composer"><Composer compact value={draft} setValue={setDraft} mode={mode} setMode={setMode} messageMode={messageMode} setMessageMode={setMessageMode} busy={busy} onSubmit={() => void submitPrompt(draft)} placeholder={messageMode === 'ask' ? '询问现有项目；只问项目模式不会直接修改代码…' : '询问项目，或明确说明想修改的地方…'}/><small>{messageMode === 'ask' ? '只读问答；采用修改建议需要另行接受提案。' : '明确修改会独立排队，开始时使用最新成功版本。'}</small></div>
           </section>
           <section className="output-panel"><div className="output-toolbar"><div className="output-tabs">{([{ id: 'preview', label: '预览', Icon: Monitor }, { id: 'code', label: '代码', Icon: Code2 }, { id: 'versions', label: '版本', Icon: Layers3 }] as const).map(({ id, label, Icon }) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><Icon size={15}/>{label}</button>)}</div><div className="output-actions">{tab === 'preview' && <><button title="桌面预览" aria-label="桌面预览" className={!mobilePreview ? 'active' : ''} onClick={() => setMobilePreview(false)}><Monitor size={16}/></button><button title="手机预览" aria-label="手机预览" className={mobilePreview ? 'active' : ''} onClick={() => setMobilePreview(true)}><Smartphone size={16}/></button></>}{currentVersion && <><a title="下载源码" aria-label="下载源码" href={`/api/v1/versions/${currentVersion.id}/source.zip`}><ArrowDownToLine size={16}/></a><a title="在新窗口打开" aria-label="在新窗口打开预览" href={currentVersion.previewUrl} target="_blank" rel="noreferrer"><ExternalLink size={15}/></a></>}</div></div>
             {tab === 'preview' ? <div className={`preview-area ${mobilePreview ? 'mobile' : ''}`}>{currentVersion ? <><div className="preview-address"><span className="browser-dots"><i/><i/><i/></span><span><ShieldCheck size={12}/>应用预览</span><span className="version-badge">{currentVersion.restoredFromVersionId ? '恢复版本' : `版本 ${versions.findIndex((v) => v.id === currentVersion.id) >= 0 ? versions.length - versions.findIndex((v) => v.id === currentVersion.id) : versions.length}`}</span></div><iframe key={currentVersion.previewUrl} title="应用预览" src={currentVersion.previewUrl} sandbox={mock ? 'allow-scripts' : 'allow-scripts allow-same-origin'}/></> : <div className="preview-empty"><div className="preview-symbol"><WandSparkles size={35}/><span>✦</span></div><h2>{activeRun && !isTerminal(activeRun) ? '你的想法，正在成形' : '应用将在这里呈现'}</h2><p>{activeRun?.status === 'waiting_input' ? '确认左侧计划后，Agent 将继续构建。' : activeRun?.error ? '本次未能交付，可修改需求后重新尝试。' : '代码完成并通过验证后，便可在这里直接体验。'}</p>{activeRun && !isTerminal(activeRun) && <div className="preview-progress"><LoaderCircle className="spin" size={14}/>{activeRun.phase ? phaseLabels[activeRun.phase] : statusLabels[activeRun.status]}</div>}</div>}</div>
             : tab === 'code' ? <div className="code-area">{currentVersion ? <><div className="file-tree"><h4>项目文件</h4>{files.map((path) => <button key={path} className={selectedFile === path ? 'active' : ''} onClick={() => setSelectedFile(path)}><FileCode2 size={14}/>{path.replace(/^source\//, '')}</button>)}</div><div className="source-view"><div><FileCode2 size={14}/>{selectedFile.replace(/^source\//, '')}<span>已发布版本 · 只读</span></div><pre>{source}</pre></div></> : <div className="panel-empty"><Code2 size={28}/><h3>等待首个成功版本</h3><p>成功交付后，可以查看完整的 React 多文件源码。</p></div>}</div>
             : <div className="versions-area"><div className="version-heading"><h3>每一步创作，都有迹可循</h3><p>成功交付的版本会被保留，你可以随时恢复。</p></div>{!versions.length && <div className="panel-empty"><Layers3 size={28}/><p>尚无成功版本。</p></div>}{versions.map((version, index) => <div className="version-card" key={version.id}><div className="version-title"><span className="version-number">V{versions.length - index}</span><strong>{version.summary}</strong>{version.id === currentVersion?.id && <span className="current-tag">当前版本</span>}</div><small>{shortDate(version.createdAt)}{version.restoredFromVersionId ? ' · 从历史版本恢复' : ''}</small><div className="check-list">{version.checks.map((check) => <span className={check.status === 'passed' ? 'passed' : 'unchecked'} key={check.id}>{check.status === 'passed' ? <Check size={12}/> : <Clock3 size={12}/>} {check.name} · {check.status === 'passed' ? '通过' : check.status === 'not_run' ? '未验证' : check.status === 'skipped' ? '已跳过' : '失败'}</span>)}</div>{version.id !== currentVersion?.id && <button className="secondary-button" disabled={busy || !!workspace.activeRun} title={workspace.activeRun ? '请等待当前任务结束再恢复版本' : undefined} onClick={() => void action(() => api.restore(workspace.project.id, version.id, workspace.project.revision))}><RefreshCw size={13}/>恢复此版本</button>}</div>)}</div>}
-            <div className="output-footer"><span><span className={`status-dot ${displayRun?.status === 'running' ? 'working' : ''}`}/>{currentVersion ? workspace.activeRun ? '新版本正在处理，当前仍展示上一成功版本' : '当前展示最近一次成功交付的应用' : '等待可交付版本'}</span><span>React · TypeScript · Vite</span></div>
+            <div className="behavior-boundary"><ShieldCheck size={12}/>{verificationBoundary}</div><div className="output-footer"><span><span className={`status-dot ${displayRun?.status === 'running' ? 'working' : ''}`}/>{currentVersion ? workspace.activeRun ? '新版本正在处理，当前仍展示上一成功版本' : '当前展示最近一次成功交付的应用' : '等待可交付版本'}</span><span>React · TypeScript · Vite</span></div>
           </section>
         </>}
       </div>}
@@ -285,24 +377,15 @@ export function App() {
   </div>;
 }
 
-function Composer({ value, setValue, mode, setMode, busy, onSubmit, placeholder, compact = false }: {
+function Composer({ value, setValue, mode, setMode, messageMode, setMessageMode, busy, onSubmit, placeholder, compact = false }: {
   value: string; setValue: (value: string) => void; mode: 'build' | 'plan'; setMode: (value: 'build' | 'plan') => void;
+  messageMode: z.infer<typeof CoordinationMode>; setMessageMode: (value: z.infer<typeof CoordinationMode>) => void;
   busy: boolean; onSubmit: () => void; placeholder: string; compact?: boolean;
 }) {
   return <form className={`composer ${compact ? 'compact' : ''}`} onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
-    <textarea aria-label={compact ? '修改需求' : '应用需求'} maxLength={20000} value={value} onChange={(event) => setValue(event.target.value)} placeholder={placeholder} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onSubmit(); } }}/>
-    <div className="composer-bottom"><span className="composer-caption"><Sparkles size={14}/>{compact ? '与你的 Agent 继续创作' : '从一句话开始，剩下的交给 Agent'}</span><div><label className="mode-select"><span>{mode === 'build' ? <WandSparkles size={14}/> : <Layers3 size={14}/>}</span><select aria-label="构建模式" value={mode} onChange={(event) => setMode(event.target.value as 'build' | 'plan')}><option value="build">直接构建</option><option value="plan">先做计划</option></select><ChevronDown size={12}/></label><button className="send-button" type="submit" disabled={busy || !value.trim()} aria-label={compact ? '提交修改' : '开始构建'}>{busy ? <LoaderCircle className="spin" size={17}/> : <ArrowUp size={20}/>}</button></div></div>
+    <textarea aria-label={compact ? '项目消息' : '应用需求'} maxLength={12000} value={value} onChange={(event) => setValue(event.target.value)} placeholder={placeholder} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onSubmit(); } }}/>
+    <div className="composer-bottom"><span className="composer-caption"><Sparkles size={14}/>{compact ? '与你的 Agent 继续创作' : '从一句话开始，剩下的交给 Agent'}</span><div><label className="mode-select intent-select"><select aria-label="消息模式" value={messageMode} onChange={event => setMessageMode(event.target.value as z.infer<typeof CoordinationMode>)}><option value="auto">自动识别</option><option value="ask">只问项目</option><option value="build">修改应用</option></select><ChevronDown size={12}/></label><label className="mode-select"><span>{mode === 'build' ? <WandSparkles size={14}/> : <Layers3 size={14}/>}</span><select aria-label="构建策略" value={mode} onChange={(event) => setMode(event.target.value as 'build' | 'plan')}><option value="build">直接构建</option><option value="plan">先做计划</option></select><ChevronDown size={12}/></label><button className="send-button" type="submit" disabled={busy || !value.trim()} aria-label="发送消息">{busy ? <LoaderCircle className="spin" size={17}/> : <ArrowUp size={20}/>}</button></div></div>
   </form>;
-}
-
-function AttentionCard({ run, busy, onAnswer }: { run: RunDto; busy: boolean; onAnswer: (answer: AnswerRequestDto) => void }) {
-  const [text, setText] = useState('');
-  const attention = run.pendingAttention!;
-  const submitted = run.pendingAnswer?.status === 'pending';
-  const answer = (value: AnswerRequestDto['answer']) => onAnswer({ attentionId: attention.id, expectedRevision: attention.revision, answer: value });
-  return <div className="attention-card"><span className="attention-label"><MessageSquare size={13}/>需要你处理</span><h3>{attention.title}</h3><p>{attention.description}</p>{attention.plan && <><ol>{attention.plan.tasks.map((task) => <li key={task}>{task}</li>)}</ol><div className="acceptance-items"><strong>交付时将检查</strong>{attention.plan.acceptance.map((item) => <span key={item.id}><Check size={12}/>{item.description}</span>)}</div></>}
-    {submitted ? <div className="answer-pending"><LoaderCircle className="spin" size={14}/>回答已提交，等待恢复执行</div> : <>{attention.kind === 'plan_confirmation' && <button className="primary-button" disabled={busy} onClick={() => answer({ kind: 'approve_plan' })}>确认计划，开始构建<ArrowRight size={15}/></button>}{attention.options.map((option) => <button className="secondary-button" key={option.id} disabled={busy} onClick={() => answer({ kind: 'select', optionId: option.id })}>{option.label}</button>)}{attention.allowText && <form onSubmit={(event) => { event.preventDefault(); answer({ kind: 'text', text }); }}><textarea aria-label="回答问题" placeholder="补充你的想法…" value={text} onChange={(event) => setText(event.target.value)}/><button className="primary-button" disabled={busy || !text.trim()}>提交回答<ArrowRight size={14}/></button></form>}</>}
-  </div>;
 }
 
 function ProjectIllustration({ kind }: { kind: number }) {

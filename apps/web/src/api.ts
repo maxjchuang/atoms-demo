@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   ApiError, Session, Project, ProjectList, WorkspaceSnapshot, RunMutationResponse,
-  ProjectEventPage, VersionList, FileList, RestoreVersionResponse,
+  ProjectEventPage, VersionList, FileList, RestoreVersionResponse, Run,
   type AnswerRequestDto,
 } from '@atoms/contracts';
 
@@ -52,6 +52,7 @@ export const api = {
   createProject: (title: string, key?: string) => post('/projects', { title }, Project, key),
   workspace: (id: string) => request(`/projects/${id}/workspace`, WorkspaceSnapshot),
   events: (id: string, after: number) => request(`/projects/${id}/events?after=${after}&limit=100`, ProjectEventPage),
+  run: (id: string) => request(`/runs/${id}`, Run),
   createRun: (id: string, prompt: string, mode: 'build' | 'plan', key?: string) => post(`/projects/${id}/runs`, { prompt, mode }, RunMutationResponse, key),
   answer: (id: string, answer: AnswerRequestDto, key?: string) => post(`/runs/${id}/answers`, answer, RunMutationResponse, key),
   cancel: (id: string, key?: string) => post(`/runs/${id}/cancel`, {}, RunMutationResponse, key),

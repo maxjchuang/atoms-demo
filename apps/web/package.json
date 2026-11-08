@@ -22,8 +22,8 @@
   "devDependencies": {
     "@playwright/test": "1.51.1",
     "@types/node": "22.19.0",
-    "@types/react": "19.1.0",
-    "@types/react-dom": "19.1.1",
+    "@types/react": "19.1.13",
+    "@types/react-dom": "19.1.9",
     "@vitejs/plugin-react": "4.5.0",
     "msw": "2.7.3",
     "tsx": "4.20.6",

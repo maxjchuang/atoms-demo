@@ -4,23 +4,27 @@ import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { join, resolve, extname } from 'node:path';
 import { zipSync } from 'fflate';
 import {
-  PROTOCOL_VERSION, AgentEvent, AgentEventPage, ArtifactManifest, ExecutionSnapshot,
+  PROTOCOL_VERSION, Budget, AgentEvent, AgentEventPage, ArtifactManifest, ExecutionSnapshot,
   CreateProjectRequest, CreateRunRequest, RedeemCodeRequest, AnswerRequest,
   RestoreVersionRequest, Run, WorkspaceSnapshot, RelativePath,
   type AgentEventDto, type ProjectEventDto, type RunDto, type StartExecutionDto, type VersionDto,
 } from '@atoms/contracts';
 import { Store, type Code, type IdempotentResult, type RunRecord, type SessionRecord, type VersionRecord } from './store.js';
+import {registerDelivery} from './delivery.js';
+import type {ToolchainDescriptor} from '@atoms/contracts/delivery';
 import { registerCoordination } from './coordination.js';
 
 export interface ApiOptions {
   dataDir: string; agentUrl: string; serviceToken: string; previewSecret: string; previewOrigin: string;
   allowedOrigins?: string[]; secureCookies?: boolean; demoCode?: string; pollMs?: number; autoSchedule?: boolean;
+  deliveryBudget?:Partial<ReturnType<typeof Budget.parse>>;legacyFixtureMode?:boolean; deliveryToolchainId?:string;deliveryToolchain?:ReturnType<typeof ToolchainDescriptor.parse>;deliveryPlanningMode?:'host_profile'|'model_proposed';deliveryProfileHint?:{id:string;hash:string};
   coordinationMessageLimit?:number;coordinationMessagesPerMinute?:number;
 }
 type Result = { status: number; body?: unknown; cookie?: string };
 const now = () => new Date().toISOString();
 const id = (prefix: string) => `${prefix}_${randomBytes(10).toString('hex')}`;
 export const hash = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
+const transportError=(error:unknown)=>{const status=(error as {status?:number}).status;return (error as {transport?:boolean}).transport===true||error instanceof Error&&['AbortError','TimeoutError'].includes(error.name)||status===404||status===408||status===429||!!status&&status>=500;};
 const terminal = (status: string) => ['succeeded', 'failed', 'cancelled', 'interrupted'].includes(status);
 export const canonical = (value: unknown): string => {
   if (Array.isArray(value)) return `[${Array.from(value,item=>canonical(item)).join(',')}]`;
@@ -42,12 +46,14 @@ const safeSecretEqual = (a: string, b: string) => {
 };
 
 export async function createApi(options: ApiOptions) {
+  const deliveryBudget=Budget.parse({maxWallTimeMs:900000,maxWaitingInputMs:86400000,maxRepairRounds:2,maxModelSteps:8,maxInputTokens:65536,maxOutputTokens:24576,maxArtifactBytes:20971520,...options.deliveryBudget});
   const dataDir = resolve(options.dataDir);
   await mkdir(join(dataDir, 'versions'), { recursive: true });
   const store = new Store(join(dataDir, 'api.sqlite'));
   const app = Fastify({ logger: false, bodyLimit: 65536 });
   const preview = Fastify({ logger: false, routerOptions: { maxParamLength: 4096 } });
   let busy = false; let closed = false;
+  let delivery:ReturnType<typeof registerDelivery>;
   let coordination:ReturnType<typeof registerCoordination>|undefined;
   const loginAttempts = new Map<string, { since: number; count: number }>();
   const authHeaders = { authorization: `Bearer ${options.serviceToken}`, 'X-Atoms-Protocol-Version': PROTOCOL_VERSION, 'content-type': 'application/json' };
@@ -134,7 +140,11 @@ export async function createApi(options: ApiOptions) {
     return `${options.previewOrigin.replace(/\/$/, '')}/p/${payload}.${signature}/index.html`;
   };
   const freshVersion = (record: VersionRecord) => {
-    if (Date.parse(record.dto.previewExpiresAt) - Date.now() < 60000) {
+    const expiresAtMs = Date.parse(record.dto.previewExpiresAt);
+    // The cached URL must still match this signing key, exact version/expiry and trusted origin.
+    // A valid current URL is reused so ordinary polling does not reload the preview.
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs - Date.now() < 60000
+      || record.dto.previewUrl !== signedPreview(record.dto.id, record.dto.previewExpiresAt)) {
       // URL cache metadata only; no business revision/event changes.
       const expiresAt = new Date(Math.ceil((Date.now() + 7200000) / 60000) * 60000).toISOString();
       record.dto = { ...record.dto, previewExpiresAt: expiresAt, previewUrl: signedPreview(record.dto.id, expiresAt) };
@@ -255,7 +265,7 @@ export async function createApi(options: ApiOptions) {
       const run = Run.parse({ id: id('run'), projectId, revision: 1, status: 'queued', phase: null,
         mode, baseVersionId: null, resultVersionId: null, executionId: null, pendingAttention: null,
         pendingAnswer: null, checks: [], createdAt: now(), updatedAt: now(), error: null });
-      const record:RunRecord={dto:run,prompt,codeId,started:false,sourceSeq:0,...metadata};store.state.runs.push(record);
+      const record:RunRecord={dto:run,prompt,codeId,started:false,sourceSeq:0,...(options.legacyFixtureMode?{}:{delivery:{stage:'preparing' as const,preparationId:id('preparation'),planningSeq:0}}),...metadata};store.state.runs.push(record);
       const message=metadata?store.state.messages.find(m=>m.id===metadata.sourceMessageId&&m.projectId===projectId&&m.role==='user'):
         {id:id('message'),projectId,runId:run.id,role:'user' as const,status:'complete' as const,content:prompt,createdAt:now()};
       if(!message)fail(409,'CONFLICT','来源消息不可用');
@@ -301,10 +311,11 @@ export async function createApi(options: ApiOptions) {
     const rows = store.state.versions.filter((entry) => entry.dto.projectId === project.dto.id).map(freshVersion).reverse();
     return page(rows, q.cursor, integer(q.limit, 20, 100));
   });
-  app.post('/api/v1/projects/:projectId/restore', (request, reply) => {
+  app.post('/api/v1/projects/:projectId/restore', async (request, reply) => {
     const session = authorize(request); const project = ownProject(param(request, 'projectId'), session); const body = RestoreVersionRequest.parse(request.body);
     const original = ownVersion(body.versionId, session);
     if (original.dto.projectId !== project.dto.id) fail(404, 'NOT_FOUND', 'Version not found');
+    await delivery.restoreCheck(original);
     return mutation(request, reply, session.id, () => {
       if (project.dto.revision !== body.expectedProjectRevision || project.dto.activeRunId) fail(409, 'CONFLICT', '项目状态已变化或任务仍在执行');
       const versionId = id('version'); const expiresAt = new Date(Date.now() + 7200000).toISOString();
@@ -342,7 +353,9 @@ export async function createApi(options: ApiOptions) {
     return reply.type(mime).send(await readStored(version, evidence!.path));
   });
   app.get('/api/v1/versions/:versionId/source.zip', async (request, reply) => {
-    const version = ownVersion(param(request, 'versionId'), authorize(request)); const files: Record<string, Uint8Array> = {};
+    const version = ownVersion(param(request, 'versionId'), authorize(request));
+    const archive=await delivery.archive(version);if(archive)return reply.header('Content-Disposition',`attachment; filename="${version.dto.id}.zip"`).type('application/zip').send(archive);
+    const files: Record<string, Uint8Array> = {};
     for (const file of version.manifest.files.filter((entry) => entry.path.startsWith('source/'))) files[file.path.slice(7)] = await readStored(version, file.path);
     return reply.header('Content-Disposition', `attachment; filename="${version.dto.id}.zip"`).type('application/zip').send(Buffer.from(zipSync(files)));
   });
@@ -376,8 +389,8 @@ export async function createApi(options: ApiOptions) {
 
   const runtime = async (path: string, method = 'GET', body?: unknown) => {
     const response = await fetch(`${options.agentUrl.replace(/\/$/, '')}${path}`, { method, headers: authHeaders,
-      body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`Runtime HTTP ${response.status}`);
+      body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(5000) }).catch(error=>{throw Object.assign(error,{transport:true});});
+    if (!response.ok) throw Object.assign(new Error(`Runtime HTTP ${response.status}`),{status:response.status});
     return response;
   };
   const finish = (record: RunRecord, status: 'failed'|'cancelled'|'interrupted', code?: string, message?: string) => {
@@ -415,6 +428,8 @@ export async function createApi(options: ApiOptions) {
         if (bytes.byteLength !== file.bytes || hash(bytes) !== file.sha256) throw new Error('Artifact checksum mismatch');
         const target = join(staging, file.path); await mkdir(join(target, '..'), { recursive: true }); await writeFile(target, bytes, { flag: 'wx' });
       }
+      const report=record.delivery?await delivery.verifyCandidate(record,manifest,staging):undefined;
+      const summary=report?.quality==='partial'?`部分交付：${report.gaps.map(g=>g.description).join('；').slice(0,1000)}。${manifest.summary}`:manifest.summary;
       await rename(staging, directory);
       store.transaction(() => {
         const current = store.state.runs.find((entry) => entry.dto.id === record.dto.id)!;
@@ -423,9 +438,9 @@ export async function createApi(options: ApiOptions) {
         if (terminal(current.dto.status) || current.dto.executionId !== executionId || project.dto.activeRunId !== current.dto.id || project.dto.currentVersionId !== current.dto.baseVersionId) throw new Error('Publication fence mismatch');
         const expiresAt = new Date(Date.now() + 7200000).toISOString();
         const version: VersionDto = { id: versionId, projectId: project.dto.id, parentVersionId: project.dto.currentVersionId,
-          restoredFromVersionId: null, runId: current.dto.id, summary: manifest.summary, checks: manifest.checks,
+          restoredFromVersionId: null, runId: current.dto.id, summary, checks: manifest.checks,
           previewUrl: signedPreview(versionId, expiresAt), previewExpiresAt: expiresAt, createdAt: now() };
-        store.state.versions.push({ dto: version, artifactId, manifest, manifestRaw, directory });
+        store.state.versions.push({ dto: version, artifactId, manifest, manifestRaw, directory, ...(record.delivery?{deliveryOriginRunId:record.dto.id}:{}) });
         project.dto = { ...project.dto, revision: project.dto.revision + 1, currentVersionId: versionId, activeRunId: null, updatedAt: now() };
         emit(project.dto.id, current.dto.id, { type: 'version.published', payload: { project: project.dto, version } });
         updateRun(current, { status: 'succeeded', phase: 'publishing', resultVersionId: versionId, checks: manifest.checks, pendingAttention: null, pendingAnswer: null });
@@ -475,7 +490,7 @@ export async function createApi(options: ApiOptions) {
     });
     if (artifactToPublish) {
       try { await publish(record, artifactToPublish); }
-      catch { store.transaction(() => { const current = store.state.runs.find((entry) => entry.dto.id === record.dto.id)!; if (!terminal(current.dto.status)) finish(current, current.dto.status === 'cancelling' ? 'cancelled' : 'failed', 'ARTIFACT_INVALID', '候选产物未通过完整性校验'); }); }
+      catch(error) {if(record.delivery){if(transportError(error))reportRuntimeConnection(record.dto.id,false);else delivery.invalid(record,error);}else store.transaction(() => { const current = store.state.runs.find((entry) => entry.dto.id === record.dto.id)!; if (!terminal(current.dto.status)) finish(current, current.dto.status === 'cancelling' ? 'cancelled' : 'failed', 'ARTIFACT_INVALID', '候选产物未通过完整性校验'); }); }
     }
   };
   const tick = async () => {
@@ -503,14 +518,17 @@ export async function createApi(options: ApiOptions) {
             mandate: { scope: 'react_frontend', allowDependencyChanges: false, allowPublicDeployment: false, allowExternalMessaging: false,
               projectMemory: [coordination?.projectMemory(project.dto.id),base?.dto.summary].filter(Boolean).join('\n').slice(0,20000) },
             budget: { maxWallTimeMs: 600000, maxWaitingInputMs: 86400000, maxRepairRounds: 2, maxModelSteps: 30, maxInputTokens: 100000,
-              maxOutputTokens: 30000, maxArtifactBytes: 20971520 } };
+              maxOutputTokens: 30000, maxArtifactBytes: 20971520, ...(record.delivery?deliveryBudget:{}) } };
+          Budget.parse(record.request.budget);
           project.dto.activeRunId = record.dto.id;
           updateRun(record, { executionId, baseVersionId: project.dto.currentVersionId });
         });
       }
+      for(const record of store.state.runs.filter(r=>r.delivery?.prepare&&terminal(r.dto.status)&&!r.delivery.report?.final&&!r.delivery.invalid&&!r.delivery.noReportExpected)){try{await delivery.loadReport(record);}catch{/* Final failure reports can arrive after the terminal source event; read-only retry, never replay work. */}}
       for (const reference of store.state.runs.filter((entry) => entry.dto.executionId && !terminal(entry.dto.status))) {
         let record = store.state.runs.find((entry) => entry.dto.id === reference.dto.id)!;
         const path = `/internal/v1/executions/${record.dto.executionId}`;
+        if(record.delivery){try{await delivery.tick(record,ingest,publish);reportRuntimeConnection(record.dto.id,true);}catch(error){if(transportError(error))reportRuntimeConnection(record.dto.id,false);else delivery.invalid(record,error);}continue;}
         try {
           // PUT is an idempotent outbox delivery, including after response loss or API restart.
           await runtime(path, 'PUT', record.request);
@@ -542,7 +560,10 @@ export async function createApi(options: ApiOptions) {
     store.state.codes.push(record); return record.id;
   });
   if (options.demoCode) seedCode(options.demoCode);
+  delivery=registerDelivery({app,store,dataDir,agentUrl:options.agentUrl,serviceToken:options.serviceToken,toolchainId:options.deliveryToolchainId??'toolchain_react_v1',toolchain:options.deliveryToolchain,planningMode:options.deliveryPlanningMode,profileHint:options.deliveryProfileHint,id,now,hash,fail,authorize,ownRun,ownProject,ownVersion,updateRun,finish,
+    message(record,content,time=now()){const message={id:id('message'),projectId:record.dto.projectId,runId:record.dto.id,role:'assistant' as const,status:'complete' as const,content,createdAt:time};store.state.messages.push(message);emit(message.projectId,message.runId,{type:'message.updated',payload:message},time);}});
   coordination=registerCoordination({app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,id,now,hash,canonical,fail,
+    delivery:options.legacyFixtureMode?undefined:delivery,
     messageLimit:options.coordinationMessageLimit,messagesPerMinute:options.coordinationMessagesPerMinute,
     authorize,ownProject,ownRun,mutation,sessionDto,workspace:workspaceFor,createRun:createRunCore,cancelRun:cancelRunCore,
     versionInfo:freshVersion,

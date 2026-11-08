@@ -16,7 +16,7 @@ async function fixture(options:{limit?:number;rate?:number}={}){
   const directory=await mkdtemp(join(tmpdir(),'atoms-coordination-test-'));
   const runtime=createFakeRuntime('coordination-test-token');const coordinator=addFakeCoordinator(runtime.app);
   const address=await runtime.app.listen({host:'127.0.0.1',port:0});
-  const config={dataDir:directory,agentUrl:address,serviceToken:'coordination-test-token',previewSecret:'coordination-preview-secret',previewOrigin:'http://127.0.0.1:3002',
+  const config={legacyFixtureMode:true,dataDir:directory,agentUrl:address,serviceToken:'coordination-test-token',previewSecret:'coordination-preview-secret',previewOrigin:'http://127.0.0.1:3002',
     allowedOrigins:['http://localhost:5183'],autoSchedule:false,coordinationMessageLimit:options.limit??50,coordinationMessagesPerMinute:options.rate??200};
   let service=await createApi(config);service.seedCode('coordination-demo-2026',{projectLimit:5,runLimit:10});let cookie='';
   const request=async(method:'GET'|'POST'|'DELETE',route:string,body?:unknown,key=randomUUID())=>{

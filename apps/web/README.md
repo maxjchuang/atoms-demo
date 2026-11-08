@@ -117,3 +117,62 @@ ATOMS_FAKE_SERVICES=1 ATOMS_WEB_URL=http://localhost:<独立工作台端口> \
 ```
 
 该脚本不属于默认 Mock E2E；环境未就绪时不运行，不把 MSW 结果当作三服务证据，也不承诺服务器配置未知时无付费调用。运行结果另行记录，截图写 `review-artifacts/m1-services/`。
+
+## M2 可信交付工作台
+
+新增独立 `@atoms/contracts/delivery` 消费，不扩展旧 execution/conversation DTO。生产不加载 Mock，不触发模型调用。
+
+- 默认预览与版本列表显示 API 权威质量、发布状态和逐项缺口。`partial` 自动发布，required 仍保留；没有接收部分交付按钮。报告 final/基础检查通过都不等于已发布。
+- 独立报告可按当前/已保留任务或版本选择；失败任务无新 Version 也可显示失败原因与尝试，预览仍由 v1 当前成功版本指针决定。legacy 由 API 明确返回；HTTP/协议错误会保留真实错误。
+- 报告展示原始目标、细化约定、每项 required/coverage/result、失败→修复尝试、来源与冻结审计。受控回归明确标注注入；没有来源字段时显示未记录，不猜测模型自然错误。
+- diff 以不可变版本为对象，默认父版/首版空基线；安全文本 hunk、增删改、二进制摘要、截断与固定比较分页。失败候选不虚构公开版本 diff。
+- 证据先取 typed descriptor，核对 report revision/source/attempt/spec/plan 与文件 sha256/bytes/MIME，再显示转义文本/PNG/JPEG或附件下载；损坏、过期、缺失与错版均显示错误。清理失效对象 URL，不执行 HTML/SVG/trace。
+- 源 ZIP 先读取 export view，用明确 subject 的固定路由下载并核对实际 archive SHA-256/bytes；只说明实际报告中的 Node/pnpm/OS/arch 与独立 lockfile，不宣称跨平台均通过。历史源码下载显式未验证。下载不建 Run。
+- 恢复版区分当前 subject、直接恢复源与最初实际验证源，明确复用原约定证据且未重跑。
+
+独立 Mock：
+
+```bash
+pnpm --filter @atoms/web exec playwright test e2e/delivery.spec.ts
+```
+
+Mock 通过真实 fetch/MSW 边界消费共享 fixtures，`/__mock/delivery/seed` 仅用于指定合成情景；不能证明真实模型、浏览器解释器或干净构建已执行。模拟 ZIP 是明确的空 ZIP，只验证前端授权与指纹流程，不当作可运行源码。测试会等待 Mock 启动完成，未声明 API fail-closed，不落到 live 服务。
+
+实际 Fake 三服务浏览器脚本已准备，默认不会运行。须主管先提供独立工作台/API/Agent、确认 Fake Router/Worker 和 M2 execution flavor；拒绝 localhost:5173、拒绝 MSW。必须显式指定已有且已结束执行的项目，只读验证报告/日志/PNG/精确 ZIP/diff/预览/刷新；缺少项目直接拒绝，工具不再提供新建生成分支。
+
+```bash
+ATOMS_FAKE_SERVICES=1 ATOMS_WEB_URL=http://localhost:<隔离工作台端口> \
+  ATOMS_DELIVERY_PROJECT=<已有M2项目ID> \
+  pnpm --filter @atoms/web exec node --import tsx scripts/check-delivery-services.mjs
+```
+
+脚本/截图范围会单独记录在 `review-artifacts/m2-services/result.json`。仅 HTTP 健康不算 UI 验收；当前 Mock 证据不抵充实际服务或真实 DSH G4。M3 公网与 OS 隔离仍独立。
+
+M2 G1 独立验证记录（2026-11-08）：共享 contracts check 与 80 项契约测试、Web 50 项单元测试、生产 build 通过。完整浏览器回归 37 passed / 1 条件 skip，随后 M2 最终 25 项定向聚合全部通过（含 required manual / unsupported / 支持但 not_run 三类合法 partial）；最后对象归属文案调整另定向复验 complete/partial/blocked/截图证据，不重复声称全量重跑。所有浏览器写入均在独立 5183 Mock，没有访问 live 5173、没有调用模型。正文 14px / 元信息 12px，两尺寸报告与长行 diff 无页面横向溢出。
+
+稳定证据：`review-artifacts/m2/partial-preview-{1440,1366}-mock.png`、`blocked-preview-{1440,1366}-mock.png` 为默认预览，明确当前预览版本及本次任务归属；另有 `complete-mock.png`、`partial-mock.png`、`repair-mock.png`、`diff-mock.png`。全部显式 Mock，截图不随代码提交；G1 当时尚未运行实际三服务脚本，不能将这批 Mock 记录视为 G2/G3/G4 完成；后续只读实际服务结果另列如下。
+
+M2 实际 Fake HTTP 浏览器只读验收（2026-11-08）：在主管 integration 栈 `localhost:5185` 复用 `project_c1e25b6c308aa0570651`，已提交脚本经 `node --import tsx` 运行退出 0。验证已发布 complete 报告、逐项覆盖/尝试、实际日志、精确源码 ZIP 指纹、首版源码 diff 和刷新。直接 `node` 启动因 contracts 内部 `.js` → TS 解析报错，发生在浏览器/HTTP 启动前；应使用上述既有 tsx loader，不是 UI 或服务失败。
+
+另一次补充只读浏览器检查退出 0：真实预览 React root 已加载且存在可见交互控件；PNG 证据通过工作台 descriptor/指纹/MIME 校验后以 blob 展示，实际解码 1280×876。补充检查拦截除登录外全部 API 写请求，无此类请求；前后 runsUsed=2、runsReserved=0、协调 used=0/reserved=0、conversationRevision=2、当前版本和完整版本列表均不变。两次检查均未提交消息或创建 Run，没有 MSW；Fake 模型与真实构建/DSL/clean 服务不等于真实 DSH 模型证据。
+
+实际截图与结果保存在 integration 的 `apps/web/review-artifacts/m2-services/`：`preview-quality.png`、`report.png`、`diff.png`、`preview-loaded.png`、`png-evidence.png`、`result.json`、`readonly-supplement.json`。本次不验证历史失败 Run 的 UI 可选入口、回滚、第三轮修改、OS 沙箱或公网部署；不把这些只读证据扩称完整 G3/G4。
+
+## 已完成真实任务的只读浏览器审计
+
+同一个脚本支持互斥的 `ATOMS_FAKE_SERVICES=1` 或 `ATOMS_READONLY_REAL_SERVICES=1`。两种模式都必须指定已有项目与隔离 URL，拒绝 live 5173，不启动任何服务/模型。真实模式不要求 Fake banner，但要求最终尝试显式 `sourceProvenance=model_output/dsh`；缺省、Fake、synthetic 或仅受控注入来源都不能冒认真实模型。API 已发布 complete 或 partial 均可检查，partial 具体 gap 保持可见。
+
+```bash
+# 仅在主管已结束模型任务、启动隔离真实服务之后手工调用
+ATOMS_READONLY_REAL_SERVICES=1 ATOMS_WEB_URL=http://localhost:<隔离端口> \
+  ATOMS_DELIVERY_PROJECT=<已有真实M2项目ID> ATOMS_DEMO_CODE=<体验码> \
+  pnpm --filter @atoms/web exec node --import tsx scripts/check-delivery-services.mjs
+```
+
+浏览器 context route 在发出请求前只允许 GET/HEAD 与同工作台 origin 的精确 `POST /api/v1/sessions` 登录（不接受额外 query/尾斜杠）；其他写请求先 abort，任何写尝试都使审计失败。禁用 Service Worker。前后比较构建/问答额度、消息 ID 与 revision、任务与版本指针/列表，必须不变。结果记录 `mode=fake|readonly_real`、实际来源、具体 gap、0 新消息/Run 和写拦截记录；Fake 输出仍在 `review-artifacts/m2-services/`，真实只读输出单独在 `review-artifacts/m2-readonly-real-services/`。exit 0 表示完整只读审计通过，exit 1 表示未通过；不会静默降为 Mock/Fake。
+
+工具更新验证：54 项 Web 单元测试/check 通过（含双模式写禁止、参数互斥/live 拒绝、DSH 来源负例）；现有 5185 Fake 项目只读完整回归退出 0、计数不变。双模式浏览器 guard 对不存在任务的取消探针均在服务端前 abort（服务端写入 0），没有真正取消任务或触发模型。真实 DSH 的只读成功验收仍须主管后续提供已有真实项目，不用这些 Fake/合成测试冒充。
+
+canonical Seed / derived leaf 呈现补充（2026-11-09）：仅通过共享 `hasDerivedModelCriteria` 与 Seed 明确 ID 分组；默认具体 leaf 缺口在前，原始总体目标另列汇总，保留 required、manual/unsupported/not_run 和完整原始审计。父汇总不作为额外已测行为，实际 case 仍逐条显示一次。旧 host/seed-only 报告、公共 client、质量计算与异步绑定未改。
+
+定向验证：projection 与现 delivery 单元 10/10；mixed/allauto 两尺寸加既有 complete/partial/切版本浏览器 7/7；最后默认说明行调整后 projection 两尺寸 4/4；check/build 通过，未重跑无关全量、未操作实际服务或调用模型。截图：`review-artifacts/m2/projection-{mixed,auto}-{preview,report}-{1440,1366}-mock.png`，mixed 的 `audit` 图另展示展开后的原始父 reason/ID。全部为合成 Mock，不作真实模型或行为执行证明。

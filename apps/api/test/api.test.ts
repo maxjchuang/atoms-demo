@@ -12,7 +12,7 @@ async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'atoms-api-test-'));
   const fake = createFakeRuntime('test-service-token');
   const address = await fake.app.listen({ host: '127.0.0.1', port: 0 });
-  let service = await createApi({ dataDir: directory, agentUrl: address, serviceToken: 'test-service-token', previewSecret: 'test-preview-signing-secret',
+  let service = await createApi({ legacyFixtureMode: true, dataDir: directory, agentUrl: address, serviceToken: 'test-service-token', previewSecret: 'test-preview-signing-secret',
     previewOrigin: 'http://127.0.0.1:3002', demoCode: 'test-demo-2026', autoSchedule: false, allowedOrigins: ['http://localhost:5173'] });
   let cookie = '';
   const request = async (method: 'GET'|'POST'|'DELETE', path: string, body?: unknown, key = randomUUID()) => {
@@ -27,7 +27,7 @@ async function fixture() {
   };
   const project = async () => (await request('POST', '/projects', { title: '便签墙' })).data;
   return { fake, request, login, project, get service() { return service; },
-    async restart() { await service.close(); service = await createApi({ dataDir: directory, agentUrl: address, serviceToken: 'test-service-token', previewSecret: 'test-preview-signing-secret', previewOrigin: 'http://127.0.0.1:3002', autoSchedule: false, allowedOrigins: ['http://localhost:5173'] }); },
+    async restart() { await service.close(); service = await createApi({ legacyFixtureMode: true, dataDir: directory, agentUrl: address, serviceToken: 'test-service-token', previewSecret: 'test-preview-signing-secret', previewOrigin: 'http://127.0.0.1:3002', autoSchedule: false, allowedOrigins: ['http://localhost:5173'] }); },
     async close() { await service.close(); await fake.app.close(); await rm(directory, { recursive: true, force: true }); } };
 }
 

@@ -4,11 +4,11 @@
 
 完整运行要求 **Node.js 24.9.0+、pnpm 10.33.0**；目前在 macOS arm64 / Node.js 26.5.0 验证。Node 22 只能覆盖部分基础能力，不满足当前固定 DSH 版本要求。
 
-最新增量为 M2 隔离实现：主管 contracts 86、API 55、Web 56；Agent 作者报告 71，主管此前完整 61 与新 18 focused 分开记录；编排工具 22 另列。完整 Fake `Vd1rPn`、第四真实空间 `ryZwrG` 的生成/修改/恢复后 reviewed-exact 修改、真实只读 UI 与严格重启已通过。三次真实质量均 partial，均 attempt_0/repairRound0；另一次独立真实受控故障修复与同计划/clean ZIP 复验通过（1 模型步骤、9,931 有效输入、4,842 输出），不冒充自然生成失败。原 auto/exact 严格断言失败保留，不能称第三次 auto 准入成功。M2 App 未升级 live，主仓当前仅共享 `a1c7c23`；M3 未开始。
+最新增量为 M2 隔离实现：主管 contracts 86、API 55、Web 56；Agent 作者报告 71，主管此前完整 61 与新 18 focused 分开记录；编排工具 22 另列。完整 Fake `Vd1rPn`、第四真实空间 `ryZwrG` 的生成/修改/恢复后 reviewed-exact 修改、真实只读 UI 与严格重启已通过。三次真实质量均 partial，均 attempt_0/repairRound0；另一次独立真实受控故障修复与同计划/clean ZIP 复验通过（1 模型步骤、9,931 有效输入、4,842 输出），不冒充自然生成失败。原 auto/exact 严格断言失败保留，不能称第三次 auto 准入成功。M2 App 已合入 main 并安全升级本机 live；M3 三线设计启动，尚未完成 G5。
 
 M1 应用及本机 live 安全升级已完成，历史 148 项（42 / 30 / 34 / 42）、六轮真实 Router + Fake Worker、分段浏览器与缓存计量修正记录保留于 [M1 状态](m1-coordination-status.md)。此前 79 项与旧 G3/UI 同样保留，不与 M2 新计数混算。
 
-原设计复核范围见 [能力路线图](capability-roadmap.md) 和 [v0.2 消息协调协议](protocol-v0.2.md)。原 v1 strict 契约保持兼容。下文 M0 两次真实代码历史仍仅为当时的 G4 子集；新增 M2 才补充恢复后真实修改证据，不回写旧 manifest 或以 M1 Fake Worker 冒充真实代码。M2 已实现并隔离验收，应用合并/live 升级另行安排；M3/G5 尚未实施。
+原设计复核范围见 [能力路线图](capability-roadmap.md) 和 [v0.2 消息协调协议](protocol-v0.2.md)。原 v1 strict 契约保持兼容。下文 M0 两次真实代码历史仍仅为当时的 G4 子集；新增 M2 才补充恢复后真实修改证据，不回写旧 manifest 或以 M1 Fake Worker 冒充真实代码。M2 已实现并隔离验收，应用已合并并安全升级 live；M3/G5 尚未实施。
 
 ### 最新 M2 证据与限制
 
@@ -20,7 +20,7 @@ M1 应用及本机 live 安全升级已完成，历史 148 项（42 / 30 / 34 / 
 | 授权与次数 | 第三 Seed=explicit_proposal_acceptance，base/parent=恢复 V3；总3 Code/4 Version/2 Router。原 auto Turn 仍 proposed；最后 ask/consult 只读，不增第四 Run |
 | 原证据与恢复 | 原2 Run/3 Version（除 URL 缓存）、110证据文件及原失败日志不变；真实只读 UI 与 API/Runtime sealed 严格重启通过，证据详见 M2 状态/最终 ledger |
 | 历史失败 | 前三真实 Preparation 失败 `PMMN5g/epad1z/HaEXjt`、第四次原 auto 断言失败和首次 resume 备份拒绝均保留，未复活/抹账 |
-| 部署 | M2 App 未升级用户 live；主仓当前仅共享 a1c7c23。M3 Docker/系统隔离/双隧道/外部分享未开始 |
+| 部署 | M2 App 已安全升级 live，原数据/额度深度核对一致。M3 设计启动，Docker/系统隔离/双隧道/外部分享待实现验收 |
 
 ### 已有 M1 证据与 live 边界（历史）
 
@@ -143,6 +143,6 @@ pnpm dev:demo
 - 独立预览主机上的不同项目仍共享浏览器 origin 存储，需要项目命名空间；没有严格多租户存储隔离。
 - 临时域名受进程、网络和电脑休眠影响，无持续可用性保证。
 - DSH 底座版本固定；扩展点和模型能力需以兼容性记录及真实测试为依据。
-- M1 live 已升级；M2 App仍未合并升级用户live，主仓当前仅共享a1c7c23；安全drain/停服/完整备份与升级需主管另行安排。有限Router和本次exact续跑不保证所有表达分类正确，不代表通用Super-agent或M3完成。
+- M1 live 已升级；M2 App已合并升级用户live，完成drain/停服/完整备份与原数据深度核验。有限Router和本次exact续跑不保证所有表达分类正确，不代表通用Super-agent或M3完成。
 
-各阶段检查、Fake、历史真实子集及新增 M2 reviewed-exact 真实链路分别保留来源。后续变更按影响范围重验；M2 App安全升级与M3/G5仍作为明确后续工作。
+各阶段检查、Fake、历史真实子集及新增 M2 reviewed-exact 真实链路分别保留来源。后续变更按影响范围重验；M3/G5仍作为明确后续工作。

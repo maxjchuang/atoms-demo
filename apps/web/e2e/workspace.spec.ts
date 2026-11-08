@@ -23,9 +23,9 @@ test('generation, refresh recovery, source, modification and rollback', async ({
     await page.reload();
     await page.getByRole('button', { name: '确认计划，开始构建' }).click();
   }
-  await expect(page.getByText('已交付', { exact: true })).toBeVisible({ timeout: real ? 240000 : 20000 });
+  await expect(page.locator('.run-card-top > strong').filter({ hasText: /^已交付$/ })).toBeVisible({ timeout: real ? 240000 : 20000 });
   await page.reload();
-  await expect(page.getByText('已交付', { exact: true })).toBeVisible();
+  await expect(page.locator('.run-card-top > strong').filter({ hasText: /^已交付$/ })).toBeVisible();
   await expect(page.locator('iframe[title="应用预览"]')).toHaveAttribute('src', /.+/);
   if (!real) {
     const preview = page.frameLocator('iframe[title="应用预览"]');
@@ -49,8 +49,8 @@ test('generation, refresh recovery, source, modification and rollback', async ({
   await page.getByLabel('构建模式').selectOption('build');
   await page.getByLabel('修改需求').fill('增加便签搜索功能，并调整标题颜色。');
   await page.getByRole('button', { name: '提交修改', exact: true }).click();
-  await expect(page.getByText('已交付', { exact: true })).toBeHidden();
-  await expect(page.getByText('已交付', { exact: true })).toBeVisible({ timeout: real ? 240000 : 20000 });
+  await expect(page.locator('.run-card-top > strong').filter({ hasText: /^已交付$/ })).toBeHidden();
+  await expect(page.locator('.run-card-top > strong').filter({ hasText: /^已交付$/ })).toBeVisible({ timeout: real ? 240000 : 20000 });
   await page.getByRole('button', { name: '版本', exact: true }).click();
   await expect(page.locator('.version-card')).toHaveCount(2);
   await page.getByRole('button', { name: '恢复此版本' }).click();
@@ -69,7 +69,7 @@ test('plan confirmation persists across refresh; cancel waits for acknowledgemen
   await expect(page.getByRole('button', { name: '确认计划，开始构建' })).toBeVisible();
   await page.getByRole('button', { name: '确认计划，开始构建' }).click();
   await page.getByRole('button', { name: '停止任务' }).click();
-  await expect(page.getByText('已取消', { exact: true })).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('.run-card-top > strong').filter({ hasText: /^已取消$/ })).toBeVisible({ timeout: 15000 });
 });
 
 test('failed iteration keeps the previous preview', async ({ page }) => {
@@ -77,10 +77,10 @@ test('failed iteration keeps the previous preview', async ({ page }) => {
   await enter(page);
   await page.getByLabel('应用需求').fill('创建便签墙。');
   await page.getByRole('button', { name: '开始构建', exact: true }).click();
-  await expect(page.getByText('已交付', { exact: true })).toBeVisible({ timeout: 20000 });
+  await expect(page.locator('.run-card-top > strong').filter({ hasText: /^已交付$/ })).toBeVisible({ timeout: 20000 });
   const previous = await page.locator('iframe').getAttribute('src');
   await page.getByLabel('修改需求').fill('模拟失败场景');
   await page.getByRole('button', { name: '提交修改', exact: true }).click();
-  await expect(page.getByText('未能完成', { exact: true })).toBeVisible({ timeout: 20000 });
+  await expect(page.locator('.run-card-top > strong').filter({ hasText: /^未能完成$/ })).toBeVisible({ timeout: 20000 });
   await expect(page.locator('iframe')).toHaveAttribute('src', previous!);
 });

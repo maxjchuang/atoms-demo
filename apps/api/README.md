@@ -49,6 +49,16 @@ Task creation, quota reservation and dispatch intent persist together. Runtime P
 
 API restart replays existing execution IDs without repeating model execution. Unreachable Runtime keeps its project lock; the API does not claim that unavailable execution has stopped.
 
+## Process feedback and replay
+
+Agent progress `message.completed`/`message.delta`, file changes, phases and check results are persisted individually as ordered project activities. Message content is materialized through complete `message.updated` upserts; distinct progress message IDs remain distinct messages. Replaying from `events?after=0` reconstructs historical activity without changing the latest workspace snapshot.
+
+`activity.recorded.occurredAt` and source-derived message events retain the Agent's source timestamp. Delayed replay after reconnection must not be presented as newly executed work. Project `seq` is the only ordering cursor; timestamps can be older than earlier-delivered events. `Run.updatedAt` is API state-projection time, not a model heartbeat or proof of new execution activity. Empty polling adds no progress events.
+
+If Runtime communication fails, the API records one sanitized assistant notice for that Run/outage cycle using the existing `message.updated` protocol. Repeated polls and API restarts do not flood notices. Once execution events have synchronized again, one recovery notice is recorded at current API time; it says only that the connection and synchronization recovered. These notices never mark a task stopped, release its project lock, or replace a valid preview. Fault details, service tokens, internal URLs and credentials are not included.
+
+This stage does not add protocol fields or expose raw model JSON/hidden reasoning. Exact global queue position, a new activity snapshot schema and conversational intent routing remain separate work.
+
 ## Security and current limits
 
 - Experience codes and session tokens are hashed. Idempotency records for login retain the issued Set-Cookie value to support exact retries; protect the local database and data directory.

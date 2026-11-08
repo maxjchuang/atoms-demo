@@ -200,6 +200,7 @@ export class AgentRuntime {
       home: path.join(this.options.dataDir, 'dsh', item.request.projectId), signal: controller.signal,
       remainingOutputTokens: () => item.request.budget.maxOutputTokens - (item.usage?.outputTokens || 0),
       report: (content) => this.emit(item, { type: 'message.completed', payload: { messageId: `message_${randomUUID().replaceAll('-', '')}`, content } }),
+      fileChanged: (change) => this.emit(item, { type: 'file.changed', payload: change }),
       meter: (usage) => {
         item.usage ??= { modelSteps: 0, inputTokens: 0, outputTokens: 0 };
         for (const key of ['modelSteps', 'inputTokens', 'outputTokens'] as const) item.usage[key] += usage[key] || 0;
@@ -215,8 +216,11 @@ export class AgentRuntime {
       this.update(item, { status: 'running', pendingAttention: null, phase: 'planning' });
       if (!item.started) { item.started = true; this.emit(item, { type: 'execution.started', payload: {} }); }
       if (!item.plan) {
+        context.report(item.request.input.kind === 'template' ? '正在准备受控 React 模板。' : '正在载入并校验上一版本源码快照。');
         await this.prepareWorkspace(item, workspace, controller.signal);
+        context.report('源码工作目录已准备完成，开始整理实现计划。');
         item.plan = await this.adapter.plan(context); this.persist();
+        context.report(`计划已整理：${item.plan.summary.slice(0, 240)}\n${item.plan.tasks.slice(0, 5).map((task, index) => `${index + 1}. ${task.slice(0, 120)}`).join('\n')}`);
       }
       if (!item.planConfirmed) {
         const attention = { id: `attention_${id}`, runId: item.request.runId, revision: 1,
@@ -232,12 +236,9 @@ export class AgentRuntime {
         this.update(item, { phase: round === 0 ? 'generating' : 'repairing' });
         this.emit(item, { type: 'phase.changed', payload: { phase: round === 0 ? 'generating' : 'repairing' } });
         summary = await this.adapter.generate(context, item.plan, errors || undefined);
-        for (const name of (await listFiles(workspace)).filter((name) => name.startsWith('src/'))) {
-          this.emit(item, { type: 'file.changed', payload: { path: name, operation: 'modified' } });
-        }
         this.update(item, { phase: 'verifying' });
         const verified = await verifyApplication(workspace, evidence, controller.signal,
-          (check) => this.emit(item, { type: 'check.completed', payload: check }));
+          (check) => this.emit(item, { type: 'check.completed', payload: check }), context.report);
         checks = verified.checks; errors = verified.errors;
         if (!errors) break;
       }
@@ -245,6 +246,7 @@ export class AgentRuntime {
       const behavior: CheckValue = { id: 'check_behavior', kind: 'behavior', name: '需求行为验收', required: false,
         status: 'not_run', summary: '最小闭环只验证类型、构建和页面加载；功能行为待人工验收。', evidenceIds: [] };
       checks.push(behavior); this.emit(item, { type: 'check.completed', payload: behavior });
+      context.report('必要检查已通过，开始打包候选源码、预览产物和验证证据。');
       const artifactId = `artifact_${id}`;
       const artifactRoot = path.join(root, 'artifacts', artifactId); await mkdir(artifactRoot, { recursive: true });
       for (const file of await listFiles(workspace)) {
@@ -268,6 +270,7 @@ export class AgentRuntime {
       if (controller.signal.aborted) throw new Error('Execution aborted');
       item.snapshot.artifactId = artifactId;
       this.emit(item, { type: 'artifact.ready', payload: { artifactId, manifestSha256: sha256(raw) } });
+      context.report('候选产物与验证证据已就绪，等待后端校验并发布版本。');
       item.snapshot.status = 'succeeded'; item.snapshot.revision++;
       this.emit(item, { type: 'execution.completed', payload: { artifactId } });
     } catch (error) {

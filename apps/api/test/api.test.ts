@@ -174,3 +174,97 @@ test('active execution reconciles after API restart without repeat start or dupl
     assert.equal((await f.request('GET', '/session')).data.quota.runsUsed, 1);
   } finally { await f.close(); }
 });
+
+test('progress messages, file and check activities are projected losslessly and replay after refresh', async () => {
+  const f = await fixture();
+  try {
+    await f.login(); const project = await f.project();
+    const created = (await f.request('POST', `/projects/${project.id}/runs`, { prompt: '[hold]', mode: 'build' })).data.run;
+    await f.service.tick();
+    const current = (await f.request('GET', `/runs/${created.id}`)).data;
+    const executionId = current.executionId;
+    const progress = [
+      { type: 'message.completed' as const, payload: { messageId: 'message_model_started', content: 'Worker 的模型请求已发出，等待响应。' } },
+      { type: 'message.completed' as const, payload: { messageId: 'message_model_wait', content: '模型请求仍在进行，已等待 15 秒；尚未收到完整结果。' } },
+      { type: 'file.changed' as const, payload: { path: 'src/App.tsx', operation: 'modified' as const } },
+      { type: 'message.completed' as const, payload: { messageId: 'message_check_started', content: 'TypeScript 类型检查已开始。' } },
+      { type: 'check.completed' as const, payload: { id: 'check_progress', kind: 'typecheck' as const,
+        name: '类型检查', required: false, status: 'passed' as const, summary: 'Synthetic test progress', evidenceIds: [] } },
+    ];
+    progress.forEach((event) => f.fake.emit(executionId, event));
+    await f.service.tick();
+    const snapshot = WorkspaceSnapshot.parse((await f.request('GET', `/projects/${project.id}/workspace`)).data);
+    const expectedMessages = progress.filter((event) => event.type === 'message.completed');
+    for (const message of expectedMessages) {
+      assert.ok(snapshot.messages.some((item) => item.id === message.payload.messageId && item.content === message.payload.content));
+    }
+    const beforeRestart = ProjectEventPage.parse((await f.request('GET', `/projects/${project.id}/events?after=0&limit=100`)).data);
+    const activity = beforeRestart.items.filter((event) => event.event.type === 'activity.recorded').map((event) => event.event.type === 'activity.recorded' ? event.event.payload : null);
+    assert.deepEqual(activity, f.fake.executions.get(executionId)!.events.map((event) => event.event));
+    await f.service.tick();
+    assert.equal((await f.request('GET', `/projects/${project.id}/workspace`)).data.eventCursor, snapshot.eventCursor, 'Empty polling must not add progress');
+    await f.restart();
+    const afterRestart = ProjectEventPage.parse((await f.request('GET', `/projects/${project.id}/events?after=0&limit=100`)).data);
+    assert.deepEqual(afterRestart.items, beforeRestart.items);
+    assert.deepEqual((await f.request('GET', `/projects/${project.id}/workspace`)).data.messages, snapshot.messages);
+  } finally { await f.close(); }
+});
+
+test('runtime outage reports once per cycle across restart, recovery once, and keeps project lock', async () => {
+  const f = await fixture();
+  try {
+    await f.login(); const project = await f.project();
+    const created = (await f.request('POST', `/projects/${project.id}/runs`, { prompt: '[hold]', mode: 'build' })).data.run;
+    await f.service.tick();
+    const started = (await f.request('GET', `/runs/${created.id}`)).data;
+    f.fake.setUnavailable(true);
+    await f.service.tick(); await f.service.tick();
+    let snapshot = WorkspaceSnapshot.parse((await f.request('GET', `/projects/${project.id}/workspace`)).data);
+    const outages = () => snapshot.messages.filter((message) => message.content.startsWith('暂时无法同步 Agent'));
+    const recoveries = () => snapshot.messages.filter((message) => message.content.startsWith('与 Agent 执行服务的连接已恢复'));
+    assert.equal(outages().length, 1); assert.equal(recoveries().length, 0);
+    assert.equal(snapshot.project.activeRunId, created.id); assert.equal(snapshot.activeRun?.status, started.status);
+    await f.restart(); await f.service.tick();
+    snapshot = WorkspaceSnapshot.parse((await f.request('GET', `/projects/${project.id}/workspace`)).data);
+    assert.equal(outages().length, 1, 'API restart must not repeat the same outage notice');
+    assert.equal(snapshot.project.activeRunId, created.id);
+    f.fake.setUnavailable(false);
+    await f.service.tick(); await f.service.tick();
+    snapshot = WorkspaceSnapshot.parse((await f.request('GET', `/projects/${project.id}/workspace`)).data);
+    assert.equal(recoveries().length, 1); assert.equal(outages().length, 1);
+    assert.equal(snapshot.activeRun?.status, 'running'); assert.equal(f.fake.startCalls, 1);
+    assert.equal((await f.request('GET', '/session')).data.quota.runsUsed, 1);
+    const notices = [...outages(), ...recoveries()].map((message) => message.content).join(' ');
+    assert.ok(!notices.includes('test-service-token')); assert.ok(!notices.includes('http://'));
+    f.fake.setUnavailable(true); await f.service.tick(); f.fake.setUnavailable(false); await f.service.tick();
+    snapshot = WorkspaceSnapshot.parse((await f.request('GET', `/projects/${project.id}/workspace`)).data);
+    assert.equal(outages().length, 2); assert.equal(recoveries().length, 2);
+    assert.equal(snapshot.project.activeRunId, created.id);
+  } finally { await f.close(); }
+});
+
+test('delayed source replay preserves execution time while reconnection notices use current API time', async () => {
+  const f = await fixture();
+  try {
+    await f.login(); const project = await f.project();
+    const created = (await f.request('POST', `/projects/${project.id}/runs`, { prompt: '[hold]', mode: 'build' })).data.run;
+    await f.service.tick(); const record = (await f.request('GET', `/runs/${created.id}`)).data;
+    f.fake.setUnavailable(true); await f.service.tick();
+    f.fake.emit(record.executionId, { type: 'message.completed', payload: {
+      messageId: 'message_delayed', content: '此前已完成一次源码检查。',
+    } });
+    const sourceTime = '2026-01-01T00:00:00.000Z';
+    f.fake.executions.get(record.executionId)!.events.at(-1)!.occurredAt = sourceTime;
+    f.fake.setUnavailable(false); await f.service.tick();
+    const page = ProjectEventPage.parse((await f.request('GET', `/projects/${project.id}/events?after=0&limit=100`)).data);
+    const replay = page.items.find((item) => item.event.type === 'activity.recorded'
+      && item.event.payload.type === 'message.completed' && item.event.payload.payload.messageId === 'message_delayed');
+    const messageEvent = page.items.find((item) => item.event.type === 'message.updated' && item.event.payload.id === 'message_delayed');
+    const recovery = page.items.find((item) => item.event.type === 'message.updated' && item.event.payload.content.startsWith('与 Agent 执行服务的连接已恢复'));
+    assert.equal(replay?.occurredAt, sourceTime); assert.equal(messageEvent?.occurredAt, sourceTime);
+    assert.ok(recovery && recovery.occurredAt > sourceTime);
+    assert.deepEqual(page.items.map((event) => event.seq), Array.from({ length: page.items.length }, (_, index) => index + 1), 'Replay is ordered by seq, never source timestamp');
+    const snapshot = WorkspaceSnapshot.parse((await f.request('GET', `/projects/${project.id}/workspace`)).data);
+    assert.equal(snapshot.messages.find((message) => message.id === 'message_delayed')?.createdAt, sourceTime);
+  } finally { await f.close(); }
+});

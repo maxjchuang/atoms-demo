@@ -49,13 +49,32 @@ export async function createApi(options: ApiOptions) {
   const loginAttempts = new Map<string, { since: number; count: number }>();
   const authHeaders = { authorization: `Bearer ${options.serviceToken}`, 'X-Atoms-Protocol-Version': PROTOCOL_VERSION, 'content-type': 'application/json' };
   const cookie = (token: string, clear = false) => `atoms_session=${clear ? '' : token}; Path=/; HttpOnly; SameSite=Lax${options.secureCookies ? '; Secure' : ''}; Max-Age=${clear ? 0 : 604800}`;
-  const emit = (projectId: string, runId: string | null, event: ProjectEventDto['event']) => {
+  const emit = (projectId: string, runId: string | null, event: ProjectEventDto['event'], occurredAt = now()) => {
     const seq = store.state.events.filter((entry) => entry.projectId === projectId).at(-1)?.seq ?? 0;
-    store.state.events.push({ protocolVersion: PROTOCOL_VERSION, projectId, runId, seq: seq + 1, occurredAt: now(), event: structuredClone(event) });
+    store.state.events.push({ protocolVersion: PROTOCOL_VERSION, projectId, runId, seq: seq + 1, occurredAt, event: structuredClone(event) });
   };
   const updateRun = (record: RunRecord, change: Partial<RunDto>) => {
     record.dto = Run.parse({ ...record.dto, ...change, revision: record.dto.revision + 1, updatedAt: now() });
     emit(record.dto.projectId, record.dto.id, { type: 'run.updated', payload: record.dto });
+  };
+  // Connection reports are visible business messages, not execution state transitions.
+  // The persisted flag deduplicates each outage cycle even across API restarts.
+  const reportRuntimeConnection = (runId: string, connected: boolean) => {
+    const record = store.state.runs.find((entry) => entry.dto.id === runId);
+    if (!record || (connected ? !record.runtimeDisconnected : record.runtimeDisconnected)) return;
+    store.transaction(() => {
+      record.runtimeDisconnected = !connected;
+      const message = {
+        id: id('message'), projectId: record.dto.projectId, runId: record.dto.id,
+        role: 'assistant' as const, status: 'complete' as const,
+        content: connected
+          ? '与 Agent 执行服务的连接已恢复，任务进度已重新同步。'
+          : '暂时无法同步 Agent 执行服务的进度，正在重试。任务尚未被确认停止，当前版本不会因此被替换。',
+        createdAt: now(),
+      };
+      store.state.messages.push(message);
+      emit(record.dto.projectId, record.dto.id, { type: 'message.updated', payload: message });
+    });
   };
   const codeFor = (session: SessionRecord) => store.state.codes.find((entry) => entry.id === session.codeId)!;
   const sessionDto = (session: SessionRecord) => {
@@ -404,7 +423,7 @@ export async function createApi(options: ApiOptions) {
       const event = source.event;
       if (terminal(record.dto.status)) { record.sourceSeq = source.sourceSeq; return; }
       store.state.sourceEvents.push(source);
-      emit(record.dto.projectId, record.dto.id, { type: 'activity.recorded', payload: event });
+      emit(record.dto.projectId, record.dto.id, { type: 'activity.recorded', payload: event }, source.occurredAt);
       const cancelling = record.dto.status === 'cancelling';
       if (event.type === 'execution.started') record.started = true;
       if (event.type === 'execution.updated' && !cancelling) {
@@ -420,10 +439,10 @@ export async function createApi(options: ApiOptions) {
       if (event.type === 'check.completed' && !cancelling) updateRun(record, { checks: [...record.dto.checks.filter((check) => check.id !== event.payload.id), event.payload] });
       if (event.type === 'message.delta' || event.type === 'message.completed') {
         let message = store.state.messages.find((entry) => entry.id === event.payload.messageId && entry.projectId === record.dto.projectId);
-        if (!message) { message = { id: event.payload.messageId, projectId: record.dto.projectId, runId: record.dto.id, role: 'assistant', status: 'streaming', content: '', createdAt: now() }; store.state.messages.push(message); }
+        if (!message) { message = { id: event.payload.messageId, projectId: record.dto.projectId, runId: record.dto.id, role: 'assistant', status: 'streaming', content: '', createdAt: source.occurredAt }; store.state.messages.push(message); }
         if (event.type === 'message.delta') message.content += event.payload.delta;
         else { message.content = event.payload.content; message.status = 'complete'; }
-        emit(record.dto.projectId, record.dto.id, { type: 'message.updated', payload: message });
+        emit(record.dto.projectId, record.dto.id, { type: 'message.updated', payload: message }, source.occurredAt);
       }
       if (event.type === 'artifact.ready') record.manifestHash = event.payload.manifestSha256;
       if (event.type === 'execution.completed') {
@@ -444,7 +463,11 @@ export async function createApi(options: ApiOptions) {
     if (busy || closed) return; busy = true;
     try {
       let runtimeReady = false;
-      try { runtimeReady = Boolean((await (await runtime('/internal/v1/health')).json() as { ready: boolean }).ready); } catch { /* existing work still retains its lock */ }
+      try { runtimeReady = Boolean((await (await runtime('/internal/v1/health')).json() as { ready: boolean }).ready); }
+      catch {
+        for (const record of store.state.runs.filter((entry) => !terminal(entry.dto.status))) reportRuntimeConnection(record.dto.id, false);
+        // Existing work still retains its lock. A health error is not a stop confirmation.
+      }
       for (const project of runtimeReady ? store.state.projects : []) {
         if (project.dto.activeRunId) continue;
         const record = store.state.runs.find((entry) => entry.dto.projectId === project.dto.id && entry.dto.status === 'queued' && !entry.dto.executionId);
@@ -483,7 +506,11 @@ export async function createApi(options: ApiOptions) {
             const snapshot = ExecutionSnapshot.parse(await (await runtime(path)).json());
             if (snapshot.status === 'succeeded' && snapshot.artifactId) await publish(record, snapshot.artifactId);
           }
-        } catch { /* Keep identity, pending commands and project lock; retry the same outbox next tick. */ }
+          reportRuntimeConnection(record.dto.id, true);
+        } catch {
+          reportRuntimeConnection(record.dto.id, false);
+          // Keep identity, pending commands and project lock; retry the same outbox next tick.
+        }
       }
     } finally { busy = false; }
   };

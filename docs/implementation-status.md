@@ -4,11 +4,13 @@
 
 完整运行要求 **Node.js 24.9.0+、pnpm 10.33.0**；目前在 macOS arm64 / Node.js 26.5.0 验证。Node 22 只能覆盖部分基础能力，不满足当前固定 DSH 版本要求。
 
+最新增量：[过程反馈改进交付记录](progress-feedback.md)。主代理本轮复验全包 check/build、79 项测试、G3 集成和新 Mock 浏览器 5 passed / 1 条件 skip，并目视检查长等待与真实历史时间线；所有结果区分本轮与上一阶段证据。
+
 ## 1. 当前实现
 
 | 方向 | 已落地 | 验证边界 |
 | --- | --- | --- |
-| 前端 `apps/web` | React/Vite 工作台、公共 API client、独立 Mock、任务/问题/版本/预览界面 | 类型/单测/构建通过；Mock 浏览器 3 项、真实服务浏览器主流程 1 项通过 |
+| 前端 `apps/web` | React/Vite 工作台、公共 API client、独立 Mock、任务/问题/版本/预览及过程反馈界面 | 本轮 30 项单测、构建、Mock 浏览器 5 passed / 1 条件 skip；上一阶段真实服务浏览器主流程 1 项通过 |
 | 后端 `apps/api` | Fastify 公共 API、体验码 Cookie、配额/幂等、SQLite、任务队列/锁、事件投影、产物校验、签名预览、版本/恢复/下载 | 独立 Fake Runtime HTTP 契约与重启测试通过 |
 | Agent `apps/agent` | DSH 适配层、每任务 Planner/Worker、显式 Fake DSH、内部 HTTP、事件账本、计划回答、验证修复、候选产物 | Fake 独立测试通过；真实 DSH/DeepSeek API 的 G4 最小闭环最终通过 |
 | 集成 | 根真实/Fake 启动器、临时目录端到端脚本 | API + Runtime + Fake DSH HTTP 闭环通过 |
@@ -19,14 +21,15 @@
 | --- | --- | --- |
 | 共享 contracts 类型检查与测试 | 27 项通过（协议基线阶段） | 主代理已复验 |
 | `pnpm --filter @atoms/api check` | 通过 | 主代理及后端方向复验 |
-| `pnpm --filter @atoms/api test:contract` | 7 项通过 | 主代理及后端方向复验 |
-| `pnpm --filter @atoms/agent test:contract` | 9 项通过，包含真实类型/构建/Chrome smoke | 主代理最终聚合复验 |
-| 前端单测 | 20 项通过 | 主代理复验 |
+| `pnpm --filter @atoms/api test:contract` | 本轮 10 项通过（此前 7 项） | 主代理本轮聚合复验 |
+| `pnpm --filter @atoms/agent test:contract` | 本轮 12 项通过（此前 9 项），包含真实类型/构建/Chrome smoke | 主代理本轮聚合复验 |
+| 前端单测 | 本轮 30 项通过（此前 20 项） | 主代理本轮聚合复验 |
 | `pnpm --filter @atoms/web build` | 通过 | 主代理复验 |
 | `pnpm check` | 全包通过 | 主代理最终复验 |
 | `pnpm build` | 全包通过；Web dist 仅入口与 JS/CSS，无 Mock 静态资源 | 主代理最终复验 |
-| `pnpm test` | 63 项通过：contracts 27 / API 7 / web 20 / Agent 9 | 主代理最终复验 |
-| 前端 Mock Playwright | 3 项通过 | 前端方向实际运行 |
+| `pnpm test` | 本轮 79 项通过：contracts 27 / API 10 / web 30 / Agent 12；此前 63 项亦通过 | 主代理本轮亲自复验 |
+| 前端 Mock Playwright | 本轮 5 passed / 1 条件 skip，47.8 秒，独立 5181 端口，零模型调用；上一阶段 3 项通过 | 主代理本轮亲自执行 |
+| 新过程反馈目视检查 | 长等待界面、真实旧任务文件/检查/未验证行为时间线清楚；本机截图 `data/review-artifacts/progress-timeline-live.png` | 主代理目视复验 |
 | 真实服务浏览器 E2E（显式 Fake DSH） | 1 项通过：前端方向首次 17.8 秒；主代理复验 16.8 秒（生成阶段 14.9 秒），覆盖计划确认/刷新恢复、iframe 便签交互持久化、源码、修改与回滚 | 前端方向运行，主代理亲自复验通过 |
 | `pnpm test:integration` | 全流程通过，包含回滚后继续修改第四版、正确恢复基线/父版本、签名预览及重启持久化 | 主代理亲自复验最新用例；后端方向亦通过 |
 | `ATOMS_KEEP_TEST_DATA=1 pnpm test:integration:real` | 最后一轮 exit 0：真实生成、计划确认、发布、签名预览、修改、不可变恢复、分页事件、API 重启恢复通过 | Agent 方向实际执行；主代理审查两版 manifest、源码关系及第二版截图 |
@@ -94,7 +97,7 @@ pnpm dev:demo
 
 可使用 `ATOMS_DATA_ROOT=data/review-real pnpm dev` 为真实模型演示建立独立数据空间，保留既有测试项目和待确认任务。数据空间包含 API 数据、Agent 账本和本地服务凭证；同一开发体验码在新数据库重新 seed，不改变旧数据库额度。显式 `API_DATA_DIR`/`AGENT_DATA_DIR` 仍优先。
 
-交付时主代理已经按该命令启动真实 DSH 模式，工作台 `http://localhost:5173`，体验码 `atoms-demo-2026`，新空间余量尚未消耗。旧数据未删除或重置。该说明描述本次交付时的本机进程状态，不承诺进程退出后的持续可用性。
+主代理已经按该命令建立真实 DSH 演示空间，工作台 `http://localhost:5173`，体验码 `atoms-demo-2026`。过程反馈更新前的只读复查（2026-11-08 08:48:35 UTC）确认非终态 Run 为 0；随后主代理安全重启同一数据空间，确认工作台 HTTP 200、API `/health` ready=true / protocolVersion=0.1.0、Runtime 4100 dsh listening。没有触发新 Run，原数据和额度保留。实际使用会消耗额度；不承诺本机进程退出后的持续可用性。
 
 真实模型：根 `.env` 设置 `DEEPSEEK_API_KEY` 后 `pnpm dev`。`pnpm test:integration:real` 会调用真实模型并消耗额度，使用独立临时数据目录；模型 Key 只传 Agent，不传 API/Web，不写日志。
 
@@ -109,5 +112,6 @@ pnpm dev:demo
 - 独立预览主机上的不同项目仍共享浏览器 origin 存储，需要项目命名空间；没有严格多租户存储隔离。
 - 临时域名受进程、网络和电脑休眠影响，无持续可用性保证。
 - DSH 底座版本固定；扩展点和模型能力需以兼容性记录及真实测试为依据。
+- 只读问答/意图路由尚未实现，当前输入仍进入 build/plan 任务；过程反馈改进不等于该问题已解决，也不代表完整项目级 Router。
 
 当前阶段 check/test/build、最新 Fake 集成、真实模型最小集成与已有真实产物的只读行为验收均有上述实际结果。后续代码变更应按影响范围重新验证，G5 仍作为单独后续阶段。

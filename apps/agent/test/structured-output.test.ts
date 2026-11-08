@@ -21,9 +21,23 @@ test('malformed output retries only once and successful result remains parsed', 
   assert.deepEqual(result, { files: {} }); assert.equal(calls, 2); assert.equal(retries, 1);
 });
 test('two malformed responses fail explicitly with no unbounded model loop', async () => {
-  let calls = 0;
+  let calls = 0; const reasons: string[] = [];
   await assert.rejects(requestStructuredJson('router', async () => {
     calls++; return { text: '{', finishReason: null };
-  }, () => {}), StructuredOutputError);
+  }, (error) => reasons.push(error.reason)), StructuredOutputError);
   assert.equal(calls, 2);
+  assert.deepEqual(reasons, ['invalid_json']);
+});
+test('retry feedback exposes only reason category and remains bounded at one retry', async () => {
+  for (const [response, reason] of [
+    [{ text: '', finishReason: 'completed' }, 'empty_response'],
+    [{ text: 'private source text', finishReason: 'max-tokens' }, 'output_limit'],
+  ] as const) {
+    const reports: string[] = []; let calls = 0;
+    await requestStructuredJson('worker', async (retry) => {
+      calls++; return retry ? { text: '{}', finishReason: 'completed' } : response;
+    }, (error) => reports.push(error.reason));
+    assert.equal(calls, 2); assert.deepEqual(reports, [reason]);
+    assert.ok(!reports.join('').includes('private'));
+  }
 });

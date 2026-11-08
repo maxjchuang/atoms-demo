@@ -7,7 +7,8 @@ export interface Code { id: string; hash: string; expiresAt: string; projectLimi
 export interface SessionRecord { id: string; codeId: string; tokenHash: string; expiresAt: string }
 export interface ProjectRecord { dto: ProjectDto; codeId: string }
 export interface RunRecord { dto: RunDto; prompt: string; codeId: string; started: boolean; sourceSeq: number;
-  request?: StartExecutionDto; manifestHash?: string; answerCommand?: object; cancelCommand?: object }
+  request?: StartExecutionDto; manifestHash?: string; answerCommand?: object; cancelCommand?: object;
+  runtimeDisconnected?: boolean }
 export interface VersionRecord { dto: VersionDto; artifactId: string; manifest: ArtifactManifestDto; manifestRaw: string; directory: string }
 export interface MessageRecord { id: string; projectId: string; runId: string | null; role: 'user'|'assistant';
   status: 'streaming'|'complete'; content: string; createdAt: string }

@@ -14,7 +14,7 @@ export function createFakeRuntime(serviceToken = 'test-service-token') {
   const app = Fastify();
   const executions = new Map<string, { request: StartExecutionDto; snapshot: ExecutionSnapshotDto; events: AgentEventDto[];
     commands: Map<string, string>; files: Record<string, Buffer>; manifest?: ArtifactManifestDto; raw?: string }>();
-  let calls = 0; let corruptArtifact = false; let dropStartOnce = false;
+  let calls = 0; let corruptArtifact = false; let dropStartOnce = false; let unavailable = false;
   const emit = (executionId: string, event: AgentEventDto['event']) => {
     const entry = executions.get(executionId)!;
     const sourceSeq = entry.events.length + 1;
@@ -63,6 +63,7 @@ export function createFakeRuntime(serviceToken = 'test-service-token') {
   };
   app.addHook('onRequest', async (request, reply) => {
     if (request.headers.authorization !== `Bearer ${serviceToken}`) return reply.code(401).send({ error: 'unauthorized' });
+    if (unavailable) return reply.code(503).send({ error: 'Injected runtime outage' });
   });
   app.get('/internal/v1/health', async () => ({ protocolVersion: PROTOCOL_VERSION, ready: true,
     capabilities: { templates: ['react-vite-v1'], cancel: true, attention: true, artifacts: true } }));
@@ -128,5 +129,6 @@ export function createFakeRuntime(serviceToken = 'test-service-token') {
     return reply.type('application/octet-stream').send(corruptArtifact ? Buffer.from('corrupt') : entry.files[path]);
   });
   return { app, executions, get startCalls() { return calls; }, complete,
-    setCorruptArtifact(value: boolean) { corruptArtifact = value; }, loseNextStartResponse() { dropStartOnce = true; } };
+    setCorruptArtifact(value: boolean) { corruptArtifact = value; }, loseNextStartResponse() { dropStartOnce = true; },
+    setUnavailable(value: boolean) { unavailable = value; }, emit };
 }

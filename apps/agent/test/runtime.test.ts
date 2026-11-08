@@ -68,9 +68,27 @@ test('real React typecheck/build/browser smoke, immutable artifact and idempoten
   const events = AgentEventPage.parse(await (await call(`/executions/${done.id}/events`)).json());
   assert.deepEqual(events.items.map((event) => event.sourceSeq), events.items.map((_, index) => index + 1));
   assert.equal(events.items.filter((event) => event.event.type === 'execution.started').length, 1);
+  const messages = events.items.filter((event) => event.event.type === 'message.completed');
+  const firstCheck = events.items.find((event) => event.event.type === 'check.completed');
+  assert.ok(messages.some((event) => event.event.type === 'message.completed'
+    && event.event.payload.content.includes('计划已整理')));
+  for (const [kind, startText] of [['typecheck', '开始TypeScript 类型检查'], ['build', '开始Vite 生产构建'], ['smoke', '开始浏览器加载检查']] as const) {
+    const start = messages.find((event) => event.event.type === 'message.completed' && event.event.payload.content.includes(startText));
+    const result = events.items.find((event) => event.event.type === 'check.completed' && event.event.payload.kind === kind);
+    assert.ok(start && result && start.sourceSeq < result.sourceSeq, `${kind} starts before its result`);
+  }
+  const changes = events.items.flatMap((event) => event.event.type === 'file.changed' ? [{ ...event.event.payload, seq: event.sourceSeq }] : []);
+  assert.deepEqual(changes.map(({ path, operation }) => ({ path, operation })), [
+    { path: 'src/App.tsx', operation: 'modified' },
+    { path: 'src/components/NoteCard.tsx', operation: 'added' },
+    { path: 'src/style.css', operation: 'modified' },
+  ]);
+  assert.ok(firstCheck && changes.every((event) => event.seq < firstCheck.sourceSeq));
   const raw = Buffer.from(await (await call(`/executions/${done.id}/artifacts/${done.artifactId}/manifest`)).arrayBuffer());
   const manifest = ArtifactManifest.parse(JSON.parse(raw.toString()));
   const ready = events.items.find((event) => event.event.type === 'artifact.ready');
+  const packaging = messages.find((event) => event.event.type === 'message.completed' && event.event.payload.content.includes('开始打包候选'));
+  assert.ok(packaging && ready && packaging.sourceSeq < ready.sourceSeq);
   assert.equal(ready?.event.type === 'artifact.ready' && ready.event.payload.manifestSha256, sha256(raw));
   assert.ok(manifest.files.some((file) => file.path === 'source/src/components/NoteCard.tsx'));
   assert.ok(manifest.files.some((file) => file.path === 'dist/index.html'));

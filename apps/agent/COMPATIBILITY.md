@@ -76,3 +76,15 @@ The runtime owns plan-confirmation Attention and HTTP answers; it does not claim
 The browser smoke blocks outbound requests and checks nonempty root plus absence of runtime errors. It does not certify each requested behavior; `behavior` is explicitly `not_run`. Screenshots and logs are genuine checks of generated output, not fake test assertions.
 
 The generated export contains exact dependency versions but does not yet include a generated-app lockfile. Runtime builds use preinstalled trusted dependencies and do not run user-provided package install scripts. Model generation changes and real model cancellation/restart under network failure require further targeted validation; they are not implied by the Fake contract tests.
+
+## Process feedback increment (protocol unchanged)
+
+The feedback increment uses only existing `message.completed`, `file.changed`, phase, check and artifact events. It adds observable action starts/completions for source preparation, the validated plan summary, SDK startup/readiness and model request submission, actual source application, each verification step, and candidate packaging. The SDK is explicitly started before the readiness message; this does not add a model call or expand any execution/repair budget.
+
+File changes are emitted immediately after actual host-applied bytes exist, based on before/after content. New files are `added`, changed files are `modified`, and identical files produce no event. There is no deletion output in the current structured adapter, so no `deleted` event is claimed. A rejected path or failed write must not emit a successful file change.
+
+Verification start feedback precedes the corresponding `check.completed` result. The browser message explicitly distinguishes page-loading smoke from full behavior acceptance. Structured retry feedback is limited to one retry and identifies empty response, output limit or malformed JSON without forwarding model source or reasoning.
+
+The default no-key suite additionally verifies real file-event timing/content/operations, check-start-before-result ordering, plan/packaging feedback and bounded redacted retry reasons. It does not make new real model calls. The previously recorded successful model integration remains evidence for the generation path; this feedback increment has not itself been re-run against a paid model.
+
+The SDK callback still meters observable steps and settled usage; it does not expose hidden reasoning or promise token-by-token final text. During a long model wait, the service creates no artificial heartbeat messages. The UI owns elapsed-time presentation; an elapsed timer or a successful status poll is not evidence of model progress.

@@ -1,7 +1,10 @@
 export interface ModelResult { text: string; finishReason: string | null }
 export class StructuredOutputError extends Error {
+  readonly reason: 'output_limit' | 'empty_response' | 'invalid_json';
   constructor(readonly role: string, readonly responseLength: number, readonly finishReason: string | null) {
     super(`DSH ${role} returned invalid structured JSON (responseLength=${responseLength}, finishReason=${finishReason ?? 'null'})`);
+    this.reason = ['max_tokens', 'length', 'max-tokens'].includes(finishReason || '') ? 'output_limit'
+      : responseLength === 0 ? 'empty_response' : 'invalid_json';
   }
 }
 export function parseModelJson(result: ModelResult, role: string): unknown {
@@ -14,14 +17,14 @@ export function parseModelJson(result: ModelResult, role: string): unknown {
 }
 export async function requestStructuredJson(role: string,
   request: (retry: boolean) => Promise<ModelResult>,
-  reportRetry: () => void,
+  reportRetry: (error: StructuredOutputError) => void,
 ) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const result = await request(attempt === 1);
     try { return parseModelJson(result, role); }
     catch (error) {
       if (!(error instanceof StructuredOutputError) || attempt === 1) throw error;
-      reportRetry();
+      reportRetry(error);
     }
   }
   throw new Error('Unreachable structured output state');

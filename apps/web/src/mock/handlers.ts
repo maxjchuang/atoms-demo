@@ -1,4 +1,4 @@
-import { http, HttpResponse, type JsonBodyType, type StrictResponse } from 'msw';
+import { http, HttpResponse, delay, type JsonBodyType, type StrictResponse } from 'msw';
 import { PROTOCOL_VERSION, type ProjectDto, type RunDto, type VersionDto, type WorkspaceSnapshotDto, type ProjectEventDto } from '@atoms/contracts';
 import { attention as baseAttention, checks as fixtureChecks } from '@atoms/contracts/fixtures';
 
@@ -19,7 +19,7 @@ const terminal = (run: RunDto) => ['succeeded', 'failed', 'cancelled', 'interrup
 const session = () => ({ id: 'session_mock', expiresAt: new Date(Date.now() + 86400000).toISOString(), quota: { projectLimit: 3, runLimit: 10, projectsUsed: store.projects.length, runsUsed: store.used, runsReserved: store.reserved } });
 const checks = () => fixtureChecks.map((check) => ({ ...check, summary: 'Mock 模式的模拟检查结果，不代表真实执行。' }));
 function append(record: Record, runId: string | null, event: ProjectEventDto['event']) {
-  record.events.push({ protocolVersion: PROTOCOL_VERSION, projectId: record.project.id, runId, seq: record.events.length + 1, occurredAt: now(), event }); save();
+  record.events.push({ protocolVersion: PROTOCOL_VERSION, projectId: record.project.id, runId, seq: record.events.length + 1, occurredAt: now(), event: structuredClone(event) }); save();
 }
 function update(record: Record, run: RunDto, patch: Partial<RunDto>) {
   Object.assign(run, patch, { revision: run.revision + 1, updatedAt: now() });
@@ -48,21 +48,50 @@ function advance(record: Record) {
   if (run.status === 'cancelling') { record.project.activeRunId = null; update(record, run, { status: 'cancelled', pendingAttention: null, pendingAnswer: null }); return; }
   const tick = record.ticks[run.id] = (record.ticks[run.id] ?? 0) + 1;
   if (run.status === 'queued') {
-    if (!run.executionId) { store.reserved--; store.used++; }
+    if (!run.executionId) {
+      store.reserved--; store.used++;
+      append(record, run.id, { type: 'activity.recorded', payload: { type: 'execution.started', payload: {} } });
+    }
     update(record, run, { status: 'running', phase: 'planning', executionId: run.executionId ?? id('execution') });
+    append(record, run.id, { type: 'activity.recorded', payload: { type: 'phase.changed', payload: { phase: 'planning' } } });
     message(record, run.id, 'assistant', '已收到你的需求。我会先整理实现范围，再构建并验证应用。此处为独立 Mock 演示。'); return;
   }
   if (tick === 2 && run.mode === 'plan' && !run.pendingAnswer) {
     update(record, run, { status: 'waiting_input', pendingAttention: { ...baseAttention, id: id('attention'), runId: run.id, createdAt: now() } }); return;
   }
-  if (tick <= 3) { update(record, run, { phase: 'generating' }); return; }
-  if (tick === 4) { update(record, run, { phase: 'verifying' }); return; }
-  if (tick === 5 && record.prompts[run.id].includes('修复')) { update(record, run, { phase: 'repairing' }); return; }
+  if (record.prompts[run.id].includes('[long-wait]') && tick > 2) return;
+  if (tick <= 3) {
+    if (run.phase !== 'generating') {
+      update(record, run, { phase: 'generating' });
+      append(record, run.id, { type: 'activity.recorded', payload: { type: 'phase.changed', payload: { phase: 'generating' } } });
+      for (const path of ['src/App.tsx', 'src/components/Note.tsx']) append(record, run.id, {
+        type: 'activity.recorded', payload: { type: 'file.changed', payload: { path, operation: 'added' } },
+      });
+    }
+    return;
+  }
+  if (tick === 4) {
+    update(record, run, { phase: 'verifying' });
+    append(record, run.id, { type: 'activity.recorded', payload: { type: 'phase.changed', payload: { phase: 'verifying' } } });
+    return;
+  }
+  if (tick === 5 && record.prompts[run.id].includes('修复')) {
+    append(record, run.id, { type: 'activity.recorded', payload: { type: 'check.completed', payload: { ...checks()[1], status: 'failed', summary: 'Mock: unresolved import' } } });
+    update(record, run, { phase: 'repairing' });
+    append(record, run.id, { type: 'activity.recorded', payload: { type: 'phase.changed', payload: { phase: 'repairing' } } });
+    return;
+  }
   if (record.prompts[run.id].includes('失败')) {
     record.project.activeRunId = null;
     update(record, run, { status: 'failed', error: { code: 'VERIFICATION_FAILED', message: '模拟验证失败。上一成功版本已保留，可修改需求后重试。' }, pendingAnswer: null }); return;
   }
-  if (tick <= 6) { update(record, run, { phase: 'publishing', checks: checks() }); return; }
+  if (tick <= 6) {
+    if (run.phase !== 'publishing') {
+      for (const check of checks()) append(record, run.id, { type: 'activity.recorded', payload: { type: 'check.completed', payload: check } });
+      update(record, run, { phase: 'publishing', checks: checks() });
+    }
+    return;
+  }
   const versionId = id('version');
   const version: VersionDto = { id: versionId, projectId: record.project.id, runId: run.id,
     parentVersionId: record.project.currentVersionId, restoredFromVersionId: null,
@@ -107,14 +136,18 @@ export const handlers = [
     const nextCursor = items.at(-1)?.seq ?? after;
     return HttpResponse.json({ items, nextCursor, hasMore: record.events.length > nextCursor });
   }),
-  http.post('/api/v1/projects/:id/runs', ({ params, request }) => unauthorized() ?? mutation(request, (body) => {
+  http.post('/api/v1/projects/:id/runs', async ({ params, request }) => {
+    // Ensure an empty-project snapshot can win the race before creation commits.
+    // The client must refresh workspace after the accepted run response.
+    await delay(150);
+    return unauthorized() ?? mutation(request, (body) => {
     const record = find(params.id); if (!record) return error(404, 'NOT_FOUND', '找不到项目。');
     if (store.used + store.reserved >= 10) return error(403, 'QUOTA_EXCEEDED', '体验构建额度已用完。');
     const run: RunDto = { id: id('run'), projectId: record.project.id, status: 'queued', phase: null, revision: 1, mode: body.mode, baseVersionId: null, executionId: null, resultVersionId: null, pendingAttention: null, pendingAnswer: null, checks: [], error: null, createdAt: now(), updatedAt: now() };
     record.runs.push(run); record.prompts[run.id] = body.prompt; store.reserved++; record.project.updatedAt = now();
     message(record, run.id, 'user', body.prompt); append(record, run.id, { type: 'run.updated', payload: run });
     return { value: { run }, status: 202 };
-  })),
+  }); }),
   http.get('/api/v1/runs/:id', ({ params }) => unauthorized() ?? (findRun(params.id) ? HttpResponse.json(findRun(params.id)!.run) : error(404, 'NOT_FOUND', '任务不存在。'))),
   http.post('/api/v1/runs/:id/answers', ({ params, request }) => unauthorized() ?? mutation(request, (body) => {
     const item = findRun(params.id); if (!item) return error(404, 'NOT_FOUND', '任务不存在。');

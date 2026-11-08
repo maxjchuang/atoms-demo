@@ -3,10 +3,12 @@ import { ArrowDownToLine, ArrowRight, ArrowUp, Check, CheckCircle2, ChevronDown,
   Clock3, Code2, ExternalLink, FileCode2, Folder, FolderOpen, Home, Layers3, LoaderCircle,
   MessageSquare, Monitor, Plus, RefreshCw, Search, ShieldCheck, Smartphone,
   Sparkles, Square, WandSparkles, X, Zap } from 'lucide-react';
-import { Session, type ProjectDto, type WorkspaceSnapshotDto, type VersionDto, type RunDto, type AnswerRequestDto } from '@atoms/contracts';
+import { Session, type ProjectDto, type WorkspaceSnapshotDto, type VersionDto, type ProjectEventDto, type RunDto, type AnswerRequestDto } from '@atoms/contracts';
 import type { z } from 'zod';
 import { api, HttpError } from './api';
 import { applyEvents, isTerminal, phaseLabels, statusLabels } from './state';
+import { mergeActivityEvents, readActivityHistory, type ApiSync } from './activity';
+import { RunFeedback } from './RunFeedback';
 
 type SessionDto = z.infer<typeof Session>;
 type View = 'home' | 'projects';
@@ -35,6 +37,10 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [connection, setConnection] = useState('');
+  const [activityEvents, setActivityEvents] = useState<ProjectEventDto[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [sync, setSync] = useState<ApiSync>({ status: 'syncing', lastSuccessAt: null });
   const [login, setLogin] = useState(false);
   const [code, setCode] = useState('');
   const [pending, setPending] = useState<{ prompt: string; mode: 'build' | 'plan'; projectId: string | null } | null>(null);
@@ -47,8 +53,25 @@ export function App() {
   const generation = useRef(0);
   const mock = import.meta.env.MODE === 'mock';
   const updateWorkspace = useCallback((next: WorkspaceSnapshotDto | null) => {
+    const previous = workspaceRef.current;
+    if (next && previous?.project.id === next.project.id && previous.eventCursor > next.eventCursor) return;
     workspaceRef.current = next; setWorkspace(next);
   }, []);
+  const recordActivity = useCallback((id: string, events: ProjectEventDto[]) => {
+    setActivityEvents((previous) => mergeActivityEvents(previous, events, id));
+  }, []);
+  const hydrateActivity = useCallback(async (id: string, through: number, context: number) => {
+    setHistoryLoading(true);
+    try {
+      const history = await readActivityHistory(id, through, api.events);
+      if (generation.current !== context || currentProjectId() !== id) return;
+      recordActivity(id, history); setHistoryError('');
+    } catch (e) {
+      if (generation.current === context && currentProjectId() === id) setHistoryError(errorMessage(e));
+    } finally {
+      if (generation.current === context && currentProjectId() === id) setHistoryLoading(false);
+    }
+  }, [recordActivity]);
   const refreshProjects = useCallback(async () => { const result = await api.projects(); setProjects(result.items); }, []);
   useEffect(() => {
     let alive = true;
@@ -75,7 +98,8 @@ export function App() {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     let failures = 0;
-    updateWorkspace(null); setVersions([]); setTab('preview');
+    updateWorkspace(null); setVersions([]); setTab('preview'); setActivityEvents([]);
+    setHistoryError(''); setHistoryLoading(false); setSync({ status: 'syncing', lastSuccessAt: null });
     if (!projectId) { setLoading(false); return; }
     setLoading(true);
     const isCurrent = () => alive && generation.current === ownGeneration;
@@ -83,6 +107,8 @@ export function App() {
       const [next, history] = await Promise.all([api.workspace(projectId!), api.versions(projectId!)]);
       if (!isCurrent()) return;
       updateWorkspace(next); setVersions(history.items); setLoading(false);
+      setSync({ status: 'ok', lastSuccessAt: Date.now() }); setConnection('');
+      await hydrateActivity(projectId!, next.eventCursor, ownGeneration);
     }
     async function poll() {
       if (!isCurrent()) return;
@@ -98,6 +124,8 @@ export function App() {
             while (more && isCurrent()) {
               const page = await api.events(projectId!, after);
               if (!isCurrent()) return;
+              setSync({ status: 'ok', lastSuccessAt: Date.now() });
+              recordActivity(projectId!, page.items);
               const before = workspaceRef.current!;
               const next = applyEvents(before, page.items);
               updateWorkspace(next); after = page.nextCursor; more = page.hasMore;
@@ -112,6 +140,7 @@ export function App() {
       } catch (e) {
         if (!isCurrent()) return;
         failures++;
+        setSync((previous) => ({ ...previous, status: 'interrupted' }));
         if (e instanceof HttpError && e.status === 401) { setSession(null); setLogin(true); }
         else if (e instanceof HttpError && e.status === 404) { setError(errorMessage(e)); setLoading(false); return; }
         else {
@@ -123,7 +152,7 @@ export function App() {
     }
     void poll();
     return () => { alive = false; clearTimeout(timer); };
-  }, [projectId, updateWorkspace, refreshProjects]);
+  }, [projectId, updateWorkspace, refreshProjects, hydrateActivity, recordActivity]);
 
   const currentVersion = workspace?.currentVersion;
   useEffect(() => {
@@ -151,7 +180,9 @@ export function App() {
     if (!id) return;
     const [next, history] = await Promise.all([api.workspace(id), api.versions(id)]);
     if (currentProjectId() !== id) return;
-    updateWorkspace(next); setVersions(history.items); await refreshProjects();
+    updateWorkspace(next); setVersions(history.items);
+    setSync({ status: 'ok', lastSuccessAt: Date.now() });
+    await hydrateActivity(id, next.eventCursor, generation.current); await refreshProjects();
   }
   async function submitPrompt(prompt: string, requestedMode = mode) {
     if (!prompt.trim() || busy) return;
@@ -162,7 +193,7 @@ export function App() {
       if (!id) { const project = await api.createProject(prompt.trim().slice(0, 32)); id = project.id; open(id); }
       await api.createRun(id, prompt.trim(), requestedMode);
       setDraft(''); await refreshProjects();
-      if (projectId === id) await loadCurrent(id); else open(id);
+      open(id); await loadCurrent(id);
     } catch (e) { setError(errorMessage(e)); if (e instanceof HttpError && e.status === 401) { setSession(null); setLogin(true); } }
     finally { setBusy(false); }
   }
@@ -234,7 +265,7 @@ export function App() {
             <div className="conversation-scroll">
               <div className="conversation-intro"><Sparkles size={18}/><p>一起把这个想法做出来。<br/><span>我会协调构建过程，并在需要你时提出具体问题。</span></p></div>
               {workspace.messages.map((message) => <div key={message.id} className={`message ${message.role}`}><span className={`message-avatar ${message.role}`}>{message.role === 'user' ? '你' : 'M'}</span><div><small>{message.role === 'user' ? '你' : '项目负责人'}</small><p>{message.content}{message.status === 'streaming' && <span className="typing-dot"/>}</p></div></div>)}
-              {displayRun && <RunCard run={displayRun} busy={busy} onCancel={() => void action(() => api.cancel(displayRun.id))}/>}
+              {displayRun && <RunFeedback run={displayRun} events={activityEvents} sync={sync} historyLoading={historyLoading} historyError={historyError} busy={busy} onCancel={() => void action(() => api.cancel(displayRun.id))}/>}
               {workspace.activeRun?.pendingAttention && <AttentionCard run={workspace.activeRun} busy={busy} onAnswer={(answer) => void action(() => api.answer(workspace.activeRun!.id, answer))}/>}
               {workspace.queuedRuns.length > 0 && <div className="queue-card"><Clock3 size={15}/>{workspace.queuedRuns.length} 个需求等待当前任务完成后执行</div>}
             </div>
@@ -244,7 +275,7 @@ export function App() {
             {tab === 'preview' ? <div className={`preview-area ${mobilePreview ? 'mobile' : ''}`}>{currentVersion ? <><div className="preview-address"><span className="browser-dots"><i/><i/><i/></span><span><ShieldCheck size={12}/>应用预览</span><span className="version-badge">{currentVersion.restoredFromVersionId ? '恢复版本' : `版本 ${versions.findIndex((v) => v.id === currentVersion.id) >= 0 ? versions.length - versions.findIndex((v) => v.id === currentVersion.id) : versions.length}`}</span></div><iframe key={currentVersion.previewUrl} title="应用预览" src={currentVersion.previewUrl} sandbox={mock ? 'allow-scripts' : 'allow-scripts allow-same-origin'}/></> : <div className="preview-empty"><div className="preview-symbol"><WandSparkles size={35}/><span>✦</span></div><h2>{activeRun && !isTerminal(activeRun) ? '你的想法，正在成形' : '应用将在这里呈现'}</h2><p>{activeRun?.status === 'waiting_input' ? '确认左侧计划后，Agent 将继续构建。' : activeRun?.error ? '本次未能交付，可修改需求后重新尝试。' : '代码完成并通过验证后，便可在这里直接体验。'}</p>{activeRun && !isTerminal(activeRun) && <div className="preview-progress"><LoaderCircle className="spin" size={14}/>{activeRun.phase ? phaseLabels[activeRun.phase] : statusLabels[activeRun.status]}</div>}</div>}</div>
             : tab === 'code' ? <div className="code-area">{currentVersion ? <><div className="file-tree"><h4>项目文件</h4>{files.map((path) => <button key={path} className={selectedFile === path ? 'active' : ''} onClick={() => setSelectedFile(path)}><FileCode2 size={14}/>{path.replace(/^source\//, '')}</button>)}</div><div className="source-view"><div><FileCode2 size={14}/>{selectedFile.replace(/^source\//, '')}<span>已发布版本 · 只读</span></div><pre>{source}</pre></div></> : <div className="panel-empty"><Code2 size={28}/><h3>等待首个成功版本</h3><p>成功交付后，可以查看完整的 React 多文件源码。</p></div>}</div>
             : <div className="versions-area"><div className="version-heading"><h3>每一步创作，都有迹可循</h3><p>成功交付的版本会被保留，你可以随时恢复。</p></div>{!versions.length && <div className="panel-empty"><Layers3 size={28}/><p>尚无成功版本。</p></div>}{versions.map((version, index) => <div className="version-card" key={version.id}><div className="version-title"><span className="version-number">V{versions.length - index}</span><strong>{version.summary}</strong>{version.id === currentVersion?.id && <span className="current-tag">当前版本</span>}</div><small>{shortDate(version.createdAt)}{version.restoredFromVersionId ? ' · 从历史版本恢复' : ''}</small><div className="check-list">{version.checks.map((check) => <span className={check.status === 'passed' ? 'passed' : 'unchecked'} key={check.id}>{check.status === 'passed' ? <Check size={12}/> : <Clock3 size={12}/>} {check.name} · {check.status === 'passed' ? '通过' : check.status === 'not_run' ? '未验证' : check.status === 'skipped' ? '已跳过' : '失败'}</span>)}</div>{version.id !== currentVersion?.id && <button className="secondary-button" disabled={busy || !!workspace.activeRun} title={workspace.activeRun ? '请等待当前任务结束再恢复版本' : undefined} onClick={() => void action(() => api.restore(workspace.project.id, version.id, workspace.project.revision))}><RefreshCw size={13}/>恢复此版本</button>}</div>)}</div>}
-            <div className="output-footer"><span><span className={`status-dot ${displayRun?.status === 'running' ? 'working' : ''}`}/>{currentVersion ? '当前展示最近一次成功交付的应用' : '等待可交付版本'}</span><span>React · TypeScript · Vite</span></div>
+            <div className="output-footer"><span><span className={`status-dot ${displayRun?.status === 'running' ? 'working' : ''}`}/>{currentVersion ? workspace.activeRun ? '新版本正在处理，当前仍展示上一成功版本' : '当前展示最近一次成功交付的应用' : '等待可交付版本'}</span><span>React · TypeScript · Vite</span></div>
           </section>
         </>}
       </div>}
@@ -262,16 +293,6 @@ function Composer({ value, setValue, mode, setMode, busy, onSubmit, placeholder,
     <textarea aria-label={compact ? '修改需求' : '应用需求'} maxLength={20000} value={value} onChange={(event) => setValue(event.target.value)} placeholder={placeholder} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onSubmit(); } }}/>
     <div className="composer-bottom"><span className="composer-caption"><Sparkles size={14}/>{compact ? '与你的 Agent 继续创作' : '从一句话开始，剩下的交给 Agent'}</span><div><label className="mode-select"><span>{mode === 'build' ? <WandSparkles size={14}/> : <Layers3 size={14}/>}</span><select aria-label="构建模式" value={mode} onChange={(event) => setMode(event.target.value as 'build' | 'plan')}><option value="build">直接构建</option><option value="plan">先做计划</option></select><ChevronDown size={12}/></label><button className="send-button" type="submit" disabled={busy || !value.trim()} aria-label={compact ? '提交修改' : '开始构建'}>{busy ? <LoaderCircle className="spin" size={17}/> : <ArrowUp size={20}/>}</button></div></div>
   </form>;
-}
-
-function RunCard({ run, busy, onCancel }: { run: RunDto; busy: boolean; onCancel: () => void }) {
-  const terminal = isTerminal(run);
-  return <div className={`run-card ${run.status}`}><div className="run-card-top"><span className="run-status-icon">{run.status === 'succeeded' ? <CheckCircle2 size={17}/> : terminal ? <Square size={15}/> : run.status === 'waiting_input' ? <MessageSquare size={16}/> : <LoaderCircle className="spin" size={16}/>}</span><strong>{statusLabels[run.status]}</strong>{!terminal && <button disabled={busy || run.status === 'cancelling'} onClick={onCancel}>{run.status === 'cancelling' ? '等待停止确认' : '停止任务'}</button>}</div>
-    <div className="phase-steps">{(['planning', 'generating', 'verifying', 'publishing'] as const).map((phase, index) => { const active = run.phase === phase || (phase === 'generating' && run.phase === 'repairing'); const done = run.status === 'succeeded' || (['planning', 'generating', 'verifying', 'publishing'].indexOf(run.phase ?? '') > index); return <span key={phase} className={done ? 'done' : active ? 'active' : ''}><i>{done ? <Check size={9}/> : index + 1}</i>{phaseLabels[phase]}</span>; })}</div>
-    {run.phase === 'repairing' && <p>发现检查问题，正在执行有限修复。</p>}{run.error && <p className="run-error">{run.error.message}</p>}
-    {run.status === 'succeeded' && <p>应用已保存。你可以预览、继续修改或查看版本。</p>}
-    {run.checks.length > 0 && <details><summary>查看验证结果 <ChevronDown size={12}/></summary><div className="check-list">{run.checks.map((check) => <span key={check.id} className={check.status === 'passed' ? 'passed' : 'unchecked'}>{check.name}：{check.status === 'passed' ? '通过' : check.status === 'not_run' ? '未验证' : check.status === 'failed' ? '失败' : '跳过'}</span>)}</div></details>}
-  </div>;
 }
 
 function AttentionCard({ run, busy, onAnswer }: { run: RunDto; busy: boolean; onAnswer: (answer: AnswerRequestDto) => void }) {

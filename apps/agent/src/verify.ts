@@ -44,27 +44,32 @@ export async function linkDependencies(workspace: string) {
 }
 
 export async function verifyApplication(workspace: string, evidenceRoot: string, signal: AbortSignal,
-  report: (check: CheckValue) => void) {
+  report: (check: CheckValue) => void, activity: (message: string) => void = () => {}) {
   await mkdir(evidenceRoot, { recursive: true });
   await linkDependencies(workspace);
   const checks: CheckValue[] = [];
   const checkCommand = async (kind: 'typecheck' | 'build', args: string[]) => {
+    const label = kind === 'typecheck' ? 'TypeScript 类型检查' : 'Vite 生产构建';
+    activity(`开始${label}。`);
     const result = await command(args, workspace, signal);
     await writeFile(path.join(evidenceRoot, `${kind}.log`), result.log);
     const check: CheckValue = { id: `check_${kind}`, kind, name: kind === 'build' ? 'Vite 生产构建' : 'TypeScript 类型检查', required: true,
       status: result.success ? 'passed' : 'failed', summary: result.success ? '命令执行通过' : result.log.slice(-1500), evidenceIds: [`evidence_${kind}`] };
     checks.push(check); report(check);
+    activity(`${label}${result.success ? '通过' : '未通过，已保存检查日志'}。`);
     return result;
   };
   const typed = await checkCommand('typecheck', [require.resolve('typescript/bin/tsc'), '--noEmit']);
   if (!typed.success) return { checks, errors: typed.log };
   const built = await checkCommand('build', [path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js'), 'build']);
   if (!built.success) return { checks, errors: built.log };
+  activity('开始浏览器加载检查：验证页面可加载且无运行时异常。');
   const smoke = await smokeBrowser(path.join(workspace, 'dist'), evidenceRoot, signal);
   const check: CheckValue = { id: 'check_smoke', kind: 'smoke', name: '浏览器加载检查', required: true,
     status: smoke.success ? 'passed' : 'failed', summary: smoke.log.slice(-1500),
     evidenceIds: ['evidence_smoke', ...(smoke.screenshot ? ['evidence_screenshot'] : [])] };
   checks.push(check); report(check);
+  activity(smoke.success ? '浏览器加载检查通过；具体功能行为仍需验收。' : '浏览器加载检查未通过，已保存检查日志。');
   return { checks, errors: smoke.success ? null : smoke.log };
 }
 

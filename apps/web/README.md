@@ -30,7 +30,7 @@ pnpm --filter @atoms/web dev
 
 ## 浏览器测试
 
-默认 `test:e2e` 启动独立 Mock 工作台，并使用系统 Chrome（macOS）或 Playwright Chromium。可通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 指定浏览器。
+默认 `test:e2e` 在独立端口 `http://localhost:5181` 启动 Mock 工作台，不复用或访问现有 5173 服务，并使用系统 Chrome（macOS）或 Playwright Chromium。可通过 `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` 指定浏览器，`ATOMS_MOCK_PORT` 指定独立测试端口。
 
 ```bash
 # 三服务已启动后，显式运行真实服务主流程。不会自动启动或回退 Mock。
@@ -53,10 +53,22 @@ ATOMS_E2E_REAL=1 ATOMS_E2E_PLAN=1 ATOMS_E2E_FAKE_RUNTIME=1 pnpm --filter @atoms/
 
 ## 当前验证记录
 
-- 类型检查、生产构建、20 项单元测试通过。
-- 独立 Mock 浏览器测试 3 项通过；已有真实项目用例默认按条件跳过。
+- 类型检查、生产构建、30 项单元测试通过。
+- 独立 Mock 浏览器测试 5 项通过（含长等待、修复与历史恢复）；已有真实项目用例默认按条件跳过。
 - 完整后端 + Runtime + Fake DSH 的浏览器主流程 1 项通过（真实 React 构建、计划确认、预览交互/持久化、修改和回滚）。
 - 生产产物仅含 index.html、JS/CSS，没有 Mock Service Worker、模拟预览 HTML 或 Mock handler bundle。
 - 截图在 `test-results/workspace-generation-refre-88c41-e-modification-and-rollback/` 的 dashboard.png 和 workspace.png。
+
+## 过程反馈
+
+任务卡默认展示当前真实阶段及说明、总耗时/阶段耗时、最后执行活动时间、API 同步状态、必要检查结果和文件变更摘要。超过 45 秒无新执行结果时显示等待说明和停止入口，不提供虚构百分比或剩余时间。
+
+API 轮询成功与 Runtime 有新活动分别统计；空轮询及 API 恢复通知不会推进“最后执行活动”。终态计时使用任务 updatedAt 冻结。验证结果仅统计已返回的类型/构建/页面运行检查，未返回标“待结果”。修复阶段保留规划与生成里程碑。
+
+可展开时间线从公共 `activity.recorded` 和业务事件形成。刷新后分页读取 after=0 的历史，仅恢复展示状态；不会把历史 run.updated 应用到最新 workspace，也不会推进增量工作区游标。事件按项目 seq 去重，时间保留源 occurredAt；界面最多展示最近 200 条活动，阶段起点仍从完整任务历史计算。
+
+新增反馈单元测试覆盖分页竞态、N/N+1 游标隔离、API 消息与 Runtime 活动区分、延迟回放、修复里程碑和必要检查计数。Mock 中 `[long-wait]` 仅用于冻结模拟生成阶段，配合测试时钟验证等待体验；它不影响真实服务或模型行为。
+
+只读历史截图可运行 `node scripts/capture-project.mjs <已完成的projectId>`。该脚本只允许 GET 和体验码登录，拦截其他写请求，不创建或修改任务；输出 `test-results/real-history-timeline.png`。
 
 详见 [并行计划](../../docs/parallel-plan.md) 与 [验收](../../docs/acceptance.md)。

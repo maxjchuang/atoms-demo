@@ -1,0 +1,57 @@
+import { test, expect } from '@playwright/test';
+
+const real = process.env.ATOMS_E2E_REAL === '1';
+async function create(page: import('@playwright/test').Page, prompt: string) {
+  await page.goto('/');
+  await page.getByRole('button', { name: '开启体验' }).click();
+  await page.getByLabel('体验码', { exact: true }).fill('atoms-demo-2026');
+  await page.getByRole('button', { name: '进入创作空间' }).click();
+  await expect(page.getByRole('dialog')).toBeHidden();
+  await page.getByLabel('应用需求').fill(prompt);
+  await page.getByRole('button', { name: '开始构建', exact: true }).click();
+  await expect(page.locator('.feedback-card')).toBeVisible();
+}
+test('long wait remains honest while API polling succeeds, and refresh rebuilds history', async ({ page }) => {
+  test.skip(real, 'Mock-only clock and stalled-response scenario.');
+  await page.clock.install();
+  await create(page, '[long-wait] 检查长等待的过程反馈');
+  await expect(page.locator('.current-activity strong')).toHaveText('编写代码');
+  await expect(page.getByText('2 个文件有变更记录')).toBeVisible();
+  await page.locator('.activity-details summary').click();
+  await expect(page.locator('.execution-timeline').getByText('src/App.tsx', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('2 个文件有变更记录')).toBeVisible();
+  const before = await page.evaluate(() => Date.now());
+  await page.clock.setSystemTime(new Date(before + 125000));
+  await expect(page.getByText('已超过 45 秒尚未收到新的执行结果。', { exact: false })).toBeVisible();
+  await expect(page.getByText('API 状态同步正常', { exact: true })).toBeVisible();
+  await expect(page.locator('.last-activity strong')).toContainText('2分');
+  await page.locator('.feedback-card').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath('long-wait.png'), fullPage: true });
+  await page.getByRole('button', { name: '停止任务' }).click();
+  await expect(page.locator('.run-card-top > strong').filter({ hasText: /^已取消$/ })).toBeVisible();
+});
+test('repair preserves earlier milestones and checks/files survive history replay', async ({ page }) => {
+  test.skip(real, 'Mock-only deterministic repair scenario.');
+  await create(page, '展示修复过程的便签墙');
+  await expect(page.locator('.current-activity strong')).toContainText('修复问题', { timeout: 15000 });
+  await expect(page.locator('[data-phase="planning"]')).toHaveClass('done');
+  await expect(page.locator('[data-phase="generating"]')).toHaveClass('done');
+  await expect(page.getByText('必要检查已完成 1/3')).toBeVisible();
+  await expect(page.locator('.run-card-top > strong').filter({ hasText: /^已交付$/ })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText('必要检查已完成 3/3')).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('必要检查已完成 3/3')).toBeVisible();
+  await expect(page.getByText('2 个文件有变更记录')).toBeVisible();
+  await page.locator('.activity-details summary').click();
+  await expect(page.locator('.execution-timeline').getByText('src/App.tsx', { exact: true })).toBeVisible();
+  await expect(page.locator('.execution-timeline').getByText('build：失败', { exact: true })).toBeVisible();
+  await expect(page.locator('.execution-timeline').getByText('build：通过', { exact: true })).toBeVisible();
+  const rows = await page.locator('.execution-timeline li').count();
+  const elapsed = await page.locator('.execution-times').innerText();
+  await page.waitForTimeout(1100);
+  await expect(page.locator('.execution-times')).toHaveText(elapsed, { useInnerText: true });
+  await expect(page.locator('.execution-timeline li')).toHaveCount(rows);
+  await page.locator('.feedback-card').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: test.info().outputPath('activity-timeline.png'), fullPage: true });
+});

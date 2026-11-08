@@ -2,11 +2,12 @@ import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { Plan, type StartExecutionDto } from '@atoms/contracts';
-import { collectText, putFile } from './files.js';
+import { collectText } from './files.js';
 import { fakeApplication } from './template.js';
 import { verifyDshToolPolicy } from './dsh-policy.js';
 import { requestStructuredJson, type ModelResult } from './structured-output.js';
 import type { DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
+import { applySourceEdit, type FileChange } from './source-edits.js';
 
 export type PlanValue = ReturnType<typeof Plan.parse>;
 export interface AdapterContext {
@@ -14,6 +15,7 @@ export interface AdapterContext {
   signal: AbortSignal; report: (content: string) => void;
   meter: (usage: { modelSteps?: number; inputTokens?: number; outputTokens?: number }) => void;
   remainingOutputTokens: () => number;
+  fileChanged: (event: FileChange) => void;
 }
 export interface ModelAdapter {
   readonly mode: 'fake' | 'dsh';
@@ -46,9 +48,13 @@ export class FakeDshAdapter implements ModelAdapter {
     const retained = (current['src/App.tsx']?.includes('aria-label="搜索便签"') ? ' 搜索' : '')
       + (current['src/style.css']?.includes('#20211e') ? ' 深色' : '');
     const files = fakeApplication(context.request.projectId, context.request.prompt + retained, Boolean(errors));
+    context.report(`准备应用 ${Object.keys(files).length} 个确定性样例源文件。`);
+    let changed = 0;
     for (const [name, content] of Object.entries(files)) {
-      abort(context.signal); await putFile(context.workspace, name, content);
+      abort(context.signal);
+      if (await applySourceEdit(context.workspace, name, content, context.fileChanged)) changed++;
     }
+    context.report(`样例源文件已应用：${changed} 个文件实际发生变化。`);
     return '确定性便签墙样例已更新；此结果不代表真实模型生成。';
   }
   async close(_executionId: string) { }
@@ -67,6 +73,8 @@ export class DshAdapter implements ModelAdapter {
     const { DeepSeekHarness } = await import('@deepseek-ai/dsh-sdk-client');
     const remainingTokens = context.remainingOutputTokens();
     if (remainingTokens <= 0) throw new Error('Model output budget exhausted');
+    const roleLabel = role === 'router' ? '规划' : '编码';
+    context.report(`正在启动${roleLabel}模型会话。`);
     await mkdir(context.home, { recursive: true });
     const patch = path.join(context.home, 'atoms-no-tools.yml');
     await writeFile(patch, ['tool-fs', 'tool-working-directory', 'persistent-bash', 'persistent-pwsh']
@@ -86,10 +94,12 @@ export class DshAdapter implements ModelAdapter {
     const onAbort = () => { void harness.close(); };
     context.signal.addEventListener('abort', onAbort, { once: true });
     try {
+      await harness.start();
       const sessionName = `${role}_${context.request.executionId}`;
       const sessionRecord = path.join(context.home, `${sessionName}.json`);
       const saved = existsSync(sessionRecord) ? JSON.parse(await readFile(sessionRecord, 'utf8')) as { sessionId: string } : null;
       const session = saved ? await harness.resumeSession(saved.sessionId) : harness.session(sessionName);
+      context.report(`${roleLabel}模型会话已就绪，开始请求${role === 'router' ? '实现计划' : 'React 多文件代码'}。`);
       const result = await session.run(prompt, { onNotification(notification) {
           if (notification.method !== 'session.event') return;
           const event = notification.params.event as { type?: string; data?: { usage?: { inputTokens?: number; outputTokens?: number } } } | undefined;
@@ -118,7 +128,11 @@ export class DshAdapter implements ModelAdapter {
   private async json(context: AdapterContext, role: 'router' | 'worker', prompt: string) {
     return requestStructuredJson(role, (retry) => this.withSession(context, role, prompt + (retry
       ? '\nYour last output was empty, truncated, or malformed JSON. Return a complete compact JSON object only. Reduce code size, avoid long commentary, and always finish all string values and braces.' : '')),
-    () => context.report(`${role === 'router' ? '负责人' : 'Worker'} 的结构化结果不完整，正在进行一次有界重试。`));
+    (error) => {
+      const reason = error.reason === 'output_limit' ? '输出达到本次响应上限，未形成完整结果'
+        : error.reason === 'empty_response' ? '未返回可用的结构化结果' : '返回结果不符合 JSON 格式';
+      context.report(`${role === 'router' ? '规划模型' : '编码模型'}${reason}；开始结构化重试（1/1）。`);
+    });
   }
   async plan(context: AdapterContext) {
     context.report('项目负责人正在整理实现计划与验收项。');
@@ -138,8 +152,14 @@ export class DshAdapter implements ModelAdapter {
       if (!(name.startsWith('src/') || name === 'index.html') || typeof content !== 'string' || !/\.(tsx?|css|html|json)$/.test(name)) throw new Error('DSH attempted a non-allowlisted edit');
       bytes += Buffer.byteLength(content);
       if (bytes > 500000) throw new Error('Source output exceeds budget');
-      await putFile(context.workspace, name, content);
     }
+    context.report(`已收到 ${edits.length} 个源文件结果，开始按路径白名单写入工作目录。`);
+    let changed = 0;
+    for (const [name, content] of edits) {
+      abort(context.signal);
+      if (await applySourceEdit(context.workspace, name, content as string, context.fileChanged)) changed++;
+    }
+    context.report(`源文件已应用：${changed} 个文件实际发生变化，接下来进行验证。`);
     return output.summary;
   }
   async close(executionId: string) { await this.harnesses.get(executionId)?.close(); }

@@ -117,3 +117,37 @@ ATOMS_FAKE_SERVICES=1 ATOMS_WEB_URL=http://localhost:<独立工作台端口> \
 ```
 
 该脚本不属于默认 Mock E2E；环境未就绪时不运行，不把 MSW 结果当作三服务证据，也不承诺服务器配置未知时无付费调用。运行结果另行记录，截图写 `review-artifacts/m1-services/`。
+
+## M2 可信交付工作台
+
+新增独立 `@atoms/contracts/delivery` 消费，不扩展旧 execution/conversation DTO。生产不加载 Mock，不触发模型调用。
+
+- 默认预览与版本列表显示 API 权威质量、发布状态和逐项缺口。`partial` 自动发布，required 仍保留；没有接收部分交付按钮。报告 final/基础检查通过都不等于已发布。
+- 独立报告可按当前/已保留任务或版本选择；失败任务无新 Version 也可显示失败原因与尝试，预览仍由 v1 当前成功版本指针决定。legacy 由 API 明确返回；HTTP/协议错误会保留真实错误。
+- 报告展示原始目标、细化约定、每项 required/coverage/result、失败→修复尝试、来源与冻结审计。受控回归明确标注注入；没有来源字段时显示未记录，不猜测模型自然错误。
+- diff 以不可变版本为对象，默认父版/首版空基线；安全文本 hunk、增删改、二进制摘要、截断与固定比较分页。失败候选不虚构公开版本 diff。
+- 证据先取 typed descriptor，核对 report revision/source/attempt/spec/plan 与文件 sha256/bytes/MIME，再显示转义文本/PNG/JPEG或附件下载；损坏、过期、缺失与错版均显示错误。清理失效对象 URL，不执行 HTML/SVG/trace。
+- 源 ZIP 先读取 export view，用明确 subject 的固定路由下载并核对实际 archive SHA-256/bytes；只说明实际报告中的 Node/pnpm/OS/arch 与独立 lockfile，不宣称跨平台均通过。历史源码下载显式未验证。下载不建 Run。
+- 恢复版区分当前 subject、直接恢复源与最初实际验证源，明确复用原约定证据且未重跑。
+
+独立 Mock：
+
+```bash
+pnpm --filter @atoms/web exec playwright test e2e/delivery.spec.ts
+```
+
+Mock 通过真实 fetch/MSW 边界消费共享 fixtures，`/__mock/delivery/seed` 仅用于指定合成情景；不能证明真实模型、浏览器解释器或干净构建已执行。模拟 ZIP 是明确的空 ZIP，只验证前端授权与指纹流程，不当作可运行源码。测试会等待 Mock 启动完成，未声明 API fail-closed，不落到 live 服务。
+
+实际 Fake 三服务浏览器脚本已准备，默认不会运行。须主管先提供独立工作台/API/Agent、确认 Fake Router/Worker 和 M2 execution flavor；拒绝 localhost:5173、拒绝 MSW。可显式复用 G3 已完成项目，只验证报告/证据/精确 ZIP/diff/刷新，零新 Run；不传项目时会经 UI 新建一轮 Fake 生成。
+
+```bash
+ATOMS_FAKE_SERVICES=1 ATOMS_WEB_URL=http://localhost:<隔离工作台端口> \
+  ATOMS_DELIVERY_PROJECT=<已有M2项目ID> \
+  pnpm --filter @atoms/web exec node scripts/check-delivery-services.mjs
+```
+
+脚本/截图范围会单独记录在 `review-artifacts/m2-services/result.json`。仅 HTTP 健康不算 UI 验收；当前 Mock 证据不抵充实际服务或真实 DSH G4。M3 公网与 OS 隔离仍独立。
+
+M2 G1 独立验证记录（2026-11-08）：共享 contracts check 与 80 项契约测试、Web 50 项单元测试、生产 build 通过。完整浏览器回归 37 passed / 1 条件 skip，随后 M2 最终 25 项定向聚合全部通过（含 required manual / unsupported / 支持但 not_run 三类合法 partial）；最后对象归属文案调整另定向复验 complete/partial/blocked/截图证据，不重复声称全量重跑。所有浏览器写入均在独立 5183 Mock，没有访问 live 5173、没有调用模型。正文 14px / 元信息 12px，两尺寸报告与长行 diff 无页面横向溢出。
+
+稳定证据：`review-artifacts/m2/partial-preview-{1440,1366}-mock.png`、`blocked-preview-{1440,1366}-mock.png` 为默认预览，明确当前预览版本及本次任务归属；另有 `complete-mock.png`、`partial-mock.png`、`repair-mock.png`、`diff-mock.png`。全部显式 Mock，截图不随代码提交；实际三服务脚本尚未运行，等待独立集成环境，不能将本记录视为 G2/G3/G4 完成。

@@ -81,3 +81,25 @@ Before admission it authenticates normal public reads, verifies current real-mod
 It creates exactly one new Run in the same project with the original fixed goal and unchanged 8-step/65,536-input/24,576-output/900-second cap, then at most the originally unsubmitted sharing ask under the existing 3-step/90-second cap. Success expects two total Runs, one Version and one generation used; failure stops and retains all evidence. It never reads or reinstalls a provider key, answers Attention, automatically creates another task, or expands budgets. This exception has unit/guard validation only until the manager executes it; it is not an additional model or external-browser proof.
 
 主管独立通过该限定入口的5项resume/缺guard负例及原5项Stage2测试，共10/10，语法/diff检查通过。原live API记录、原不可变报告及nullable用量在执行前继续由脚本严格核对；本条验收不触发新增Run，后续新增模型任务必须主管双guard明确执行。
+
+### Reviewed pre-admission transport continuation
+
+The first once-authorized resume was blocked by the gateway's retained drain pause, before the Code POST reached API admission. Its ledger is `real-smoke-1794179206574.json`; it has no new Run/Turn. The original consumed receipt is retained. Ordinary `m3:up` now explicitly pauses first, waits for actual API and authenticated Agent health, verifies current ready isolation against a stable configured metadata tuple, and only then unpauses. An unconfigured first startup stays paused; health/binding errors never open admission. This is verified with live HTTP synthetic endpoints and the actual gateway, without providers or public container changes.
+
+The following is a separate **same-session, same-key, same-body transport continuation**, not a new mandate. Its plan is safe by default:
+
+```sh
+pnpm m3:smoke-real --project atoms-m3-public --continue-reviewed-pre-admission "$HOME/.atoms-m3/public/real-smoke-1794179206574.json"
+```
+
+Only the manager may execute after reviewing the startup correction:
+
+```sh
+ATOMS_ALLOW_M3_REAL_SMOKE=1 ATOMS_ALLOW_M3_PRE_ADMISSION_CONTINUATION=1 pnpm m3:smoke-real --project atoms-m3-public --run --continue-reviewed-pre-admission "$HOME/.atoms-m3/public/real-smoke-1794179206574.json"
+```
+
+The operator checks both frozen ledgers, both identical consumed receipt copies, the private backup and original-ledger hashes, the exact reviewed key, original immutable failed report, Preparation and current state. It restores the original still-valid session only from its unique API-owned persisted login response and verifies session ID, cookie token SHA, code owner/activity and expiry. That Cookie is held only in operator memory: no new login, output, new credential file or session. Failure to recover uniquely or expiry is a hard refusal.
+
+If the original session/key/body already has an API idempotency receipt, the operator verifies its exact Run and continues observing it **without another POST**. Otherwise current state must still be one failed Run, zero generation/coordination used or reserved, no version or pending work; it creates an additional exclusive continuation receipt before the one allowed transport replay, retaining the same key and canonical body. It never clears the consumed receipt, resets quota, creates a project/new mandate, or retries a second transport invocation. All original unknown usage remains unknown. The existing at-most-one new Code plus at-most-one ask budget and final two-Runs/one-Version/used-one checks remain unchanged. No actual continuation/model operation has been run by the implementation lane.
+
+主管独立通过本次完整31项host/gateway/mode/guard/continuation回归与4个语法入口检查；live synthetic gateway lifecycle测试属于该回归，不冒充真实模型或新部署操作。实际同会话传输续跑仍须主管显式guard执行。

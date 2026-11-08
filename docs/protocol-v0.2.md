@@ -75,6 +75,8 @@ API 根据 mode、结果种类、来源、权限、额度、允许操作和基�
 | GET `/clarifications/:clarificationId` | `Clarification` | 历史问题/答复关联可恢复 |
 | GET `/projects/:projectId/memory` | `ProjectMemoryView` | 已确认目标/决定与来源的可审计视图，不返回 DSH session 或隐式推理 |
 | GET `/session` | `CoordinationSession` | 原生成配额与独立消息配额并列，不往 v1 Session 塞新字段 |
+| GET `/coordination-turns/:turnId/actions/:actionId` | `TurnActionDescriptor` | 返回宿主标签和 AvailableAction 字段，不含签名 URL |
+| POST `/coordination-turns/:turnId/actions/:actionId/resolve` | `{}` → `ResolveActionResponse` | 点击时解析新链接/引用/真实说明，绝不取消或创建 Run |
 
 快捷操作仍经过消息入口记录用户意图与回复；直接 GET Run/版本状态不触发模型或消息扣额。
 
@@ -226,6 +228,8 @@ CoordinationSession 包含原生成 quota 的只读投影与独立 `coordination
 facts 是 Agent 专用脱敏子集，**不能直接序列化完整 Version/Session/Workspace DTO 给模型**。允许项目标题、版本 ID/摘要、Run ID/真实状态/阶段、检查摘要、功能是否可用、部署范围及时间等必要事实；禁止 signed preview URL、Cookie、模型 Key、服务 token、宿主/内部路径和任意凭证化链接。
 
 分享和下载以 `availableActions=[{id,kind,versionId?,available,reason?}]` 及受控版本引用表示。Router 只能引用 action ID；用户点击后由 API 根据当前归属、有效期及实际能力生成新链接。模型不能看到旧签名地址或自己拼 URL。sourceArtifact 使用 Artifact ID/manifest hash/允许路径，不使用内部 HTTP 地址；实际读取由受控适配器完成并受下表预算约束。
+
+宿主 action 查找/解析只能使用该 Turn 首次固化 context.facts.availableActions 中的 action，不猜测 ID、不使用模型 URL。GET 返回 turnId、label 和原 AvailableAction 字段；POST resolve 仍需会话/归属/幂等检查，返回 `{turnId,actionId,resolution}`。resolution 按 kind 分为：preview 的新 url+expiresAt+versionId，source_download 的宿主相对下载 path+versionId，view_run 的 runId，deployment_help 的真实说明，cancel_run 的明确 runId+expectedRevision+requiresExplicitAction=true。取消引用必须由用户另行显式执行，解析本身不取消、不建 Run、不扣生成次数。目标失效或能力不再可用返回 409 CONFLICT。新签名 URL 仅发给浏览器，不存入消息、Router 记忆或后续模型上下文。
 
 “如何分享这个应用”应得到基于真实部署能力的说明。如果平台仅本机预览，不能编造公网分享链接；源码导出、预览有效期、后续部署条件以 facts 为准。
 

@@ -8,6 +8,7 @@ import {
   CoordinationFacts, ProjectMemoryView, RouterMemory, Clarification, ChangeProposal, RouterResult,
   StartCoordinationRequest, CoordinationExecutionSnapshot, CoordinationSourceEvent, CancelCoordinationResponse,
   CoordinationApiError, AcceptProposalResponse,
+  TurnActionDescriptor, ResolvedAction, ResolveActionResponse, ResolveActionRequest,
 } from '../src/conversation.js';
 import * as fixture from '../src/conversation-fixtures.js';
 
@@ -18,6 +19,24 @@ test('v0.2 is isolated: legacy versions, DTOs and execution event variants stay 
   assert.equal(ProjectEvent.safeParse(fixture.consultEvents[0]).success, false);
   assert.equal(ConversationEvent.safeParse(executionScenarios[0].events[0]).success, false);
   assert.ok(agentEvents.every((event) => event.protocolVersion === '0.1.0'));
+});
+
+test('host action descriptors resolve through browser-only typed results without changing model facts',()=>{
+  TurnActionDescriptor.parse(fixture.actionExamples.descriptor);ResolveActionRequest.parse({});
+  ResolveActionResponse.parse(fixture.actionExamples.source);ResolveActionResponse.parse(fixture.actionExamples.preview);
+  ResolveActionResponse.parse(fixture.actionExamples.cancel);
+  ResolvedAction.parse({kind:'deployment_help',message:'当前仅本机预览，公网部署尚未完成。'});
+  ResolvedAction.parse({kind:'view_run',runId:fixture.controlTargetRun.id});
+  assert.equal(CoordinationFacts.safeParse({...fixture.startCoordination.context.facts,availableActions:[fixture.actionExamples.preview]}).success,false);
+});
+
+test('action resolving never itself authorizes cancellation and source links stay host-relative',()=>{
+  assert.equal(ResolvedAction.safeParse({kind:'cancel_run',runId:fixture.controlTargetRun.id,expectedRevision:2,requiresExplicitAction:false}).success,false);
+  assert.equal(ResolvedAction.safeParse({kind:'source_download',versionId:'version_demo',path:'https://evil.test/source.zip'}).success,false);
+  assert.equal(ResolveActionRequest.safeParse({execute:true}).success,false);
+  for(const url of ['javascript:alert(1)','data:text/html,hello','file:///etc/passwd','ftp://example.test/app']){
+    assert.equal(ResolvedAction.safeParse({...fixture.actionExamples.preview.resolution,url}).success,false);
+  }
 });
 
 test('default mode is auto; typed selection requires explicit reply binding and forbids arbitrary labels', () => {

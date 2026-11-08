@@ -332,3 +332,18 @@ export type RouterResultDto = z.infer<typeof RouterResult>;
 export type CoordinationExecutionSnapshotDto = z.infer<typeof CoordinationExecutionSnapshot>;
 export type CoordinationSourceEventDto = z.infer<typeof CoordinationSourceEvent>;
 export type ConversationEventDto = z.infer<typeof ConversationEvent>;
+
+/** Additive host-action lookup. Resolutions are browser-only, never model facts. */
+export const TurnActionDescriptor = AvailableAction.extend({turnId: Id, label: z.string().min(1).max(240)}).strict();
+export const ResolveActionRequest = z.object({}).strict();
+export const ResolvedAction = z.discriminatedUnion('kind', [
+  z.object({kind: z.literal('preview'), versionId: Id, url: z.string().url().refine(value=>/^https?:\/\//i.test(value),'Preview requires HTTP(S)'), expiresAt: Timestamp}).strict(),
+  z.object({kind: z.literal('source_download'), versionId: Id,
+    path: z.string().regex(/^\/api\/v1\/versions\/[a-z][a-z0-9_-]{2,127}\/source\.zip$/)}).strict(),
+  z.object({kind: z.literal('view_run'), runId: Id}).strict(),
+  z.object({kind: z.literal('deployment_help'), message: z.string().min(1).max(12000)}).strict(),
+  z.object({kind: z.literal('cancel_run'), runId: Id, expectedRevision: Revision, requiresExplicitAction: z.literal(true)}).strict(),
+]);
+export const ResolveActionResponse = z.object({turnId: Id, actionId: Id, resolution: ResolvedAction}).strict();
+export type TurnActionDescriptorDto = z.infer<typeof TurnActionDescriptor>;
+export type ResolvedActionDto = z.infer<typeof ResolvedAction>;

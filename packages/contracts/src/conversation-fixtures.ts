@@ -184,3 +184,10 @@ export const scenarios = {
   interrupted: { ...consultTurn, status: 'interrupted' as const, result: null,
     error: { code: 'INFERENCE_INTERRUPTED' as const, message: '协调推理被中断，尚未执行应用修改', retryable: false } },
 };
+
+export const actionExamples = {
+  descriptor: {turnId: consultTurn.id,id:'action_source',kind:'source_download' as const,versionId:version.id,available:true,label:'下载源码'},
+  source: {turnId:consultTurn.id,actionId:'action_source',resolution:{kind:'source_download' as const,versionId:version.id,path:`/api/v1/versions/${version.id}/source.zip`}},
+  preview: {turnId:consultTurn.id,actionId:'action_preview',resolution:{kind:'preview' as const,versionId:version.id,url:'https://preview.example.test/p/fresh-token/index.html',expiresAt:'2026-11-08T10:00:00.000Z'}},
+  cancel: {turnId:consultTurn.id,actionId:'action_cancel',resolution:{kind:'cancel_run' as const,runId:controlTargetRun.id,expectedRevision:2,requiresExplicitAction:true as const}},
+};

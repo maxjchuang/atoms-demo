@@ -2,7 +2,7 @@
 
 以 DeepSeek Harness（DSH）为 Agent 底座的 React 应用生成工作台。
 
-当前已完成 **本机生成链路的最小子集验证**：三条开发线按 v0.1.0 协议实现独立服务；实际 API + Agent Runtime + **真实 DSH/DeepSeek API** 的生成、构建、发布、修改、恢复和重启持久化已验证（Agent 执行，主代理审查产物与截图）。原 G4 还要求真实回滚后继续修改，这一项目前仅 Fake 集成覆盖，因此完整 G4 尚未闭合。主代理另对真实第二版产物完成只读浏览器行为验收：新增、编辑、搜索匹配/空结果/清空、刷新持久化及无页面错误均通过，不调用模型或修改源码。自动 manifest 的 behavior 仍保留原始 not_run，追加样例证据不等于通用行为验收；公网隔离 G5 尚未通过。详见 [实施记录](docs/implementation-status.md)。
+当前已完成 M1 项目协调，并在隔离分支通过 M2 可信交付验收：真实 React 多文件生成、修改、恢复后显式接受 exact 提案再修改、冻结行为计划、同计划浏览器验证、独立安装源码 ZIP、只读咨询和严格重启。另一次受控持久化故障由真实 DeepSeek 修复并复验通过；三次业务交付仍诚实标为 partial。M2 本机升级进行中，Docker 隔离与公网分享由 M3 单独验收。详见 [当前 M2 状态](docs/m2-delivery-status.md) 和 [能力路线图](docs/capability-roadmap.md)。
 
 ## 本地启动
 
@@ -32,15 +32,13 @@ ATOMS_DATA_ROOT=data/review-real pnpm dev
 
 当前只验证本机开发环境，**尚未交付 Docker 沙箱或公网生成服务**。不要将开发服务直接当成已通过隔离验收的公开部署。
 
-本轮过程反馈已实现并验证：Agent 增加实际阶段/检查说明，后端保存源时间并提示断连/恢复，前端增加时间线、等待解释和独立同步状态。主代理复验全包 check/build、**79 项测试**、G3 集成及本轮 Mock 浏览器 5 passed / 1 条件 skip，并目视检查真实旧任务时间线。详见 [过程反馈交付记录](docs/progress-feedback.md)。只读问答/意图路由缺口仍未修复，不能将本轮介绍为完整 Router。
-
-过程反馈更新已应用到同一 `data/review-real` 真实模式服务，主代理确认工作台 HTTP 200、API ready 和 DSH Runtime 启动；未触发新任务，原数据/额度保留。
+过程反馈与字体层级已更新；M1 项目 Router 区分咨询和修改，ask 模式硬只读，API 持有权威项目记忆和独立协调/生成预算。阶段证据分别保留于 [M1 状态](docs/m1-coordination-status.md)、[M2 状态](docs/m2-delivery-status.md) 和 [过程反馈记录](docs/progress-feedback.md)。
 
 ## 阅读顺序
 
 首版统一入口：[协议基线 v0.1.0（Markdown）](docs/protocol-baseline-v0.1.md)。
 
-下一阶段为 **M1 项目协调 → M2 可信交付 → M3 隔离公网**。[v0.2 项目消息协调协议](docs/protocol-v0.2.md)、[能力差距与路线图](docs/capability-roadmap.md)及独立 Schema/fixture 已完成 G0 冻结，宿主 action 补充后共享契约为 42 项测试，原 v1 index/fixture/tests 不变。M1 正在独立 worktree 实现；API 方向的独立测试和集成入口见 [M1 实施记录](docs/m1-coordination-status.md)。独立 API/Fake 验证不等于项目持久 Router 或整个 M1 已完成，最终三方与真实模型结果由主代理汇总。
+按 **M1 项目协调 → M2 可信交付 → M3 隔离公网** 推进。协调协议 [v0.2](docs/protocol-v0.2.md) 与独立 [delivery v0.1](docs/protocol-delivery-v0.1.md) 保持原 v1 strict 执行契约兼容；三线各自实现、独立测试，再由主管集成验收。
 
 1. [架构与职责](docs/architecture.md)
 2. [公共 HTTP 协议](docs/public-api.md)
@@ -74,4 +72,4 @@ pnpm test:integration:real
 
 共享包 `packages/contracts` 的修改须由集成人统一处理，避免三方各自定义类型。默认 `data/`（或 `ATOMS_DATA_ROOT`）保存 API 数据、Agent 账本和开发用本地服务凭证，删除前请备份；自定义目录应位于 Git 忽略路径中。生产隔离、Docker 镜像和隧道交付仍需后续门禁验证。
 
-当前 Agent 是**每个 Run 的 Planner + Worker**：跨任务通过源码快照和 `projectMemory` 传递上下文。项目级持久 Router 会话尚未实现，不能将现阶段描述为完整 Super-agent。真实 Worker 使用受控的结构化源码编辑，通用 shell/文件系统模型工具禁用；详见 [DSH 兼容性记录](apps/agent/COMPATIBILITY.md)。
+当前 Agent 包含项目级持久 Router 与独立任务 Worker：API 提供权威记忆、版本基线和授权，Worker 使用冻结验收计划执行生成与有界修复。真实 Worker 使用受控结构化源码编辑，通用 shell/文件系统模型工具禁用；这不等于 OS 沙箱或完整通用 Super-agent。详见 [DSH 兼容性记录](apps/agent/COMPATIBILITY.md)。

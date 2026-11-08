@@ -1,6 +1,6 @@
 # 能力差距与交付路线图
 
-更新日期：2026-11-09。用户选择按 **项目协调 → 可信交付 → 隔离公网** 补齐。M1 已验收并升级本机 live，历史证据保留。M2 已在隔离分支实现、通过完整 Fake/只读 UI，以及真实生成→修改→恢复后显式 exact 修改、质量咨询和严格重启；真实三次均 partial，原 auto 准入断言失败保留，真实失败→修复链尚未观察到。M2 App 未升级用户 live，主仓当前仅合入共享 `a1c7c23`；M3/G5 未开始。最新分项测试和来源见 [M2 状态](m2-delivery-status.md)，不把 Agent 作者 71、主管 focused 18 与此前完整 61 相加。
+更新日期：2026-11-09。用户选择按 **项目协调 → 可信交付 → 隔离公网** 补齐。M1 已验收并升级本机 live，历史证据保留。M2 已在隔离分支实现、通过完整 Fake/只读 UI，以及真实生成→修改→恢复后显式 exact 修改、质量咨询和严格重启；真实三次均 partial，原 auto 准入断言失败保留，另一次独立真实受控故障修复、同计划及精确 ZIP 复验已通过。M2 App 未升级用户 live，主仓当前仅合入共享 `a1c7c23`；M3/G5 未开始。最新分项测试和来源见 [M2 状态](m2-delivery-status.md)，不把 Agent 作者 71、主管 focused 18 与此前完整 61 相加。
 
 现有生成链路和测试记录保留在 [实施记录](implementation-status.md)；M1 新协议见 [v0.2 项目消息协调协议（G0 已冻结）](protocol-v0.2.md)。
 
@@ -15,7 +15,7 @@
 | 持久化、队列、配额、发布边界 | API 单进程 SQLite、项目锁、独立 Runtime 账本、原子发布已验证 | 已实现；单进程 JSON 快照是披露取舍 | M1 增补协调存储，不能重置已有额度/历史 |
 | 版本差异与回滚 | M2 同项目有界源码 diff、不可变恢复、恢复后新 Run 的精确基线/父链已由 Fake 与真实样例验证 | 隔离分支已实现，待合并及 live 安全升级；截断/二进制不伪称完整文本 diff | M2 |
 | 可导出、可复现的 React 项目 | 真实 source ZIP 含 lockfile，干净目录 frozen-lockfile 安装、类型/构建与同一计划复验；旧/新 URL 精确 archive alias | 只证明已测工具链/平台，不宣称任意依赖或跨平台复现 | M2 |
-| 验收约定驱动验证修复 | Seed→模型细化 derived→宿主保守父投影→冻结 DSL；三次真实自动 cases 7/8/8 及 clean ZIP 同计划通过，manual 仍 partial | 实际三 Run 均 attempt_0/repairRound0；真实失败→修复证据待补，语法合法不等于语义完整 | M2 |
+| 验收约定驱动验证修复 | Seed→模型细化 derived→宿主保守父投影→冻结 DSL；三次真实自动 cases 7/8/8 及 clean ZIP 同计划通过，manual 仍 partial | 实际三 Run 均 attempt_0/repairRound0；独立受控故障已补真实修复证据，语法合法不等于语义完整 | M2 |
 | G4：真实生成、修改、验证、回滚后修改 | `ryZwrG` 原两真实 Code 成功；exact/proposed 严格停点后，经主管审阅显式接受恢复 V3 再修改为 V4；真实只读 UI/严格重启通过 | reviewed exact acceptance，不能称第三次 auto 准入通过；旧三次 Prepare 失败保留 | M2 隔离样例已验证，live 未升级 |
 | 受控执行与最小权限 | 模型工具禁用、受控源码应用、子进程环境清理；无每任务 OS 容器隔离 | 原隔离门禁未完成，不能公开执行不可信任务 | M3，公网前硬门禁 |
 | 本机 Docker + 双 Cloudflare 隧道 + 在线链接 | 当前仅本机服务 | G5 未完成，尚无可交付公网生成链接 | M3 |
@@ -27,7 +27,7 @@
 
 最新 M2 `atoms-m2-delivery-ryZwrG` 已有真实恢复 V3 后继续修改为 V4、重新冻结/同计划行为/clean ZIP、签名预览、质量只读咨询、真实只读 UI 和严格重启证据。但原 mixed runner 因 exact 提案保持 proposed 而失败，后续是经明确授权的 reviewed-exact 续跑，不称原 auto 场景通过。总量为 3 Code/4 Version/2 Router，前三次 Preparation 失败与第四次原 runner 失败均保留。
 
-M2 三真实报告均 partial，自动 cases 7/8/8 与 clean ZIP 同计划均通过，manual 和 canonical 父汇总仍明确显示缺口。三者都是首个 attempt、repairRound0，故真实失败→修复链仍未证明；静态代码审查、字符串映射或 Schema 通过不能替代动态执行/语义覆盖。旧样例追加只读行为检查与旧 manifest 的 not_run 也分别保留。
+M2 三真实报告均 partial，自动 cases 7/8/8 与 clean ZIP 同计划均通过，manual 和 canonical 父汇总仍明确显示缺口。三者都是首个 attempt、repairRound0，这些业务 Run 不冒充修复证据；另一次受控故障由真实 DSH 修复并通过同计划和 clean ZIP 复验；静态代码审查、字符串映射或 Schema 通过不能替代动态执行/语义覆盖。旧样例追加只读行为检查与旧 manifest 的 not_run 也分别保留。
 
 ## 3. M1：项目协调
 
@@ -66,7 +66,7 @@ M2 三真实报告均 partial，自动 cases 7/8/8 与 clean ZIP 同计划均通
 3. 至少一个真实代表应用具有自动声明行为验收与失败→修复→复验的真实证据；不伪造原始历史。
 4. 完整 G4 真实样例通过，明确费用、预算、失败和未覆盖项。
 
-当前门禁记录：1、2 及真实恢复后修改/重启/只读 UI 已有受控样例证据；第 3 项的真实失败→修复→复验尚未出现，不以 Fake 或静态检查补造。exact 提案的显式接受满足授权边界，原 runner 的 auto 断言失败不能改写为成功。M2 生产包与工具分项计数见 [M2 状态](m2-delivery-status.md)。
+当前门禁记录：1、2 及真实恢复后修改/重启/只读 UI 已有受控样例证据；第 3 项由独立受控故障的真实 DSH 修复和同计划/clean ZIP 动态复验补齐；明确不是自然生成缺陷。exact 提案的显式接受满足授权边界，原 runner 的 auto 断言失败不能改写为成功。M2 生产包与工具分项计数见 [M2 状态](m2-delivery-status.md)。
 
 ## 5. M3：隔离公网
 

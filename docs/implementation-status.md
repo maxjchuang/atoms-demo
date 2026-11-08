@@ -4,7 +4,7 @@
 
 完整运行要求 **Node.js 24.9.0+、pnpm 10.33.0**；目前在 macOS arm64 / Node.js 26.5.0 验证。Node 22 只能覆盖部分基础能力，不满足当前固定 DSH 版本要求。
 
-最新增量为 M2 隔离实现：主管 contracts 86、API 55、Web 56；Agent 作者报告 71，主管此前完整 61 与新 18 focused 分开记录；编排工具 22 另列。完整 Fake `Vd1rPn`、第四真实空间 `ryZwrG` 的生成/修改/恢复后 reviewed-exact 修改、真实只读 UI 与严格重启已通过。三次真实质量均 partial，均 attempt_0/repairRound0；没有真实失败→修复链。原 auto/exact 严格断言失败保留，不能称第三次 auto 准入成功。M2 App 未升级 live，主仓当前仅共享 `a1c7c23`；M3 未开始。
+最新增量为 M2 隔离实现：主管 contracts 86、API 55、Web 56；Agent 作者报告 71，主管此前完整 61 与新 18 focused 分开记录；编排工具 22 另列。完整 Fake `Vd1rPn`、第四真实空间 `ryZwrG` 的生成/修改/恢复后 reviewed-exact 修改、真实只读 UI 与严格重启已通过。三次真实质量均 partial，均 attempt_0/repairRound0；另一次独立真实受控故障修复与同计划/clean ZIP 复验通过（1 模型步骤、9,931 有效输入、4,842 输出），不冒充自然生成失败。原 auto/exact 严格断言失败保留，不能称第三次 auto 准入成功。M2 App 未升级 live，主仓当前仅共享 `a1c7c23`；M3 未开始。
 
 M1 应用及本机 live 安全升级已完成，历史 148 项（42 / 30 / 34 / 42）、六轮真实 Router + Fake Worker、分段浏览器与缓存计量修正记录保留于 [M1 状态](m1-coordination-status.md)。此前 79 项与旧 G3/UI 同样保留，不与 M2 新计数混算。
 
@@ -16,7 +16,7 @@ M1 应用及本机 live 安全升级已完成，历史 148 项（42 / 30 / 34 / 
 | --- | --- |
 | Fake 全链路 | `atoms-m2-delivery-Vd1rPn` exit 0，实际 Runtime/Fake Model + 编译/DSL/干净 ZIP，3 Code/2 Router/只读 UI/严格重启；质量 complete/complete/partial |
 | 真实代码链 | `atoms-m2-delivery-ryZwrG` 前两真实 Code 成功；恢复 V3 后 exact 提案保持 proposed，使原 runner exit 1；主管审阅并显式接受后第三 Code 发布 V4，独立 resume exit 0 |
-| 真实交付质量 | 三次均 partial；自动 cases 7/8/8 和 clean ZIP 同计划均 passed；manual leaf/父汇总缺口保留；均 repairRound0，无真实失败修复证据 |
+| 真实交付质量 | 三次均 partial；自动 cases 7/8/8 和 clean ZIP 同计划均 passed；manual leaf/父汇总缺口保留；均 repairRound0，业务 Run 无失败；独立受控真实修复已验收 |
 | 授权与次数 | 第三 Seed=explicit_proposal_acceptance，base/parent=恢复 V3；总3 Code/4 Version/2 Router。原 auto Turn 仍 proposed；最后 ask/consult 只读，不增第四 Run |
 | 原证据与恢复 | 原2 Run/3 Version（除 URL 缓存）、110证据文件及原失败日志不变；真实只读 UI 与 API/Runtime sealed 严格重启通过，证据详见 M2 状态/最终 ledger |
 | 历史失败 | 前三真实 Preparation 失败 `PMMN5g/epad1z/HaEXjt`、第四次原 auto 断言失败和首次 resume 备份拒绝均保留，未复活/抹账 |
@@ -136,7 +136,7 @@ pnpm dev:demo
 
 ## 7. 尚未通过的门禁与限制
 
-- M2 已补充恢复后真实修改、同计划行为/clean ZIP、真实只读 UI与严格重启；原 auto runner exact/proposed 断言仍失败，后续是显式接受。真实三Run均partial、首attempt/round0，真实失败→修复门禁仍未证明；不把静态审阅/fixture当动态或通用语义保证。
+- M2 已补充恢复后真实修改、同计划行为/clean ZIP、真实只读 UI与严格重启；原 auto runner exact/proposed 断言仍失败，后续是显式接受。真实三Run均partial、首attempt/round0，独立受控故障已完成真实修复及同计划/clean ZIP 复验；不把静态审阅/fixture当动态或通用语义保证。
 - G2 浏览器与真实 API/Runtime（显式 Fake DSH）主流程已由主代理亲自复验通过，Mock 浏览器 3 项已通过；不代表真实模型的 G4 或任意行为覆盖。
 - G5 Docker 操作系统隔离、两个 Cloudflare 临时隧道、公网 Cookie/Origin 和预览资源验收尚未完成。
 - 本机验证不等于容器沙箱已安全隔离。不得开放公网生成或向用户宣称生产就绪。
@@ -145,4 +145,4 @@ pnpm dev:demo
 - DSH 底座版本固定；扩展点和模型能力需以兼容性记录及真实测试为依据。
 - M1 live 已升级；M2 App仍未合并升级用户live，主仓当前仅共享a1c7c23；安全drain/停服/完整备份与升级需主管另行安排。有限Router和本次exact续跑不保证所有表达分类正确，不代表通用Super-agent或M3完成。
 
-各阶段检查、Fake、历史真实子集及新增 M2 reviewed-exact 真实链路分别保留来源。后续变更按影响范围重验；真实失败修复证据、M2 App安全升级与M3/G5仍作为明确后续工作。
+各阶段检查、Fake、历史真实子集及新增 M2 reviewed-exact 真实链路分别保留来源。后续变更按影响范围重验；M2 App安全升级与M3/G5仍作为明确后续工作。

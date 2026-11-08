@@ -47,13 +47,28 @@ pnpm test:coordination
 
 M1 runner 检查咨询、记忆、auto 建 Run、真实 React 构建/发布、ask 提案、宿主状态/action、消息级澄清、普通 Run question、exact 冲突、API/Agent 重启和双事件回放。主代理已运行的 `--no-web` 仅包含 API/Runtime 链路，不等于 Web 浏览器验收；它只跳过 Web HTTP 启动，不降低真实编译/生成应用浏览器 smoke 检查。
 
-真实模式不自动启用，需根 `.env` 的本地 Key 和显式授权：
+真实 NLP 模式不自动启用，需根 `.env` 的本地 Key 和显式授权：
 
 ```bash
 ATOMS_ALLOW_REAL_COORDINATION_INTEGRATION=1 ATOMS_KEEP_TEST_DATA=1 pnpm test:coordination:real --no-web
 ```
 
-该命令消耗模型额度，主代理授权前不得执行。Key 只传 Agent，API/Web 不继承；失败保留临时目录便于诊断。真实模式不运行 Fake 专用 marker，不用 Fake 回退掩盖失败。
+该命令消耗模型额度，主代理授权前不得执行。Key 只传 Agent，API/Web 不继承；失败保留临时目录便于诊断。
+
+当前 real 分支明确为 **真实 Router（DSH + DeepSeek）+ Fake Worker**：`COORDINATOR_MODE=dsh`、`AGENT_MODE=fake`。它只启动隔离 API/Agent，不启动 Web；Fake Worker 仍真实执行 React 类型检查、Vite 构建和生成应用浏览器 smoke，但源码来自确定性样例，因此绝不称为真实代码生成 G4。
+
+真实分支只提交六轮自然中文 Router 消息，不依赖 Fake 专用 marker 或固定选项/回复文案：
+
+1. “如何分享这个应用给别人？”→ 咨询，零 Run、生成额度不变。
+2. 明确要求只记住暖色偏好 → 验证 API canonical decision 的实际来源消息。
+3. 明确把该偏好纠正为深色、旧偏好作废 → 验证 supersedes、旧项 superseded、新 active、revision 增长，零 Run。
+4. 明确创建便签墙 → auto 唯一准入，重复幂等请求不重复 Run；Worker 是 Fake，不把样例源码当真实模型代码。
+5. ask 中只讨论未来搜索 → 不创建 Run、不扣生成次数、不确认推断记忆。
+6. 重启 API 和 Agent，再询问当前已确认偏好 → 重启前后 canonical memory 完全保留，回复与深色偏好一致，不只凭回复文字判断记住。
+
+每轮沿用冻结预算：最多 3 个可观察模型步骤、有效推理 90 秒、输入 32,768 / 总输出 8,192 tokens、最多 1 次结构化重试且计入总预算；六轮配置总额为最多 18 个可观察步骤和 49,152 输出 token 预算。SDK/提供商在途请求和实际用量观察存在边界，不能称绝对货币硬限或保证精确 HTTP 调用次数。Worker 模型调用为 0；真实 Run question、异常竞态、精确提案和选项固定样例继续由默认 Fake/独立测试覆盖。
+
+当前真实分支仅通过语法检查，尚未付费执行；实际自然语言分类和纠正效果须等待主代理统一授权的一次有界运行，不用 Fake 回退掩盖失败。
 
 ## 本地独立启动
 

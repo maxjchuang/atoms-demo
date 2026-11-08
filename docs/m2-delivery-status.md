@@ -21,3 +21,5 @@ API 新增独测已覆盖：真实 ZIP alias 与证据下载 hashes；remaining=
 本轮实现和测试均在隔离 API worktree/临时数据进行；未修改 live 5173 或 `data/review-real`，没有执行部署/迁移、模型调用或读取本机 Key。
 
 主管已批准最小 mixed runner 作为后续有界入口：Fake `pnpm test:delivery --no-web --mixed-router`；真实须同时设 `ATOMS_ALLOW_REAL_DELIVERY_INTEGRATION=1 ATOMS_ALLOW_REAL_DELIVERY_ROUTER=1`。第三次恢复后修改改由真实 v2 auto/outer Router 准入，不加第四 Run；另一次 ask 质量短答零 Run，并校验实际 outer facts 与版本质量/缺口，保存答复。两个 Router Turn 单独预算各 3 steps/90s/32,768 有效输入/8,192 输出，合计最多 6 Router steps。默认 direct 入口不行使 Router；目前 mixed 亦仅语法验证，尚未跨服务执行。
+
+可选 `--verify-web-readonly` 编排已准备（默认关闭）：`pnpm test:delivery --mixed-router --verify-web-readonly`，需要 Web，与 `--no-web` 组合在加载 Key/服务前拒绝。全部既有任务完成并 sealed 后，CLI 运行 Web 已提交的现有项目只读脚本；环境白名单只保留浏览器必需项/公开体验码，不向该子进程传模型 Key、内部 token 或预览 secret。Fake/readonly_real 互斥，只有登录可写；CLI 非零或超时失败，前后 checkpoint/额度必须相同，session 增加允许。新增小型 guard/子进程环境测试 3/3 通过，未启动完整 G3、服务或模型，等待主管集成后实际验证。真实可选命令为同时设置两项 real guard 后 `pnpm test:delivery:real --verify-web-readonly`，仍最多三 Run + 两协调 Turn，不叠加调用。

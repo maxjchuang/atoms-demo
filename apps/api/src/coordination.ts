@@ -1,3 +1,5 @@
+import * as D from '@atoms/contracts/delivery';
+import type {registerDelivery} from './delivery.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   CoordinationProtocolVersion as VERSION, COORDINATION_DEFAULTS as DEFAULTS, SubmitMessageRequest,
@@ -16,7 +18,7 @@ type Result = {status:number;body?:unknown;cookie?:string};
 type NewRunOptions = {sourceMessageId:string;originTurnId:string;proposalId:string;exactBaseVersionId?:string|null};
 export interface CoordinationHost {
   app:FastifyInstance; store:Store; agentUrl:string; serviceToken:string;
-  messageLimit?:number; messagesPerMinute?:number;
+  messageLimit?:number; messagesPerMinute?:number;delivery?:ReturnType<typeof registerDelivery>;
   id:(prefix:string)=>string; now:()=>string; hash:(input:string|Uint8Array)=>string; canonical:(value:unknown)=>string;
   fail:(status:number,code:string,message:string)=>never;
   authorize:(request:FastifyRequest)=>SessionRecord;
@@ -342,7 +344,7 @@ export function registerCoordination(host:CoordinationHost) {
       assistantMessageId,content:record.inputContent,operation:record.operation,mode:record.dto.mode,runMode:record.dto.runMode,
       ...(record.replyTo?{replyTo:record.replyTo}:{}),...(record.dto.continuationOfTurnId?{continuationOfTurnId:record.dto.continuationOfTurnId}:{}),
       context,budget:CoordinationBudget.parse({})});
-    record.request=request;record.requestHash=host.hash(host.canonical(request));
+    record.request=request;if(host.delivery)record.deliveryRequest=D.DeliveryCoordinationRequest.parse(host.delivery.signed({protocolVersion:D.DeliveryProtocolVersion,coordination:request,deliveryFacts:host.delivery.facts(request)}));record.requestHash=host.hash(host.canonical(request));
     record.putPending=false;
     updateTurn(record,{assistantMessageId,contextVersionId:context.contextVersionId,contextRevisionUsed:context.contextRevision,
       memoryRevisionUsed:context.projectMemory.revision,conversationRevisionUsed:context.conversationRevision});return request;
@@ -449,13 +451,20 @@ export function registerCoordination(host:CoordinationHost) {
       outcome={kind:'control',action:'cancel_run',targetRunId:result.targetRunId,replyMessageId:replyId,receipt,run:target!.dto,reason};
       coordEvent(projectId,record.dto.id,{type:'control.receipt',payload:{turnId:record.dto.id,targetRunId:result.targetRunId,receipt,run:target!.dto}});
     }
+    if(record.deliveryRequest&&(outcome.kind==='consult'||outcome.kind==='status')){
+      const versionId=record.request!.context.contextVersionId;const v=versionId?store.state.versions.find(v=>v.dto.id===versionId):undefined;
+      if(v){const r=store.state.runs.find(r=>r.dto.id===(v.deliveryOriginRunId??v.dto.runId));const quality=r?.delivery?.verified?r.delivery.report?.quality:r?.delivery?.invalid?'blocked':'legacy_unverified';const gaps=r?.delivery?.report?.gaps??[];
+        const body=text.length>8000?text.slice(0,8000)+'…（答复已截断）':text;const gapsText=gaps.map(g=>g.description+'：'+g.reason).join('；').slice(0,3000);
+        text=`宿主交付事实（${now()}，版本 ${v.dto.id}）：${quality==='complete'?'本次冻结约定全部通过':quality==='partial'?'部分交付，仍有验收缺口':quality==='blocked'?'交付受阻':'旧版本未有可信交付验证'}。${gapsText}\n${body}`;}
+    }
     // A proposal suggestion is not an accepted decision. Explicit accept records host-confirmed goal scope.
     if(outcome.kind!=='change_proposal'&&!(outcome.kind==='control'&&outcome.receipt==='not_applied'))applyMemory(record,result);
     putMessage(projectId,record.dto.id,text,'assistant',replyId,record.dto.userMessageId);
     updateTurn(record,{status:'completed',result:outcome,error:null,completedAt:now()});
   };
   const fetchRuntime=async(path:string,method='GET',body?:unknown)=>{
-    const response=await fetch(host.agentUrl.replace(/\/$/,'')+path,{method,headers:{authorization:`Bearer ${host.serviceToken}`,'X-Atoms-Coordination-Version':VERSION,'content-type':'application/json'},
+    const isDelivery=path.startsWith('/internal/delivery/');
+    const response=await fetch(host.agentUrl.replace(/\/$/,'')+path,{method,headers:{authorization:`Bearer ${host.serviceToken}`,...(isDelivery?{'X-Atoms-Delivery-Version':D.DeliveryProtocolVersion}:{'X-Atoms-Coordination-Version':VERSION}),'content-type':'application/json'},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(5000)});
     if(!response.ok)throw Object.assign(new Error('Coordination runtime response unavailable'),{status:response.status});return response;
   };
@@ -494,7 +503,7 @@ export function registerCoordination(host:CoordinationHost) {
               else settle(record,{kind:'consult',answer:'当前预览仅在本机服务可用，尚未完成公网部署。可以下载源码；分享给别人需要后续部署步骤。',contextUsed:usedContext(record.request!),references:context.facts.availableActions.filter(a=>a.kind==='source_download').map(a=>({kind:'available_action' as const,actionId:a.id})),memoryUpdates:[]});
             });continue;
           }
-          const path=`/internal/v2/coordination-turns/${turnId}`;
+          const path=record.deliveryRequest?`/internal/delivery/v1/coordination-turns/${turnId}`:`/internal/v2/coordination-turns/${turnId}`;
           if(record.dto.status==='cancelling'){
             let exists=true;
             try{await fetchRuntime(path);}catch(error){if((error as {status?:number}).status===404)exists=false;else throw error;}
@@ -510,12 +519,14 @@ export function registerCoordination(host:CoordinationHost) {
           }else{
             // Persist uncertainty before sending. A timed-out PUT may still arrive remotely.
             store.transaction(()=>{state().turns.find(t=>t.dto.id===turnId)!.putPending=true;});
-            await fetchRuntime(path,'PUT',record.request);
+            await fetchRuntime(path,'PUT',record.deliveryRequest??record.request);
             store.transaction(()=>{state().turns.find(t=>t.dto.id===turnId)!.putPending=false;});
           }
           record=state().turns.find(t=>t.dto.id===turnId)!;
           if(record.cancelCommand)await fetchRuntime(path+'/cancel','POST',record.cancelCommand);
-          const page=CoordinationSourceEventPage.parse(await(await fetchRuntime(path+`/events?after=${record.sourceSeq}&limit=100`)).json());
+          const rawPage=await(await fetchRuntime(path+`/events?after=${record.sourceSeq}&limit=100`)).json();
+          if(record.deliveryRequest){const outer=D.DeliveryCoordinationEventPage.parse(rawPage);const f=record.deliveryRequest.deliveryFacts;if(outer.deliveryFactsUsed.hash!==f.hash||outer.deliveryFactsUsed.projectId!==f.projectId||outer.deliveryFactsUsed.revision!==f.revision||outer.deliveryFactsUsed.asOf!==f.asOf)throw new Error('Delivery facts response mismatch');}
+          const page=CoordinationSourceEventPage.parse(record.deliveryRequest?rawPage.page:rawPage);
           for(const source of page.items){
             record=state().turns.find(t=>t.dto.id===turnId)!;
             if(source.turnId!==turnId||source.projectId!==record.dto.projectId)throw new Error('Coordination source ownership mismatch');

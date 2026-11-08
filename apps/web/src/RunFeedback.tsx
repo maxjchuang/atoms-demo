@@ -18,7 +18,7 @@ export function RunFeedback({ run, events, sync, historyLoading, historyError, b
   const presentation = phasePresentation(run);
   const recent = activity.entries.slice(-200);
   return <div className={`run-card feedback-card ${run.status}`} aria-label="任务过程反馈">
-    <div className="run-card-top"><span className="run-status-icon">{run.status === 'succeeded' ? <CheckCircle2 size={17}/> : terminal ? <Square size={15}/> : run.status === 'waiting_input' ? <MessageSquare size={16}/> : <LoaderCircle className="spin" size={16}/>}</span><strong>{statusLabels[run.status]}</strong>{!terminal && <button disabled={busy || run.status === 'cancelling'} onClick={onCancel}>{run.status === 'cancelling' ? '等待停止确认' : '停止任务'}</button>}</div>
+    <div className="run-card-top"><span className="run-status-icon">{run.status === 'succeeded' ? <CheckCircle2 size={17}/> : terminal ? <Square size={15}/> : run.status === 'waiting_input' ? <MessageSquare size={16}/> : <LoaderCircle className="spin" size={16}/>}</span><strong>{statusLabels[run.status]}</strong>{!terminal && <button disabled={busy || run.status === 'cancelling'} onClick={onCancel}>{run.status === 'cancelling' ? '等待停止确认' : '停止构建'}</button>}</div>
     <div className="phase-steps">{(['planning', 'generating', 'verifying', 'publishing'] as const).map((phase, index) => {
       const state = stageState(run, phase);
       return <span data-phase={phase} key={phase} className={state}><i>{state === 'done' ? <Check size={9}/> : index + 1}</i>{phaseLabels[phase]}</span>;

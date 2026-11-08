@@ -1,3 +1,4 @@
 import { setupWorker } from 'msw/browser';
 import { handlers } from './handlers';
-export const worker = setupWorker(...handlers);
+import { coordinationHandlers } from './coordination-handlers';
+export const worker = setupWorker(...coordinationHandlers, ...handlers);

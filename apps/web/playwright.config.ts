@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test';
 import { existsSync } from 'node:fs';
 
 const real = process.env.ATOMS_E2E_REAL === '1';
-const mockPort = process.env.ATOMS_MOCK_PORT ?? '5181';
+const mockPort = process.env.ATOMS_MOCK_PORT ?? '5183';
 const chrome = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
   ?? (existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined);
 export default defineConfig({

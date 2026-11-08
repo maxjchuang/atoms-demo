@@ -96,9 +96,11 @@ try {
     await page.getByRole('button', { name: '开启体验' }).click();
     await page.getByLabel('体验码', { exact: true }).fill(process.env.ATOMS_DEMO_CODE ?? 'atoms-demo-2026');
     await page.getByRole('button', { name: '进入创作空间' }).click(); await page.getByRole('dialog').waitFor({ state: 'hidden' });
-    await page.goto(`${baseUrl}/#/projects/${projectId}`); await page.locator('.feedback-card').waitFor();
+    await page.goto(`${baseUrl}/#/projects/${projectId}`); await page.locator('.conversation-item').first().waitFor();
+    const chatMetrics = await measure(page, { message: workspaceSelectors.message });
+    await page.getByRole('tab', { name: '构建活动' }).click(); await page.locator('.feedback-card').waitFor();
     await page.locator('.activity-details summary').click(); await page.locator('.execution-timeline li.check').last().waitFor();
-    const workspace = await measure(page, workspaceSelectors); const workspaceLayout = await layout(page); checkLayout(workspaceLayout);
+    const workspace = { ...await measure(page, workspaceSelectors), message: chatMetrics.message }; const workspaceLayout = await layout(page); checkLayout(workspaceLayout);
     await page.locator('.feedback-card').evaluate(element => {
       const scroller = element.closest('.conversation-scroll');
       if (scroller) scroller.scrollTop += element.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 10;

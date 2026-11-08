@@ -13,10 +13,12 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 1366, height: 76
     await page.getByRole('button', { name: '进入创作空间' }).click();
     await expect(page.getByRole('dialog')).toBeHidden();
     await page.getByLabel('应用需求').fill('构建便签墙，验证字体与布局。');
-    await page.getByRole('button', { name: '开始构建', exact: true }).click();
+    await page.getByRole('button', { name: '发送消息', exact: true }).click();
     await expect(page.locator('.run-card-top > strong')).toHaveText('已交付', { timeout: 20000 });
+    await expect(page.locator('.message p').first()).toHaveCSS('font-size', '14px');
+    await page.getByRole('tab', { name: '构建活动' }).click();
     await page.locator('.activity-details summary').click();
-    for (const selector of ['.message p', '.run-card-top strong', '.feedback-card .current-activity p', '.output-tabs button', '.workspace-composer textarea']) {
+    for (const selector of ['.run-card-top strong', '.feedback-card .current-activity p', '.output-tabs button', '.workspace-composer textarea']) {
       await expect(page.locator(selector).first()).toHaveCSS('font-size', '14px');
     }
     for (const selector of ['.execution-times', '.api-sync', '.execution-timeline strong', '.execution-timeline p']) {

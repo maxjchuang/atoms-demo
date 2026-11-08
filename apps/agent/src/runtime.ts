@@ -23,12 +23,17 @@ import { GenerationPool } from './generation-pool.js';
 import { DeliveryPlanningRuntime, DeliveryError, type PlanningAdapter, type TrustedHostPlan } from './delivery-planning.js';
 import { DeliveryProtocolVersion, DeliveryCommand, DeliveryCoordinationRequest, type DeliveryExecutionRequestDto } from '@atoms/contracts/delivery';
 import { trustedTemplate, TOOLCHAIN_ID } from './trusted-template.js';
+import { IsolationCapabilitiesPath, IsolationProtocolVersion } from '@atoms/contracts/isolation';
+import { DockerVerification } from './isolation/verification.js';
+import { StopUnconfirmedError } from './isolation/client.js';
+import { BrokerClient, hostLocalCapabilities } from './isolation/client.js';
 import { SourceBaselineAdapter, type TrustedSourceFault } from './controlled-repair.js';
 import { DeliveryExecutionRuntime } from './delivery-execution.js';
 
 type RuntimeBody = ReturnType<typeof RuntimeEvent.parse>;
 type CheckValue = ReturnType<typeof Check.parse>;
 export type RecordValue = {
+  isolationGeneration?: string; isolationPending?: boolean; isolationCancelRequested?: boolean;
   usageKnown?: boolean; pendingModelRequest?: boolean; usageObservationVersion?: 'settled-request-v1';
   delivery?: DeliveryExecutionRequestDto;
   request: StartExecutionDto; hash: string; snapshot: ExecutionSnapshotDto;
@@ -49,6 +54,7 @@ class HttpError extends Error {
   constructor(public status: number, public code: string, message: string) { super(message); }
 }
 export interface AgentOptions {
+  executionBackend?: 'host_local'|'docker_linux'; verification?: DockerVerification; dockerProbe?: boolean; brokerUrl?: string; brokerToken?: string;
   dataDir: string; serviceToken: string; apiInternalUrl?: string;
   mode?: 'fake' | 'dsh'; apiKey?: string; model?: string; adapter?: ModelAdapter;
   coordinationMode?: 'fake' | 'dsh'; coordinatorAdapter?: CoordinatorAdapter;
@@ -80,12 +86,14 @@ export class AgentRuntime {
         if (!terminal.has(item.snapshot.status) && item.snapshot.status !== 'waiting_input' && item.snapshot.status !== 'accepted') {
           // Children are owned by this process; a full restart is fenced by fresh execution directories.
           if (item.usageObservationVersion === 'settled-request-v1' && item.pendingModelRequest) item.usageKnown = false;
-          item.snapshot.status = 'interrupted'; item.snapshot.pendingAttention = null;
+          item.snapshot.status = this.options.verification ? 'cancelling' : 'interrupted'; item.snapshot.pendingAttention = null;
+          if(this.options.verification){item.isolationPending=true;continue;}
           this.emit(item, { type: 'execution.interrupted', payload: { reason: 'Runtime restarted; explicit retry required. External processes are not resumed.' } });
         }
       }
     }
     this.timer = setInterval(() => {
+      if(this.options.verification)for(const item of this.records.values())if(item.isolationPending)void this.options.verification.reconcileExecution(item.request.executionId).then(stopped=>{if(!stopped||!item.isolationPending)return;item.isolationPending=false;item.snapshot.status=item.isolationCancelRequested?'cancelled':'interrupted';this.emit(item,item.isolationCancelRequested?{type:'execution.cancelled',payload:{}}:{type:'execution.interrupted',payload:{reason:'Isolated job stopped after reconciliation; no external work resumed.'}});if(item.delivery)this.deliveryEngine?.fail(item,item.isolationCancelRequested?'cancelled':'interrupted','Isolation cleanup confirmed');this.schedule();}).catch(()=>{});
       for (const item of this.records.values()) {
         if (item.snapshot.status === 'waiting_input' && item.waitingAt
           && Date.now() - item.waitingAt > item.request.budget.maxWaitingInputMs) {
@@ -138,6 +146,7 @@ export class AgentRuntime {
         status: 'accepted', phase: null, revision: 1, lastSourceSeq: 0, pendingAttention: null, artifactId: null, updatedAt: now() },
       events: [], commands: {}, started: false, plan: null, planConfirmed: request.mode === 'build',
       queueOrder: Date.now(), activeMs: 0, waitingAt: null, usage: { modelSteps: 0, inputTokens: 0, outputTokens: 0 },
+      isolationGeneration: randomUUID().replaceAll('-',''),
       usageKnown: true, pendingModelRequest: false, usageObservationVersion: 'settled-request-v1',
       ordinaryQuestions: 0, answers: [], repairRoundsUsed: 0, verificationErrors: null, repairClaimed: false,
       tokenAccountingVersion: TOKEN_ACCOUNTING_VERSION,
@@ -197,11 +206,12 @@ export class AgentRuntime {
     if (this.closed || this.pumping) return;
     this.pumping = new Promise<void>((resolve) => setImmediate(resolve)).then(async () => {
       while (!this.closed) {
+        if([...this.records.values()].some(item=>item.isolationPending))break;
         const next = [...this.records.values()].filter((item) => item.snapshot.status === 'accepted').sort((a, b) => a.queueOrder - b.queueOrder)[0];
         if (!next) break;
         await this.pool.run(async () => { if (!this.closed && next.snapshot.status === 'accepted') await this.process(next); });
       }
-    }).finally(() => { this.pumping = null; if (!this.closed && [...this.records.values()].some((item) => item.snapshot.status === 'accepted')) this.schedule(); });
+    }).finally(() => { this.pumping = null; if (!this.closed && ![...this.records.values()].some(item=>item.isolationPending) && [...this.records.values()].some((item) => item.snapshot.status === 'accepted')) this.schedule(); });
   }
   private async prepareWorkspace(item: RecordValue, workspace: string, signal: AbortSignal) {
     await mkdir(workspace, { recursive: true });
@@ -258,6 +268,7 @@ export class AgentRuntime {
     };
     if (item.delivery) this.deliveryEngine!.context(item, context);
     try {
+      if (this.options.executionBackend === 'docker_linux' && (!this.options.verification || !await this.options.verification.ready())) throw new HttpError(503, 'RUNTIME_UNAVAILABLE', 'Docker verification integration is not ready; host fallback is disabled');
       if (item.usageKnown === false) throw new Error('Model usage is unknown; further inference is fenced.');
       this.update(item, { status: 'running', pendingAttention: null,
         phase: !item.plan || !item.planConfirmed ? 'planning' : item.verificationErrors ? 'repairing' : 'generating' });
@@ -300,7 +311,7 @@ export class AgentRuntime {
         }
         summary = generated;
         this.update(item, { phase: 'verifying' });
-        const verified = item.delivery ? await this.deliveryEngine!.verify(item, workspace, context) : await verifyApplication(workspace, evidence, controller.signal,
+        const verified = item.delivery ? await this.deliveryEngine!.verify(item, workspace, context) : this.options.verification ? await this.options.verification.verifyApplication(workspace,evidence,controller.signal,check=>this.checkEvent(item,check),context.report,{executionId:id,bindingHash:item.hash,attemptId:'attempt_'+id,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()}) : await verifyApplication(workspace, evidence, controller.signal,
           (check) => this.emit(item, { type: 'check.completed', payload: check }), context.report);
         checks = verified.checks; errors = verified.errors;
         item.verificationErrors = errors; item.repairClaimed = false; this.persist();
@@ -340,6 +351,7 @@ export class AgentRuntime {
       item.snapshot.status = 'succeeded'; item.snapshot.revision++;
       this.emit(item, { type: 'execution.completed', payload: { artifactId } });
     } catch (error) {
+      if(error instanceof StopUnconfirmedError){item.isolationPending=true;item.isolationCancelRequested=item.snapshot.status==='cancelling';this.update(item,{status:'cancelling',pendingAttention:null});return;}
       await this.adapter.close(id).catch(() => {});
       if (item.usageObservationVersion === 'settled-request-v1' && item.pendingModelRequest) item.usageKnown = false;
       item.snapshot.pendingAttention = null; item.snapshot.revision++;
@@ -381,11 +393,16 @@ async function jsonBody(req: IncomingMessage, limit = 100000) {
   catch { throw new HttpError(400, 'INVALID_REQUEST', 'Invalid JSON'); }
 }
 export function createAgentServer(options: AgentOptions) {
+  const broker = options.executionBackend === 'docker_linux' ? new BrokerClient(options.brokerUrl || 'http://broker:4310', options.brokerToken || '') : null;
+  if(options.dockerProbe&&options.mode!=='fake')throw new Error('Unready Docker probe is restricted to explicit local Fake');
+  const verification = broker ? new DockerVerification(broker,{dataDir:options.dataDir,allowUnreadyProbe:options.dockerProbe}) : undefined;
+  options={...options,verification};
+  const toolchainProvider=verification?()=>verification.toolchain():async()=>(await trustedTemplate()).descriptor;
   const pool = new GenerationPool(); let planning!: DeliveryPlanningRuntime;
   const runtime = new AgentRuntime({ ...options, generationPool: pool, isDeliveryReserved: (id) => planning?.reserved(id) ?? false });
   planning = new DeliveryPlanningRuntime({ dataDir: path.join(options.dataDir, 'delivery'), pool, mode: options.mode,
     apiKey: options.apiKey, model: options.model, apiUrl: options.apiInternalUrl, serviceToken: options.serviceToken,
-    legacyExists: (id, runId) => runtime.records.has(id) || [...runtime.records.values()].some((item) => item.request.runId === runId), executionStarted: (id) => runtime.records.has(id), adapter: options.planningAdapter, trustedHostPlan: options.trustedHostPlan });
+    legacyExists: (id, runId) => runtime.records.has(id) || [...runtime.records.values()].some((item) => item.request.runId === runId), executionStarted: (id) => runtime.records.has(id), adapter: options.planningAdapter, toolchainProvider, trustedHostPlan: options.trustedHostPlan });
   const delivery = new DeliveryExecutionRuntime(runtime, planning, { allowControlledRegression: options.allowControlledRegression, trustedSourceFault: options.trustedSourceFault }); runtime.deliveryEngine = delivery;
   for (const item of runtime.records.values()) if (item.delivery && ['interrupted', 'cancelled', 'failed'].includes(item.snapshot.status) && !delivery.report(item.request.executionId)) delivery.fail(item, item.snapshot.status as 'interrupted', 'Runtime restarted or execution terminated.');
   const coordinator = new CoordinatorRuntime({ ...options, mode: options.coordinationMode ?? options.mode });
@@ -394,13 +411,19 @@ export function createAgentServer(options: AgentOptions) {
     const url = new URL(req.url || '/', 'http://runtime');
     const coordinationRequest = url.pathname.startsWith('/internal/v2/');
     const deliveryRequest = url.pathname.startsWith('/internal/delivery/v1/');
-    res.setHeader(deliveryRequest ? 'x-atoms-delivery-version' : coordinationRequest ? 'x-atoms-coordination-version' : 'x-atoms-protocol-version', deliveryRequest ? DeliveryProtocolVersion : coordinationRequest ? CoordinationProtocolVersion : PROTOCOL_VERSION);
+    const isolationRequest = url.pathname.startsWith('/internal/isolation/v1/');
+    res.setHeader(isolationRequest ? 'x-atoms-isolation-version' : deliveryRequest ? 'x-atoms-delivery-version' : coordinationRequest ? 'x-atoms-coordination-version' : 'x-atoms-protocol-version', isolationRequest ? IsolationProtocolVersion : deliveryRequest ? DeliveryProtocolVersion : coordinationRequest ? CoordinationProtocolVersion : PROTOCOL_VERSION);
     try {
       const expected = Buffer.from(`Bearer ${options.serviceToken}`); const actual = Buffer.from(req.headers.authorization || '');
       if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new HttpError(401, 'UNAUTHENTICATED', 'Internal service authentication required');
+      if (isolationRequest) {
+        if (req.headers['x-atoms-isolation-version'] !== IsolationProtocolVersion) throw new HttpError(400, 'INVALID_REQUEST', 'Unsupported isolation version');
+        if (url.pathname !== IsolationCapabilitiesPath || req.method !== 'GET') throw new HttpError(404, 'NOT_FOUND', 'Isolation route not found');
+        return json(200, broker ? await broker.capabilities() : hostLocalCapabilities());
+      }
       if (deliveryRequest) {
         if (req.headers['x-atoms-delivery-version'] !== DeliveryProtocolVersion) throw new DeliveryError(400, 'INVALID_REQUEST', 'Unsupported delivery version');
-        if (url.pathname === `/internal/delivery/v1/toolchains/${TOOLCHAIN_ID}` && req.method === 'GET') return json(200, (await trustedTemplate()).descriptor);
+        if (url.pathname.startsWith('/internal/delivery/v1/toolchains/') && req.method === 'GET'){const descriptor=await toolchainProvider();if(url.pathname!=='/internal/delivery/v1/toolchains/'+descriptor.id)throw new DeliveryError(404,'NOT_FOUND','Toolchain not available');return json(200,descriptor);}
         const coordinationRoute = url.pathname.match(/^\/internal\/delivery\/v1\/coordination-turns\/([a-z][a-z0-9_-]{2,127})(?:\/(events|cancel))?$/);
         if (coordinationRoute) {
           const [, id, action] = coordinationRoute;

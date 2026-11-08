@@ -45,7 +45,7 @@ export async function linkDependencies(workspace: string) {
 }
 
 export async function verifyApplication(workspace: string, evidenceRoot: string, signal: AbortSignal,
-  report: (check: CheckValue) => void, activity: (message: string) => void = () => {}, options: { installedDependencies?: boolean } = {}) {
+  report: (check: CheckValue) => void, activity: (message: string) => void = () => {}, options: { installedDependencies?: boolean; chromiumSandbox?: boolean } = {}) {
   await mkdir(evidenceRoot, { recursive: true });
   if (!options.installedDependencies) await linkDependencies(workspace);
   const checks: CheckValue[] = [];
@@ -66,7 +66,7 @@ export async function verifyApplication(workspace: string, evidenceRoot: string,
   const built = await checkCommand('build', [path.join(path.dirname(dependency.resolve('vite/package.json')), 'bin/vite.js'), 'build']);
   if (!built.success) return { checks, errors: built.log };
   activity('开始浏览器加载检查：验证页面可加载且无运行时异常。');
-  const smoke = await smokeBrowser(path.join(workspace, 'dist'), evidenceRoot, signal);
+  const smoke = await smokeBrowser(path.join(workspace, 'dist'), evidenceRoot, signal, options.chromiumSandbox);
   const check: CheckValue = { id: 'check_smoke', kind: 'smoke', name: '浏览器加载检查', required: true,
     status: smoke.success ? 'passed' : 'failed', summary: smoke.log.slice(-1500),
     evidenceIds: ['evidence_smoke', ...(smoke.screenshot ? ['evidence_screenshot'] : [])] };
@@ -75,7 +75,7 @@ export async function verifyApplication(workspace: string, evidenceRoot: string,
   return { checks, errors: smoke.success ? null : smoke.log };
 }
 
-async function smokeBrowser(dist: string, evidenceRoot: string, signal: AbortSignal) {
+export async function smokeBrowser(dist: string, evidenceRoot: string, signal: AbortSignal, chromiumSandbox = false) {
   const server = createServer(async (req, res) => {
     try {
       const name = decodeURIComponent(new URL(req.url || '/', 'http://localhost').pathname).replace(/^\//, '') || 'index.html';
@@ -94,7 +94,7 @@ async function smokeBrowser(dist: string, evidenceRoot: string, signal: AbortSig
   try {
     const chrome = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
       || (existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined);
-    browser = await chromium.launch({ headless: true, executablePath: chrome, env: browserEnvironment() });
+    browser = await chromium.launch({ headless: true, executablePath: chrome, chromiumSandbox, env: browserEnvironment() });
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));

@@ -1,0 +1,15 @@
+FROM public.ecr.aws/docker/library/node@sha256:9e5d714311940c098479ec352029af6df1d9a2dc4269b29373c616f51640dd67
+LABEL atoms.owner="atoms-v03" atoms.role="trusted-broker"
+RUN apt-get update && apt-get install -y --no-install-recommends docker.io && rm -rf /var/lib/apt/lists/* && npm install --global --ignore-scripts --registry=https://registry.npmjs.org pnpm@10.33.0
+WORKDIR /app
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY apps/agent/package.json apps/agent/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter @atoms/agent... --registry=https://registry.npmjs.org
+COPY packages/contracts packages/contracts
+COPY apps/agent apps/agent
+RUN mkdir -p /var/lib/atoms-v03-broker && chown -R 1000:1000 /var/lib/atoms-v03-broker
+USER 1000:1000
+ENV BROKER_HOST=0.0.0.0 BROKER_PORT=4310 BROKER_DATA_DIR=/var/lib/atoms-v03-broker DOCKER_HOST=unix:///var/run/docker.sock
+WORKDIR /app/apps/agent
+CMD ["node","--import","tsx","src/isolation/broker.ts"]

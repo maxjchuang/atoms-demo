@@ -1,4 +1,4 @@
-# Fixed SDK structured planning: local verification
+# Fixed SDK structured generation: local verification
 
 Scope: `@deepseek-ai/dsh-sdk-client` / runtime / provider **0.2.2-rc.1**, existing `deepseek-official` route and default **deepseek-flash** model. No provider/model/key change, no new real provider request. This document records local composition/serialization and zero-network replay, not a successful live M2 generation.
 
@@ -6,7 +6,7 @@ Scope: `@deepseek-ai/dsh-sdk-client` / runtime / provider **0.2.2-rc.1**, existi
 
 The installed `@deepseek-ai/dsh-llm-deepseek` describes a **Messages** adapter. Its `PUBLIC_BASE_URL` is the public Anthropic-compatible root, and `serialize()` emits Messages fields. `DeepSeekHarnessOptions` exposes `reasoningEffort` and `maxTokens`; it does not expose Chat `response_format` or Responses `text.format`.
 
-The pinned provider accepts reasoning effort `off | low | high | max`. Its serializer maps `off` to `thinking: {type: "disabled"}` and omits `output_config`; `low` maps to thinking enabled. Preparation now uses SDK `reasoningEffort: "off"` and its isolated `llm-deepseek` profile configuration explicitly sets `thinking: disabled` / `reasoningEffort: off`. Worker reasoning remains `low`; project Router configuration is unchanged.
+The pinned provider accepts reasoning effort `off | low | high | max`. Its serializer maps `off` to `thinking: {type: "disabled"}` and omits `output_config`; `low` maps to thinking enabled. Preparation now uses SDK `reasoningEffort: "off"` and its isolated `llm-deepseek` profile configuration explicitly sets `thinking: disabled` / `reasoningEffort: off`. Structured Worker generation and repair now also use `off` with the same explicit disabled-thinking/no-tools provider patch. Project Router and legacy Run-planning reasoning remain `low`.
 
 The actual installed CLI `--dump-config` composes the Preparation provider settings and all four disabled model-tool rows. Startup refuses an incorrect provider row or missing off/disabled settings. A separate test invokes the **actual installed provider adapter** with a local `fetch` interceptor: it captures serialization, then throws before any network I/O. The captured request keeps the same provider/model, `max_tokens: 8192`, and `thinking.disabled`; it contains no `response_format`, Responses `text.format`, or tool activation. This is not a live provider handshake or a claim of strict JSON enforcement by Messages.
 
@@ -30,7 +30,7 @@ Historical terminal ledgers/reports (including PMMN5g) remain byte-for-byte unch
 
 A structured retry still has a maximum of one and consumes the same cumulative phase/Run budget. Admission now requires known usage, remaining model steps, and remaining active time/output at least as large as the **previous observed request cost**. This is a conservative operational threshold, not a mathematical proof of the minimum tokens/time for any possible valid answer. It uses settled native tokens, never character-based token estimation. PMMN5g replay has 2923 output tokens and about 24.2 s remaining after an observed 5269-token/35.8-s attempt, so it records `retry_skipped` instead of spending a second request.
 
-The current total Run and child planning budgets remain unchanged. No increase is requested before observing the effect of planning-only `off` under a separately authorized bounded live sample. A stricter JSON transport, a provider/model switch, or budget expansion requires a separate supervisor decision.
+The current total Run and child planning budgets remain unchanged. Worker `off` is a separately approved visible-output reliability adjustment. Run limits remain 8 model steps / 65,536 effective input / 24,576 output / 900,000 active ms; this change does not increase any cap. A stricter JSON transport, a provider/model switch, or budget expansion requires a separate supervisor decision.
 
 ## Reproduction (zero provider requests)
 
@@ -65,3 +65,13 @@ The third real attempt used the intended off/profile/catalog and delivered the s
 Fresh internal model output now explicitly declares derived criteria with source Seed refs; the host preserves canonical Seed criteria, generates opaque leaf IDs and inherits required using the trusted source OR. Each derived ref has exactly one coverage and automatic case edges close both ways. Manual/unsupported leaves cannot own cases. Original Seed text/Goal/required cannot be narrowed or deleted. The shared `delivery-projection` helper supplies only host-owned conservative parent metadata/backlinks and an independently checkable inverse assertion; no step, expectation or leaf method is changed. This does not prove semantic completeness of a model's decomposition.
 
 No model/provider, off policy, budget, JSON-retry count, shared strict DTO or historical result is changed. The syntax examples are still checked against shared DSL schemas. `case_coverage_backlink`/`coverage_duplicate` and related safe static codes retain case/criterion field paths rather than collapsing cross-reference errors into empty-path generic feedback. See DERIVED-CRITERIA-DESIGN.md for the internal envelope and zero-provider captured-shape replay; live success is still a separate supervisor decision.
+
+## Worker output-limit observation and scalar retry fix
+
+The preserved public Run `run_4d1b3a5d59d7589accff` used the former Worker `low` setting. Its two settled Worker requests returned `max-tokens` with final text length zero, consuming 16,000 and 6,312 output tokens; Preparation had used 2,264, so cumulative Run output reached the existing 24,576 cap. Safe metadata does not partition reasoning tokens: this is not a claim that every output token was thinking. The old terminal records and all their usage remain unchanged.
+
+The Worker retry code previously retained a mutable `observedUsage()` object across the request. Runtime meters mutate that object in place, making the before/after output difference zero. The corrected code captures the numerical output scalar before awaiting the request. A 16,000-token request with only 6,312 remaining is rejected before a second call. Zero, negative, unavailable or nonfinite previous output cannot establish affordability and fails closed. A positive measured affordable response still permits the same single structured retry; no budget or usage resets occur.
+
+The actual pinned Messages serializer is exercised with a local fetch interceptor (no network), showing Worker `thinking.disabled`, unchanged model/provider and `max_tokens:16000`. Actual CLI composition checks the Worker off/no-tools patch; generation and repair mock callbacks both assert off. Planner remains off; the project Router remains low. New bounded real execution requires a separate supervisor instruction; no real request was made for this fix.
+
+Supervisor independently passed final Agent check, full90/90 (126.9s), and build for this correction. The actual pinned Worker Messages serializer test intercepts fetch locally and verifies thinking.disabled/model unchanged/max_tokens16000 without network; role/no-tools and mutable-meter numeric regressions are included. These zero-provider checks do not mutate prior real usage or establish a new real generation result.

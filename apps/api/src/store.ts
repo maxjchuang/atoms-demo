@@ -1,3 +1,4 @@
+import type { DeliveryExecutionRequestDto, PrepareDeliveryPlanRequestDto, DeliveryReportDto } from '@atoms/contracts/delivery';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -11,17 +12,23 @@ export interface ProjectRecord { dto: ProjectDto; codeId: string }
 export interface RunRecord { dto: RunDto; prompt: string; codeId: string; started: boolean; sourceSeq: number;
   request?: StartExecutionDto; manifestHash?: string; answerCommand?: object; cancelCommand?: object;
   runtimeDisconnected?: boolean; originTurnId?: string; sourceMessageId?: string; proposalId?: string;
-  exactBaseVersionId?: string | null }
+  exactBaseVersionId?: string | null; delivery?: DeliveryRecord }
+export interface DeliveryRecord {
+  stage:'preparing'|'executing'; preparationId:string; planningSeq:number;
+  prepare?:PrepareDeliveryPlanRequestDto; prepareHash?:string; wrapper?:DeliveryExecutionRequestDto;
+  putPending?:boolean; prepareAccepted?:boolean; executionPutPending?:boolean;executionAccepted?:boolean; runtimeStopped?:boolean; noReportExpected?:boolean; report?:DeliveryReportDto; invalid?:string;
+  reportDirectory?:string; archiveFile?:string; verified?:boolean; finalUsage?:ReturnType<typeof import('@atoms/contracts/delivery').BudgetUsage.parse>;
+}
 export interface CoordinationRecord { dto: CoordinationTurnDto; codeId: string; operation: StartCoordinationRequestDto['operation'];
   inputContent: string; replyTo?: StartCoordinationRequestDto['replyTo']; request?: StartCoordinationRequestDto; requestHash?: string;
   sourceSeq: number; started: boolean; cancelCommand?: {commandId: string}; disconnected?: boolean;
-  requestedContextVersionId?:string|null; putPending?:boolean; cancelUncertainNotified?:boolean }
+  requestedContextVersionId?:string|null; deliveryRequest?:import('@atoms/contracts/delivery').DeliveryCoordinationRequestDto; putPending?:boolean; cancelUncertainNotified?:boolean }
 export interface CoordinationState { turns: CoordinationRecord[]; messages: ConversationMessageDto[]; events: ConversationEventDto[];
   proposals: ChangeProposalDto[]; clarifications: ClarificationDto[]; memories: ProjectMemoryViewDto[];
   revisions: Record<string, number>; proposalMemorySuggestions:Record<string,RouterResultDto['memoryUpdates']>;
   proposalConfirmations:{proposalId:string;runId:string;actorSessionId:string|null;kind:'explicit_accept'|'auto_clear';confirmedAt:string;proposalRevision:number}[] }
 const emptyCoordination = (): CoordinationState => ({ turns: [], messages: [], events: [], proposals: [], clarifications: [], memories: [], revisions: {},proposalMemorySuggestions:{},proposalConfirmations:[] });
-export interface VersionRecord { dto: VersionDto; artifactId: string; manifest: ArtifactManifestDto; manifestRaw: string; directory: string }
+export interface VersionRecord { dto: VersionDto; artifactId: string; manifest: ArtifactManifestDto; manifestRaw: string; directory: string; deliveryOriginRunId?:string }
 export interface MessageRecord { id: string; projectId: string; runId: string | null; role: 'user'|'assistant';
   status: 'streaming'|'complete'; content: string; createdAt: string }
 export interface IdempotentResult { hash: string; status: number; body?: unknown; cookie?: string }

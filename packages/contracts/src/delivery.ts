@@ -252,13 +252,23 @@ export const CaseResult = z.object({ caseId: Id, criterionIds: z.array(Id).min(1
   if (result.status === 'not_run' && (!result.reason || result.steps.some((step) => step.status !== 'not_run') || result.failure)) ctx.addIssue({ code: 'custom', message: 'Not-run cannot conceal failed steps' });
   if (result.status !== 'not_run' && !result.evidenceIds.length) ctx.addIssue({ code: 'custom', message: 'Executed case needs actual evidence' });
 });
+export const AttemptSourceProvenance = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('model_output'), adapterMode: z.enum(['dsh', 'fake']) }).strict(),
+  z.object({ kind: z.literal('controlled_regression'), baseSourceHash: Sha256, patchHash: Sha256,
+    injectedSourceHash: Sha256, patchEvidenceId: Id }).strict(),
+  z.object({ kind: z.literal('synthetic_fixture') }).strict(),
+]);
 export const VerificationAttempt = z.object({ id: Id, hash: Sha256, runId: Id, executionId: Id,
   bindingHash: Sha256, specHash: Sha256, planHash: Sha256, repairRound: Seq, previousAttemptId: Id.nullable(),
   sourceBeforeHash: Sha256, sourceAfterHash: Sha256.nullable(), distHash: Sha256.nullable(), lockfileHash: Sha256, toolchainId: Id,
   status: z.enum(['passed', 'failed', 'incomplete', 'invalid', 'cancelled', 'interrupted']),
+  sourceProvenance: AttemptSourceProvenance.optional(),
   checks: z.object({ typecheck: GateResult, build: GateResult, smoke: GateResult }).strict(),
   caseResults: z.array(CaseResult).max(DELIVERY_LIMITS.maxCases), startedAt: Timestamp, finishedAt: Timestamp,
-}).strict();
+}).strict().superRefine((attempt, ctx) => {
+  if (attempt.sourceProvenance?.kind === 'controlled_regression'
+    && attempt.sourceProvenance.injectedSourceHash !== attempt.sourceBeforeHash) ctx.addIssue({ code: 'custom', message: 'Controlled injected source must be the actually verified source' });
+});
 export const VerificationEvidenceBinding = z.object({ id: Id, path: RelativePath, sha256: Sha256, bytes: Seq,
   kind: z.enum(['log', 'screenshot', 'report', 'trace']), mediaType: z.enum(['text/plain', 'image/png', 'image/jpeg', 'application/json', 'application/zip']),
   scope: z.enum(['planning', 'verification', 'clean_export']), attemptId: Id.nullable(), sourceSnapshotHash: Sha256.nullable(),
@@ -401,6 +411,11 @@ export const DeliveryReport = DeliveryReportData.superRefine((report, ctx) => {
       }
     }
     const ids = [...Object.values(attempt.checks).flatMap((entry) => entry.evidenceIds), ...attempt.caseResults.flatMap((entry) => entry.evidenceIds)];
+    if (attempt.sourceProvenance?.kind === 'controlled_regression') {
+      const patch = evidence.get(attempt.sourceProvenance.patchEvidenceId);
+      if (!patch || patch.sha256 !== attempt.sourceProvenance.patchHash || patch.attemptId !== attempt.id
+        || patch.sourceSnapshotHash !== attempt.sourceBeforeHash) issue('Controlled regression requires matching host patch evidence');
+    }
     for (const id of ids) {
       const item = evidence.get(id);
       if (!item || item.attemptId !== attempt.id || item.sourceSnapshotHash !== attempt.sourceBeforeHash

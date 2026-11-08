@@ -188,3 +188,18 @@ test('delivery-aware coordination outer facts keep old context intact and reject
   assert.equal(DeliveryCoordinationRequest.safeParse({ ...f.coordinationWrapper, deliveryFacts: { ...f.deliveryFacts, projectId: 'project_other' } }).success, false);
   assert.equal(DeliveryFacts.safeParse({ ...f.deliveryFacts, availableActions: [{ id: 'action_bad', kind: 'view_report', versionId: null, runId: null, available: false, reason: 'https://secret.invalid/?token=x' }] }).success, false);
 });
+test('attempt provenance honestly distinguishes fake, dsh, controlled and omitted legacy metadata', () => {
+  for (const report of [f.fakeSourceReport, f.dshSourceReport, f.controlledSourceReport, f.complete]) DeliveryReport.parse(report);
+  assert.equal(f.fakeSourceReport.attempts[0].sourceProvenance?.kind, 'model_output');
+  assert.equal(f.complete.attempts[0].sourceProvenance, undefined, 'absence means unrecorded, not natural model failure');
+});
+test('controlled regression cannot omit hashes, point at another source or forge patch evidence', () => {
+  const missing = clone(f.controlledSourceReport);
+  assert.equal(DeliveryReport.safeParse({ ...missing, attempts: [{ ...missing.attempts[0], sourceProvenance: { kind: 'controlled_regression' } }] }).success, false);
+  const source = clone(f.controlledSourceReport);
+  if (source.attempts[0].sourceProvenance?.kind !== 'controlled_regression') throw new Error('fixture');
+  source.attempts[0].sourceProvenance.injectedSourceHash = '0'.repeat(64);
+  assert.equal(DeliveryReport.safeParse(source).success, false);
+  const patch = clone(f.controlledSourceReport); patch.evidence.find((item) => item.id === 'evidence_patch')!.sha256 = '0'.repeat(64);
+  assert.equal(DeliveryReport.safeParse(patch).success, false);
+});

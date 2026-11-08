@@ -155,6 +155,8 @@ hash 证明一致性，不单独证明浏览器实际执行或语义正确；可
 
 真实失败→修复→同计划复验记录 source A/T 失败、source B/T 通过和实际用量。受控回归须标 `controlled_regression` 与补丁/hash，不能声称模型自然犯错。
 
+可选 `VerificationAttempt.sourceProvenance` 由宿主记录：model_output 明确 adapterMode=dsh/fake；controlled_regression 必有 baseSourceHash/patchHash/injectedSourceHash/patchEvidenceId，且 injectedSourceHash 等于该 attempt.sourceBeforeHash，报告内补丁证据字节 hash/attempt/source 匹配；synthetic_fixture 只用于合成契约样例。缺省显示“来源未记录”，不能猜是自然模型失败。此字段不授权通过质量门禁，模型无权自行声明受控注入。
+
 ### 5.3 独立失败报告
 
 `DeliveryReport` 有自己的 deliveryId/hash/revision/final、run/execution/preparation、seed、可空冻结对象、attempt 链、可空导出/clean report、quality、具体缺口与错误。
@@ -241,6 +243,7 @@ cursor 由 API 生成并绑定 base/head/source hashes、过滤与位置。空�
 
 | 方法与路径（`/internal/delivery/v1`） | 语义 |
 | --- | --- |
+| GET `/toolchains/:toolchainId` | 服务认证+delivery header 的只读 ToolchainDescriptor；不调用模型、不写源码 |
 | PUT `/preparations/:preparationId` | typed PrepareDeliveryPlanRequest，只读；首 201、重试同体 200 |
 | GET `/preparations/:preparationId` | PlanPreparationSnapshot |
 | GET `/preparations/:preparationId/report` | 独立 ReportRead pending/available；即使 execution 尚未 PUT，准备失败仍可读取 blocked 报告 |
@@ -256,6 +259,8 @@ cursor 由 API 生成并绑定 base/head/source hashes、过滤与位置。空�
 | GET `/executions/:executionId/export/:archiveId` | 读取实际源 ZIP，不接受任意 path |
 
 API 提供只读 frozen bundle/输入 artifact 端点或将 bundle 全量放 wrapper；本版选择**wrapper 全量携带**，API 是冻结权威，Runtime 不再另选/重生成计划。源码输入继续使用受控 artifact ID/manifest hash。
+
+API 配置 `M2_TOOLCHAIN_ID`，首次 Prepare 前从上述只读端点获取实际可信 descriptor，并在该 Run 不可变请求中持久固定；网络失败不猜 hash、不回退 legacy，重试不换 descriptor。Agent 每次 Prepare 核对 template/package/scripts/lock/toolchain 全部实际指纹。成功候选的 artifact manifest/file 继续沿用既有 `/internal/v1/executions/:id/artifacts/:artifactId/manifest|file` 读取；这不允许绕过 delivery 启动/freeze。失败报告、证据和实际 ZIP 使用本节独立 delivery 路由，不依赖成功 Version 或 v1 manifest。
 
 独立失败报告资源不要求 Version 或 v1 manifest 存在。read report 的尚未生成与依赖不可达分别表达，不能用空成功对象掩盖。
 

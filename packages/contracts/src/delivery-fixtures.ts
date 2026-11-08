@@ -129,6 +129,16 @@ export function makeReport(frozen: Bundle = bundle, attempts: Attempt[] = [attem
   raw.quality = deriveDeliveryQuality(raw); raw.gaps = deriveCriterionGaps(raw); return DeliveryReport.parse(raw);
 }
 export const complete = makeReport();
+export const fakeSourceReport = DeliveryReport.parse({ ...complete, attempts: complete.attempts.map((entry) => ({ ...entry,
+  sourceProvenance: { kind: 'model_output', adapterMode: 'fake' } })) });
+export const dshSourceReport = DeliveryReport.parse({ ...complete, attempts: complete.attempts.map((entry) => ({ ...entry,
+  sourceProvenance: { kind: 'model_output', adapterMode: 'dsh' } })) });
+export const controlledSourceReport = DeliveryReport.parse({ ...complete, attempts: complete.attempts.map((entry) => ({ ...entry,
+  sourceProvenance: { kind: 'controlled_regression', baseSourceHash: hashes.sourceB, patchHash: 'a'.repeat(64),
+    injectedSourceHash: entry.sourceBeforeHash, patchEvidenceId: 'evidence_patch' } })),
+  evidence: [...complete.evidence, { id: 'evidence_patch', path: 'evidence/injected.patch', sha256: 'a'.repeat(64), bytes: 100,
+    kind: 'log', mediaType: 'text/plain', scope: 'verification', attemptId: complete.attempts[0].id,
+    sourceSnapshotHash: hashes.sourceA, specHash: spec.hash, planHash: notesPlan.hash }] });
 const partialBundle = structuredClone(bundle);
 partialBundle.plan.cases = partialBundle.plan.cases.filter((entry) => entry.id !== 'case_drag');
 partialBundle.plan.coverage = partialBundle.plan.coverage.map((entry) => entry.criterionId === 'criterion_drag'

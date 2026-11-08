@@ -23,7 +23,7 @@ API -- 内部认证HTTP --> Agent可信控制面 --> 受限broker --> 单任务L
 
 API 仍是发布权威。preview 专用端口只读已发布 manifest 的 dist 文件，不执行源码；previewSecret/API 状态只属于可信后端，不进入生成应用。首次不为了部署重写现有 preview 为另一业务服务。对生成应用的脚本、截图、ZIP 的安全 MIME/附件政策及 M2 发布 fence 保持。
 
-Agent 已确认的设计边界：模型/DSH 会话与密钥在可信控制面；不可信 builder/browser 分别在非 root、cap-drop、no-new-privileges、只读 rootfs、受限 tmpfs/cgroup CPU/mem/PID/磁盘/硬时限的 Linux job 中。任务仅获校验后的输入快照/专用卷，不挂 API 数据、DSH HOME、模型 Key、平台工作树、Docker socket。clean install 仅经宿主固定公共 registry 代理，禁生命周期脚本；浏览器与当前 app 同 job loopback，禁止访问其他 job/API/工作台/互联网。取消杀整个 job，并确认停止/代际 fence 后才结束。Docker 控制只能在私有受限 broker；API/Web/不可信 job 不拿 socket。具体 broker typed policy 由 Agent 提案、主管冻结，不能让模型拼 Docker 命令。
+Agent 已确认的设计边界：模型/DSH 会话与密钥在可信控制面；不可信 builder/browser 分别在非 root、cap-drop、no-new-privileges、只读 rootfs、受限 tmpfs/cgroup CPU/mem/PID/磁盘/硬时限的 Linux job 中。任务仅获校验后的输入快照/专用卷，不挂 API 数据、DSH HOME、模型 Key、平台工作树、Docker socket。全部不可信 job 的 network 均为 none。固定 public-lock tarball store 在可信镜像构建阶段预取并核验完整性，按任务复制私有 store 后 offline frozen install，缺 cache fail closed；不使用 job registry egress 代理，禁生命周期脚本；浏览器与当前 app 同 job loopback，禁止访问其他 job/API/工作台/互联网。取消杀整个 job，并确认停止/代际 fence 后才结束。Docker 控制只能在私有受限 broker；API/Web/不可信 job 不拿 socket。具体 broker typed policy 由 Agent 提案、主管冻结，不能让模型拼 Docker 命令。
 
 ## 3. 体验码、Cookie、权限与资源限制
 
@@ -99,9 +99,9 @@ cloudflared tunnel --url http://127.0.0.1:18081
 
 API public 卷保存SQLite/WAL、幂等记录、报告、版本、精确archive与代码quota；Agent public 卷保存其账本/可信会话，job临时卷按任务隔离并有清理策略。重启不重 seed/重跑模型；持久卷备份按drain/停服或SQLite一致性策略执行，不能只拷贝主db丢WAL。API配置状态与origin epoch持久保存；secret不放public metadata。
 
-build context采用白名单COPY与根.dockerignore，排除`.env*`、data/**、各级node_modules、DSH/session/cache、review-artifacts、密钥与私有logs。构建不得以ARG/ENV传模型key，不以COPY后删除隐藏历史层泄漏；runtime secret文件只挂可信服务，既不挂job也不进源码ZIP。当前API启动依赖tsx且contracts导出TS，不能假设`pnpm --prod`裁掉工具后仍能启动；后端Dockerfile需实际启动健康门禁。Node固定26.5.2兼容>=24.9，pnpm10.33.0/frozen lock；Linux arm64浏览器/依赖在Agent job镜像实际验证，不借macOS测试证明。
+build context采用白名单COPY与根.dockerignore，排除`.env*`、data/**、各级node_modules、DSH/session/cache、review-artifacts、密钥与私有logs。构建不得以ARG/ENV传模型key，不以COPY后删除隐藏历史层泄漏；runtime secret文件只挂可信服务，既不挂job也不进源码ZIP。当前API启动依赖tsx且contracts导出TS，不能假设`pnpm --prod`裁掉工具后仍能启动；后端Dockerfile需实际启动健康门禁。Node固定26.5.0兼容>=24.9，pnpm10.33.0/frozen lock；Linux arm64浏览器/依赖在Agent job镜像实际验证，不借macOS测试证明。
 
-只读本机检查：Docker Engine29.5.2、Linux arm64/cgroupv2能力由Agent报告；现有atoms-gateway:local digest `28ce4227…291ae32`、atoms-runner:local digest `d19fe13f…ed67d`，均本地标签，未获得可追溯source/revision标签。不能因存在镜像就复用为可信G5产物，需主管审来源或按冻结Dockerfile重建并记录digest。未发现`node:26.5-bookworm-slim`标签，不猜底层tag。cloudflared现已只读发现2026.10.7（此前missing状态已变化），未创建任何 tunnel。上述检查未输出image Env/history命令或任何Key。
+只读本机检查：Docker Engine29.5.2、Linux arm64/cgroupv2能力由Agent报告；现有atoms-gateway:local digest `28ce4227…291ae32`、atoms-runner:local digest `d19fe13f…ed67d`，均本地标签，未获得可追溯source/revision标签。不能因存在镜像就复用为可信G5产物，需主管审来源或按冻结Dockerfile重建并记录digest。主管已确认缓存精确tag `public.ecr.aws/docker/library/node:26.5.0-bookworm-slim`；构建时核验并固定官方RepoDigest，不猜node:26.5简称或26.5.2。cloudflared现已只读发现2026.10.7（此前missing状态已变化），未创建任何 tunnel。上述检查未输出image Env/history命令或任何Key。
 
 ## 7. 拟交付命令与实际验收门禁
 

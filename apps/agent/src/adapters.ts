@@ -9,6 +9,8 @@ import { requestStructuredJson, type ModelResult } from './structured-output.js'
 import type { DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
 import { applySourceEdit, type FileChange } from './source-edits.js';
 import { NativeUsageAccounting, UsageAccountingError, nativeEventIdentity, type NativeTokenUsage } from './native-usage.js';
+import type { BrowserTestPlanDto } from '@atoms/contracts/delivery';
+import { fakeCalculatorFiles } from './delivery-examples.js';
 
 export type PlanValue = ReturnType<typeof Plan.parse>;
 export type GenerationQuestion = { kind: 'question'; title: string; description: string; options: string[]; allowText: boolean };
@@ -22,6 +24,7 @@ export interface AdapterContext {
   remainingOutputTokens: () => number;
   fileChanged: (event: FileChange) => void;
   runAnswers: ResolvedRunQuestion[];
+  frozenTestPlan?: BrowserTestPlanDto; deliveryProfileId?: string;
 }
 export interface ModelAdapter {
   readonly mode: 'fake' | 'dsh';
@@ -58,7 +61,8 @@ export class FakeDshAdapter implements ModelAdapter {
       + (current['src/style.css']?.includes('#20211e') ? ' 深色' : '');
     const confirmed = context.runAnswers.map((item) => item.answer.kind === 'text' ? item.answer.text
       : item.answer.kind === 'select' ? item.question.options.find((option) => item.answer.kind === 'select' && option.id === item.answer.optionId)?.label || '' : '').join(' ');
-    const files = fakeApplication(context.request.projectId, context.request.prompt + retained + confirmed, Boolean(errors));
+    const files = context.deliveryProfileId === 'profile_calculator_v1' ? fakeCalculatorFiles
+      : fakeApplication(context.request.projectId, context.request.prompt + retained + confirmed + (context.frozenTestPlan ? ' 搜索' : ''), Boolean(errors));
     context.report(`准备应用 ${Object.keys(files).length} 个确定性样例源文件。`);
     let changed = 0;
     for (const [name, content] of Object.entries(files)) {
@@ -163,7 +167,7 @@ export class DshAdapter implements ModelAdapter {
   async generate(context: AdapterContext, plan: PlanValue, errors?: string): Promise<GenerationResult> {
     context.report(errors ? 'Worker 正在根据真实检查结果修复代码。' : 'Worker 正在实现 React 多文件应用。');
     const source = await collectText(context.workspace);
-    const raw = await this.json(context, 'worker', `Return JSON {"summary":string,"files":{"src/App.tsx":string,"src/components/Example.tsx":string,"src/style.css":string}}. If genuinely missing user information prevents implementation, instead return {"question":{"title":string,"description":string,"options":[string],"allowText":boolean}} and no files. Ask one concrete necessary question, do not ask about facts already answered below or reasonable defaults. All file values are complete UTF-8 source text, not patches. Keep the app compact: at most 250 source lines total and concise CSS. Only paths inside src/ or index.html are allowed. Use React 19 + TypeScript + plain CSS. Available packages: react, react-dom only. Do not change package.json, vite.config.ts, tsconfig.json, credentials, or dependency files. Use relative imports and no network. The entry is src/main.tsx. For persistence use localStorage key prefixed atoms:${context.request.projectId}:. Preserve existing working features unless user asks otherwise. Split UI into at least two React files.\nUser: ${context.request.prompt}\nPlan: ${JSON.stringify(plan)}\nResolved implementation questions: ${JSON.stringify(context.runAnswers.map((item) => ({ question: item.question.description, answer: item.answer.kind === 'text' ? item.answer.text : item.answer.kind === 'select' ? item.question.options.find((option) => item.answer.kind === 'select' && item.answer.optionId === option.id)?.label : 'plan approved' })))}\nCurrent sources: ${JSON.stringify(source)}\n${errors ? `Verification errors to repair:\n${errors.slice(0, 20000)}` : ''}`);
+    const raw = await this.json(context, 'worker', `Return JSON {"summary":string,"files":{"src/App.tsx":string,"src/components/Example.tsx":string,"src/style.css":string}}. If genuinely missing user information prevents implementation, instead return {"question":{"title":string,"description":string,"options":[string],"allowText":boolean}} and no files. Ask one concrete necessary question, do not ask about facts already answered below or reasonable defaults. Never ask to change frozen acceptance criteria: that needs a newly authorized task. All file values are complete UTF-8 source text, not patches. Keep the app compact: at most 250 source lines total and concise CSS. Only paths inside src/ or index.html are allowed. Use React 19 + TypeScript + plain CSS. Available packages: react, react-dom only. Do not change package.json, vite.config.ts, tsconfig.json, credentials, lockfiles or dependency files. Use relative imports and no network. The entry is src/main.tsx. For persistence use localStorage key prefixed atoms:${context.request.projectId}:. Preserve existing working features unless user asks otherwise. Split UI into at least two React files. When a frozen browser plan is supplied, implement its declared behavior and accessible/test-id hooks; you cannot modify tests/required/budgets.\nUser: ${context.request.prompt}\nPlan: ${JSON.stringify(plan)}\nFrozen test contract: ${JSON.stringify(context.frozenTestPlan ?? null)}\nResolved implementation questions: ${JSON.stringify(context.runAnswers.map((item) => ({ question: item.question.description, answer: item.answer.kind === 'text' ? item.answer.text : item.answer.kind === 'select' ? item.question.options.find((option) => item.answer.kind === 'select' && item.answer.optionId === option.id)?.label : 'plan approved' })))}\nCurrent sources: ${JSON.stringify(source)}\n${errors ? `Verification errors to repair:\n${errors.slice(0, 20000)}` : ''}`);
     const output = raw as { summary?: unknown; files?: unknown; question?: unknown };
     if (output?.question && typeof output.question === 'object' && !Array.isArray(output.question)) {
       const question = output.question as Record<string, unknown>;

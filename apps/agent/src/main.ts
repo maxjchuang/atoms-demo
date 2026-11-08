@@ -11,6 +11,7 @@ if (coordinationMode !== undefined && coordinationMode !== 'fake' && coordinatio
 if (!process.env.ATOMS_SERVICE_TOKEN || process.env.ATOMS_SERVICE_TOKEN.length < 16) throw new Error('ATOMS_SERVICE_TOKEN must contain at least 16 characters');
 const app = createAgentServer({ dataDir: path.resolve(process.env.AGENT_DATA_DIR || path.join(root, 'data/agent')),
   serviceToken: process.env.ATOMS_SERVICE_TOKEN, apiInternalUrl: process.env.API_INTERNAL_URL || 'http://127.0.0.1:3001',
+  allowControlledRegression: process.env.ATOMS_TEST_CONTROLLED_REGRESSION === '1' && mode === 'fake',
   mode: mode || 'dsh', coordinationMode, apiKey: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_MODEL });
 console.log(`Agent runtime (${mode || 'dsh'}) listening on ${await app.listen(Number(process.env.AGENT_PORT || 4100), process.env.AGENT_HOST || '127.0.0.1')}`);
 const shutdown = async () => { await app.close(); process.exit(0); };

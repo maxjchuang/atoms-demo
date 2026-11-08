@@ -1,0 +1,13 @@
+{
+  "name": "@atoms/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./fixtures": "./src/fixtures.ts" },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": { "zod": "3.25.76" },
+  "devDependencies": { "@types/node": "22.19.0", "tsx": "4.20.6", "typescript": "5.9.3" }
+}

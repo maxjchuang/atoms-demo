@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts", "./fixtures": "./src/fixtures.ts",
-    "./conversation": "./src/conversation.ts", "./conversation-fixtures": "./src/conversation-fixtures.ts"
+    "./conversation": "./src/conversation.ts", "./conversation-fixtures": "./src/conversation-fixtures.ts",
+    "./delivery": "./src/delivery.ts", "./delivery-fixtures": "./src/delivery-fixtures.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",

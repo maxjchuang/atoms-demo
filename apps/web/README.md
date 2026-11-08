@@ -54,7 +54,7 @@ ATOMS_E2E_REAL=1 ATOMS_E2E_PLAN=1 ATOMS_E2E_FAKE_RUNTIME=1 pnpm --filter @atoms/
 ## 当前验证记录
 
 - 类型检查、生产构建、30 项单元测试通过。
-- 独立 Mock 浏览器测试 5 项通过（含长等待、修复与历史恢复）；已有真实项目用例默认按条件跳过。
+- 独立 Mock 浏览器测试 7 项通过（含长等待、修复与历史恢复、两种桌面尺寸的 typography/layout 校验）；已有真实项目用例默认按条件跳过。
 - 完整后端 + Runtime + Fake DSH 的浏览器主流程 1 项通过（真实 React 构建、计划确认、预览交互/持久化、修改和回滚）。
 - 生产产物仅含 index.html、JS/CSS，没有 Mock Service Worker、模拟预览 HTML 或 Mock handler bundle。
 - 截图在 `test-results/workspace-generation-refre-88c41-e-modification-and-rollback/` 的 dashboard.png 和 workspace.png。
@@ -70,5 +70,20 @@ API 轮询成功与 Runtime 有新活动分别统计；空轮询及 API 恢复�
 新增反馈单元测试覆盖分页竞态、N/N+1 游标隔离、API 消息与 Runtime 活动区分、延迟回放、修复里程碑和必要检查计数。Mock 中 `[long-wait]` 仅用于冻结模拟生成阶段，配合测试时钟验证等待体验；它不影响真实服务或模型行为。
 
 只读历史截图可运行 `node scripts/capture-project.mjs <已完成的projectId>`。该脚本只允许 GET 和体验码登录，拦截其他写请求，不创建或修改任务；输出 `test-results/real-history-timeline.png`。
+
+## 字号与布局对照
+
+详见 [Typography 对照与修正](typography-review.md)。本机 before/after 使用同一浏览器、1440×1000 与 1366×768、100% 缩放实测；线上仅有登录 Dashboard 的目视参考，未伪造线上 CSS 数值。
+
+主标题保留 36/45px，消息和任务正文 14px、元信息和时间线 12px，首页输入 16px、工作区输入 14px，统一系统字体栈并提升颜色对比度。实现为组件级 token，不采用全局 zoom。
+
+```bash
+# 真实服务只读审计，需要已有成功项目；不创建 Run、不调用模型。
+ATOMS_TYPOGRAPHY_PROJECT=<projectId> pnpm --filter @atoms/web test:typography
+# 独立 5181 Mock 布局验证
+pnpm --filter @atoms/web exec playwright test e2e/typography.spec.ts
+```
+
+原始 JSON 在 `typography/`；本地 before/after 截图在被 gitignore 的 `review-artifacts/typography/`。
 
 详见 [并行计划](../../docs/parallel-plan.md) 与 [验收](../../docs/acceptance.md)。

@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "check": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:typography": "node scripts/typography-audit.mjs after"
   },
   "dependencies": {
     "@atoms/contracts": "workspace:*",

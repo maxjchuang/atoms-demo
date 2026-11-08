@@ -63,7 +63,7 @@ test('complete known preparation remains freezeable and replay never requests an
   let calls=0; let requestItems=0;
   const factory=()=>({ async run(_prompt:string,callbacks:{onNotification?:(n:HarnessNotification)=>void}) {
     calls++; notify(callbacks.onNotification,'step/start',1,0); notify(callbacks.onNotification,'assistant/message',2,0,{inputTokens:10,outputTokens:20,totalTokens:30});
-    return {sessionId:'session_explicit_mock_sdk',finalResponse:JSON.stringify({cases:[],coverage:Array.from({length:requestItems},(_,index)=>({criterionRef:`s${index}`,method:'unsupported',caseRefs:[],reason:'Explicit local mock has no supported browser assertion.'}))}),finishReason:'stop',events:[],notifications:[]} as RunResult;
+    return {sessionId:'session_explicit_mock_sdk',finalResponse:JSON.stringify({criteria:Array.from({length:requestItems},(_,index)=>({ref:`r${index}`,description:`Explicit unsupported derived item ${index}`,sourceSeedRefs:[`s${index}`]})),cases:[],coverage:Array.from({length:requestItems},(_,index)=>({criterionRef:`r${index}`,method:'unsupported',caseRefs:[],reason:'Explicit local mock has no supported browser assertion.'}))}),finishReason:'stop',events:[],notifications:[]} as RunResult;
   },async close(){} } as unknown as DeepSeekHarness);
   const {app,request,options}=await setup(t,factory); requestItems=request.seed.items.length; await app.planning.start(request,request.preparationId);
   const record=await until(()=>app.planning.get(request.preparationId),r=>['completed','failed'].includes(r.snapshot.status));

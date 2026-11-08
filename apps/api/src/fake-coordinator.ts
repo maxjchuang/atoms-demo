@@ -18,7 +18,7 @@ export const fakeChange=(request:StartCoordinationRequestDto,goal=request.conten
 export function addFakeCoordinator(app:FastifyInstance){
   const entries=new Map<string,{request:StartCoordinationRequestDto;snapshot:CoordinationExecutionSnapshotDto;events:CoordinationSourceEventDto[];commands:Set<string>}>();
   let factory:(request:StartCoordinationRequestDto)=>RouterResultDto|null=fakeConsult;
-  let calls=0;let cancels=0;let unavailable=false;let loseNext=false;
+  let calls=0;let putRequests=0;let cancels=0;let unavailable=false;let loseNext=false;
   const emit=(turnId:string,event:CoordinationSourceEventDto['event'])=>{
     const entry=entries.get(turnId)!;const seq=entry.events.length+1;
     entry.events.push({protocolVersion:VERSION,projectId:entry.request.projectId,turnId,sourceSeq:seq,occurredAt:now(),event:clone(event)});
@@ -32,6 +32,7 @@ export function addFakeCoordinator(app:FastifyInstance){
     if(request.url.startsWith('/internal/v2/')&&unavailable)return reply.code(503).send({error:'Injected coordination outage'});
   });
   app.put('/internal/v2/coordination-turns/:turnId',(request,reply)=>{
+    putRequests++;
     const body=StartCoordinationRequest.parse(request.body),turnId=(request.params as {turnId:string}).turnId;
     if(body.turnId!==turnId)return reply.code(400).send({error:'Turn ID mismatch'});
     const old=entries.get(turnId);
@@ -62,6 +63,6 @@ export function addFakeCoordinator(app:FastifyInstance){
     }
     return reply.code(202).send(entry.snapshot);
   });
-  return {entries,complete,get calls(){return calls;},get cancels(){return cancels;},setFactory(value:typeof factory){factory=value;},
+  return {entries,complete,get calls(){return calls;},get putRequests(){return putRequests;},get cancels(){return cancels;},setFactory(value:typeof factory){factory=value;},
     setUnavailable(value:boolean){unavailable=value;},loseNextResponse(){loseNext=true;},emit};
 }

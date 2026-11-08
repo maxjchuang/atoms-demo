@@ -330,6 +330,7 @@ export function registerCoordination(host:CoordinationHost) {
       ...(record.replyTo?{replyTo:record.replyTo}:{}),...(record.dto.continuationOfTurnId?{continuationOfTurnId:record.dto.continuationOfTurnId}:{}),
       context,budget:CoordinationBudget.parse({})});
     record.request=request;record.requestHash=host.hash(host.canonical(request));
+    record.putPending=false;
     updateTurn(record,{assistantMessageId,contextVersionId:context.contextVersionId,contextRevisionUsed:context.contextRevision,
       memoryRevisionUsed:context.projectMemory.revision,conversationRevisionUsed:context.conversationRevision});return request;
   };
@@ -437,7 +438,7 @@ export function registerCoordination(host:CoordinationHost) {
   const fetchRuntime=async(path:string,method='GET',body?:unknown)=>{
     const response=await fetch(host.agentUrl.replace(/\/$/,'')+path,{method,headers:{authorization:`Bearer ${host.serviceToken}`,'X-Atoms-Coordination-Version':VERSION,'content-type':'application/json'},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(5000)});
-    if(!response.ok)throw new Error(`Coordination runtime HTTP ${response.status}`);return response;
+    if(!response.ok)throw Object.assign(new Error('Coordination runtime response unavailable'),{status:response.status});return response;
   };
   const failure=(record:CoordinationRecord,code:NonNullable<CoordinationTurnDto['error']>['code'],message:string)=>{
     putMessage(record.dto.projectId,record.dto.id,message,'assistant',record.dto.assistantMessageId??id('message'),record.dto.userMessageId);
@@ -475,7 +476,24 @@ export function registerCoordination(host:CoordinationHost) {
             });continue;
           }
           const path=`/internal/v2/coordination-turns/${turnId}`;
-          await fetchRuntime(path,'PUT',record.request);
+          if(record.dto.status==='cancelling'){
+            let exists=true;
+            try{await fetchRuntime(path);}catch(error){if((error as {status?:number}).status===404)exists=false;else throw error;}
+            if(!exists){
+              if(record.putPending===false&&!record.started){
+                store.transaction(()=>{record=state().turns.find(t=>t.dto.id===turnId)!;updateTurn(record,{status:'cancelled',completedAt:now()});});
+              }else if(!record.cancelUncertainNotified){
+                store.transaction(()=>{record=state().turns.find(t=>t.dto.id===turnId)!;record.cancelUncertainNotified=true;
+                  putMessage(record.dto.projectId,turnId,'正在核对已发出的协调请求是否开始；尚未确认停止，不会为了取消再启动新的推理。','assistant');});
+              }
+              continue;
+            }
+          }else{
+            // Persist uncertainty before sending. A timed-out PUT may still arrive remotely.
+            store.transaction(()=>{state().turns.find(t=>t.dto.id===turnId)!.putPending=true;});
+            await fetchRuntime(path,'PUT',record.request);
+            store.transaction(()=>{state().turns.find(t=>t.dto.id===turnId)!.putPending=false;});
+          }
           record=state().turns.find(t=>t.dto.id===turnId)!;
           if(record.cancelCommand)await fetchRuntime(path+'/cancel','POST',record.cancelCommand);
           const page=CoordinationSourceEventPage.parse(await(await fetchRuntime(path+`/events?after=${record.sourceSeq}&limit=100`)).json());

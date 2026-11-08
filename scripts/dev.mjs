@@ -22,6 +22,8 @@ try { localSecrets = JSON.parse(readFileSync(secretsPath, 'utf8')); } catch {
 const apiPort = process.env.API_PORT || '3001';
 const previewPort = process.env.PREVIEW_PORT || '3002';
 const agentPort = process.env.AGENT_PORT || '4100';
+const webPort = process.env.WEB_PORT || '5173';
+const allowedOrigins=process.env.ATOMS_ALLOWED_ORIGINS||`http://localhost:${webPort}`;
 const env = {
   ...process.env,
   ATOMS_SERVICE_TOKEN: process.env.ATOMS_SERVICE_TOKEN || localSecrets.serviceToken,
@@ -30,7 +32,7 @@ const env = {
   AGENT_PORT: agentPort,
   ATOMS_ENABLE_DEMO: process.env.ATOMS_ENABLE_DEMO || 'true',
   ATOMS_DEMO_CODE: process.env.ATOMS_DEMO_CODE || 'atoms-demo-2026',
-  ATOMS_ALLOWED_ORIGINS: 'http://localhost:5173',
+  ATOMS_ALLOWED_ORIGINS: allowedOrigins,
   AGENT_URL: `http://127.0.0.1:${agentPort}`,
   API_INTERNAL_URL: `http://127.0.0.1:${apiPort}`,
   PREVIEW_PUBLIC_URL: `http://127.0.0.1:${previewPort}`,
@@ -42,7 +44,7 @@ const env = {
   API_DEMO_CODE: process.env.ATOMS_DEMO_CODE || 'atoms-demo-2026',
   API_DATA_DIR: process.env.API_DATA_DIR || path.join(dataRoot, 'api'),
   AGENT_DATA_DIR: process.env.AGENT_DATA_DIR || path.join(dataRoot, 'agent'),
-  ALLOWED_ORIGINS: 'http://localhost:5173',
+  ALLOWED_ORIGINS: allowedOrigins,
   PREVIEW_ORIGIN: `http://127.0.0.1:${previewPort}`,
 };
 env.INTERNAL_SERVICE_TOKEN = env.ATOMS_SERVICE_TOKEN;
@@ -70,7 +72,9 @@ for (const name of ['@atoms/agent', '@atoms/api', '@atoms/web']) {
     delete childEnv.INTERNAL_SERVICE_TOKEN;
     delete childEnv.PREVIEW_SECRET;
   }
-  const child = spawn('pnpm', ['--filter', name, name === '@atoms/web' ? 'dev' : 'start'], {
+  const args=['--filter',name,name==='@atoms/web'?'dev':'start'];
+  if(name==='@atoms/web')args.push('--port',webPort);
+  const child = spawn('pnpm', args, {
     cwd: root, env: childEnv, stdio: 'inherit', detached: true,
   });
   children.push(child);
@@ -80,6 +84,6 @@ for (const name of ['@atoms/agent', '@atoms/api', '@atoms/web']) {
   });
 }
 console.log(`\n${demo ? 'DEMO MODE: deterministic Fake DSH; no model inference' : 'REAL MODE: DSH + DeepSeek API'}`);
-console.log('Workspace: http://localhost:5173');
+console.log(`Workspace: http://localhost:${webPort}`);
 console.log('Preview uses a different host (127.0.0.1) to avoid sharing workspace cookies.');
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => stop());

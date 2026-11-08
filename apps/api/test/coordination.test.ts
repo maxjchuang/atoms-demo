@@ -37,6 +37,16 @@ async function fixture(options:{limit?:number;rate?:number}={}){
     async restart(){await service.close();service=await createApi(config);},
     async legacyRestart(){await service.close();const db=new DatabaseSync(join(directory,'api.sqlite'));const row=db.prepare('SELECT document FROM app_state WHERE id=1').get()!;
       const value=JSON.parse(String(row.document));delete value.coordination;db.prepare('UPDATE app_state SET document=? WHERE id=1').run(JSON.stringify(value));db.close();service=await createApi(config);},
+    prepareUnsent(turnId:string,putPending=false){service.store.transaction(()=>{
+      const record=service.store.state.coordination.turns.find(t=>t.dto.id===turnId)!;const request=structuredClone(canonicalVector);
+      request.turnId=record.dto.id;request.projectId=record.dto.projectId;request.inputMessageId=record.dto.userMessageId;request.assistantMessageId='message_prepared_reply';
+      request.content=record.inputContent;request.operation=record.operation;request.mode=record.dto.mode;
+      request.context.projectId=record.dto.projectId;request.context.contextVersionId=null;request.context.facts.project.id=record.dto.projectId;
+      request.context.facts.currentVersionId=null;request.context.facts.versions=[];request.context.facts.availableActions=[];
+      request.context.projectMemory.projectId=record.dto.projectId;request.context.recentMessages=[];
+      const {hash:_,...context}=request.context;request.context.hash=hash(canonical(context));
+      record.request=request;record.requestHash=hash(canonical(request));record.putPending=putPending;record.dto.assistantMessageId=request.assistantMessageId;
+    });},
     async close(){await service.close();await runtime.app.close();await rm(directory,{recursive:true,force:true});}};
 }
 
@@ -156,6 +166,36 @@ test('coordination cancellation suppresses late change result but cannot cancel 
     const cancelled=await f.request('POST',`/api/v2/coordination-turns/${done.id}/cancel`,{expectedRevision:done.revision});
     assert.equal(cancelled.data.disposition,'already_dispatched');assert.equal(cancelled.data.run.status,'queued');
     assert.equal(f.coordinator.cancels,1);assert.equal((await f.workspace(project.id)).execution.queuedRuns.length,1);
+  }finally{await f.close();}
+});
+
+test('cancelling a prepared but never dispatched outbox does not PUT or start inference',async()=>{
+  const f=await fixture();try{
+    await f.login();const project=await f.project();const message=await f.submit(project.id,'增加搜索框');
+    // Crash-window fixture: immutable request is persisted, but its HTTP PUT has not been sent.
+    f.prepareUnsent(message.turn.id);
+    await f.request('POST',`/api/v2/coordination-turns/${message.turn.id}/cancel`,{expectedRevision:1});
+    await f.service.tickCoordination();
+    assert.equal((await f.turn(message.turn.id)).status,'cancelled');assert.equal(f.coordinator.putRequests,0);assert.equal(f.coordinator.calls,0);
+    assert.equal((await f.request('GET','/api/v2/session')).data.coordinationQuota.used,0);
+    assert.equal((await f.request('GET','/api/v2/session')).data.coordinationQuota.reserved,0);
+    assert.equal(f.service.store.state.runs.length,0);
+  }finally{await f.close();}
+});
+
+test('uncertain in-flight PUT cancellation never recreates a turn or claims stopped on 404/network failure',async()=>{
+  const f=await fixture();try{
+    await f.login();const project=await f.project();const message=await f.submit(project.id,'增加搜索框');f.prepareUnsent(message.turn.id,true);
+    await f.request('POST',`/api/v2/coordination-turns/${message.turn.id}/cancel`,{expectedRevision:1});
+    f.coordinator.setUnavailable(true);await f.service.tickCoordination();assert.equal((await f.turn(message.turn.id)).status,'cancelling');
+    f.coordinator.setUnavailable(false);await f.service.tickCoordination();assert.equal((await f.turn(message.turn.id)).status,'cancelling');
+    assert.equal(f.coordinator.putRequests,0);assert.equal(f.coordinator.calls,0);assert.equal((await f.request('GET','/api/v2/session')).data.coordinationQuota.reserved,1);
+    // The previously sent request arrives late. Only this simulated in-flight delivery may create RT.
+    f.coordinator.setFactory(()=>null);const saved=f.service.store.state.coordination.turns.find(t=>t.dto.id===message.turn.id)!.request!;
+    await f.runtime.app.inject({method:'PUT',url:`/internal/v2/coordination-turns/${message.turn.id}`,headers:{authorization:'Bearer coordination-test-token'},payload:saved});
+    await f.service.tickCoordination();assert.equal((await f.turn(message.turn.id)).status,'cancelled');
+    assert.equal(f.coordinator.putRequests,1);assert.equal(f.coordinator.calls,1);assert.equal((await f.request('GET','/api/v2/session')).data.coordinationQuota.used,1);
+    assert.equal(f.service.store.state.runs.length,0);
   }finally{await f.close();}
 });
 

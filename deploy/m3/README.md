@@ -7,7 +7,7 @@ This is the backend-owned deployment implementation. It has **not** exposed a pu
 - `compose.yml`: final public topology; named API/Agent/broker data and separate per-role token volumes. API/Agent/broker have no host ports. Only workbench/preview gateways publish loopback18080/18081.
 - `compose.check.yml`: explicit synthetic HTTP Agent, `atoms-m3-check` only; this is **not** OS proof/G3/G5. No Docker socket is mounted in this check topology.
 - Provider credential has its own `provider-secret` volume: only trusted Agent (read-only) and a network-none same-Agent-image credential ingress may mount it. API, generic admin/bootstrap, gateway, broker and jobs do not mount it. Generic bootstrap handles internal tokens only, never provider input. No host private directory is mounted wholesale.
-- Broker alone gets `/var/run/docker.sock`. It derives socket GID via a broker-role metadata stat; never hardcode host GID or give API/model/job a socket. `BROKER_URL=http://broker:4310`, `AGENT_EXECUTION_BACKEND=docker_linux`, file-backed service/broker/provider secrets are coordinated with the Agent lane.
+- Broker alone gets `/var/run/docker.sock`. It derives socket GID by identity-checked `exec` into the existing reviewed Broker, or (only when none is running) a pinned Broker-image, network-none, socket-only metadata container. This never uses `compose run broker`, which would duplicate its static IP on ordinary up/renew. Never hardcode host GID or give API/model/job a socket. `BROKER_URL=http://broker:4310`, `AGENT_EXECUTION_BACKEND=docker_linux`, file-backed service/broker/provider secrets are coordinated with the Agent lane.
 - Public `M2_TOOLCHAIN_ID` is derived from the authenticated reviewed metadata tuple, not a host/default/fake ID. Unconfigured is a non-dispatching sentinel. `CAPACITY_UNAVAILABLE` is not normal healthy one-job occupancy; trusted Router remains independent.
 
 Both gateways deny internal/metrics/broker/Docker/unknown routes and encoded traversal, overwrite Host/forwarded proto from canonical host configuration, never trust visitor forwarded host. Preview allows only GET/HEAD capability assets and strips cookies in both directions. Authenticated content and capability responses use no-store. Shared-preview browser storage is not project/tenant isolation; initial public profile is one reviewer identity/one sample project.
@@ -91,3 +91,14 @@ Local isolated network proof passed: two actual gateway containers on test edge+
 The negative network test uses its own **live** control TCP sentinel (not the stopped public API): control-side positive probes before and after both return200 with the exact sentinel body; edge-side probes reach both GW health endpoints200 while API DNS and direct control IP are null/denied. The recorded local proof is `~/.atoms-m3/check/connector-network-probe.json`. A separate actual `docker create`-only identity check of the pinned connector image passed before start, including the created-state network-ID handling; that stopped container/network was removed without ever starting its tunnel command. Docker's fixed default PATH is permitted alongside HOME/SSL_CERT_FILE; arbitrary credential environment remains forbidden.
 
 Supervisor independently repeated connector4/core-mode9/Stage2-guard5 tests, plus the live-sentinel isolated network probe (`atoms-m3-connector-check-f65526e5`: control before/after200, both gateways200, edge control DNS/IP denied). Official Linux asset SHA/ELF and network-none `--version` were independently verified by a fresh owned build; public operator manifest records image `sha256:aaba27562f4e6b020852c5a8b470fcbba969d1a5cdc3d8a53ab446b7cfee6487`, context `095b6b00265dba6605181a91062c55ceede32563795b730a70f4a88f9a292743`. These are not tunnel/G5 successes; actual public start remains manager-controlled.
+
+### Repeated-up socket metadata regression
+
+The first edge-network rebuild attempt failed safely because a metadata `compose run broker` inherited the running Broker static IP (root operation 23721); its failure evidence is retained. The helper now verifies the running container image/owner/role/project/service before `exec`, and refuses mismatched identities. The no-Broker fallback has no data or secret mounts and no control-network attachment.
+
+```sh
+node --test scripts/m3-broker-metadata.test.mjs
+node scripts/m3-broker-metadata-probe.mjs
+```
+
+The isolated actual Docker probe passed repeated existing-Broker reads plus the no-Broker fallback (same socket GID), with zero provider calls, tunnel starts, or public-container recreation. It tests metadata lookup, not a public deployment or tunnel lifecycle.

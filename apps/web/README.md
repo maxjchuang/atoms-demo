@@ -172,3 +172,7 @@ ATOMS_READONLY_REAL_SERVICES=1 ATOMS_WEB_URL=http://localhost:<隔离端口> \
 浏览器 context route 在发出请求前只允许 GET/HEAD 与同工作台 origin 的精确 `POST /api/v1/sessions` 登录（不接受额外 query/尾斜杠）；其他写请求先 abort，任何写尝试都使审计失败。禁用 Service Worker。前后比较构建/问答额度、消息 ID 与 revision、任务与版本指针/列表，必须不变。结果记录 `mode=fake|readonly_real`、实际来源、具体 gap、0 新消息/Run 和写拦截记录；Fake 输出仍在 `review-artifacts/m2-services/`，真实只读输出单独在 `review-artifacts/m2-readonly-real-services/`。exit 0 表示完整只读审计通过，exit 1 表示未通过；不会静默降为 Mock/Fake。
 
 工具更新验证：54 项 Web 单元测试/check 通过（含双模式写禁止、参数互斥/live 拒绝、DSH 来源负例）；现有 5185 Fake 项目只读完整回归退出 0、计数不变。双模式浏览器 guard 对不存在任务的取消探针均在服务端前 abort（服务端写入 0），没有真正取消任务或触发模型。真实 DSH 的只读成功验收仍须主管后续提供已有真实项目，不用这些 Fake/合成测试冒充。
+
+canonical Seed / derived leaf 呈现补充（2026-11-09）：仅通过共享 `hasDerivedModelCriteria` 与 Seed 明确 ID 分组；默认具体 leaf 缺口在前，原始总体目标另列汇总，保留 required、manual/unsupported/not_run 和完整原始审计。父汇总不作为额外已测行为，实际 case 仍逐条显示一次。旧 host/seed-only 报告、公共 client、质量计算与异步绑定未改。
+
+定向验证：projection 与现 delivery 单元 10/10；mixed/allauto 两尺寸加既有 complete/partial/切版本浏览器 7/7；最后默认说明行调整后 projection 两尺寸 4/4；check/build 通过，未重跑无关全量、未操作实际服务或调用模型。截图：`review-artifacts/m2/projection-{mixed,auto}-{preview,report}-{1440,1366}-mock.png`，mixed 的 `audit` 图另展示展开后的原始父 reason/ID。全部为合成 Mock，不作真实模型或行为执行证明。

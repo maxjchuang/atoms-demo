@@ -19,6 +19,10 @@
 
 所有不可信任务禁网，包括独立源码 ZIP 安装；可信镜像构建预取并校验固定公共依赖，任务使用私有离线 store，在新目录实际安装。缺缓存、工具链错配、未完成 probe 或旧代际结果均不得回退宿主运行或声明 ready。普通本机 M2 模式仍保留其原范围，不作为 M3 证据。
 
-基础容器策略：主管实际复跑`smoke-policy.ts` exit0，证据`atoms-v03-policy-sC7z4Y`，uid/gid10001、CapEff0、NoNewPrivs1、root EROFS、network none、CPU1.5/内存2GiB/swap0/PID128及无持久job日志均观测通过。探测的是未挂载路径，不冒充真实跨平面canary/浏览器/取消/崩溃门禁。正式镜像的Chromium下载100%后构建停顿仍在排查，不标ready。
+基础容器策略：主管实际复跑`smoke-policy.ts` exit0，证据`atoms-v03-policy-sC7z4Y`，uid/gid10001、CapEff0、NoNewPrivs1、root EROFS、network none、CPU1.5/内存2GiB/swap0/PID128及无持久job日志均观测通过。探测的是未挂载路径，不冒充真实跨平面canary/浏览器/取消/崩溃门禁。原浏览器安装器100%后停顿已按15分钟硬超时保留；改用固定官方matching Playwright镜像与Node26.5后构建成功，未改隔离要求。
 
 当前main仍为共享G0 `817c1b3` 与M2 App；M3 App仅在集成分支，未升级本机live或公网。
+
+Chromium差异验证：默认seccomp失败`atoms-v03-browser-3xLSUV`；官方Playwright userns配置仍缺sandbox内部chroot，失败`njP5GA`；仅允许chroot syscall而不授任何cap后，作者与主管独立实际通过（主管`aUmNjY`）：chromiumSandbox=true、Node26.5/Linuxarm64、Chromium141、uid10001/CapEff0/NoNewPriv1；外层chroot仍EPERM(125)、mount拒绝(32)。不使用privileged/unconfined/hostIPC/no-sandbox或VM全局修改。这是当时镜像的browser smoke，不是最终完整OS readiness。后续离线runner装配/原DSL、资源、跨平面canary、取消/崩溃/重启与实际Runtime联调仍未完成，ready保持false。
+
+API补修`59f81f5`已由主管check/public10定向验证：Docker不可用不阻断可信只读Router，auto意图可按原授权排队/预占；无匹配证明不派Prepare/Worker、不计生成used，恢复不重跑Router。MD-only澄清已推main`1aa26d7`；M3 App仍仅集成分支。

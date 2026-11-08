@@ -138,7 +138,7 @@ hash 证明一致性，不单独证明浏览器实际执行或语义正确；可
 | SourceExportManifest / CleanBuildReport / DeliveryReport / DeliveryFacts | 同上；只排自己的 hash，不删除嵌套对象 hash；报告无 final artifact hash 字段 |
 | DeliveryCoordinationRequest.hash | 完整外层去顶层 hash；内层协调对象/context.hash 不变，deliveryFacts.hash 保留 |
 | Prepare / execution wrapper requestHash | 完整规范请求 DTO，不排任何字段（请求自身没有 hash 字段）；内层绑定 hash 全部参与 |
-| sourceSnapshotHash / distHash | 对规范 `{path,bytes,sha256}` 清单按 path 的 Unicode 字面序（JS `<`/`>`）排序后 canonical JSON；不含 mediaType/目录时间，不隐式改大小写/NFC |
+| sourceSnapshotHash / distHash | 使用候选 manifest 的完整 `source/` / `dist/` 前缀路径，对规范 `{path,bytes,sha256}` 清单按 path 的 Unicode 字面序（JS `<`/`>`）排序后 canonical JSON；不得剥除前缀，不含 mediaType/目录时间，不隐式改大小写/NFC |
 | 文件 / ZIP archive / report 传输字节 | SHA-256 原始实际字节；传输 report 文件的 bytes hash 与 report 对象自己的 hash 分开，不能混用 |
 
 静态跨实现向量：`delivery-fixtures.seed`（含中文、嵌套对象、数组及 null），仅去顶层 hash 后为 **1202 UTF-8 bytes**，SHA256 **769646b0930ff5c4923bd9eb056a0579995db3aa98656822effbbd002143321b**。它只验证规范化，不代表真实浏览器或导出证据；其他 fixture 文件/ZIP digest 是明确的合成绑定样例，不冒充真实执行。

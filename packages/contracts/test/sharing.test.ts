@@ -52,17 +52,17 @@ test('resolve request is strict, fixes preview subject and always carries expect
   {...f.buildEntryRequest,createRun:true}])assert.equal(ResolveSharingRequest.safeParse(value).success,false);
 });
 test('HTTPS links cannot carry credentials, query, fragment, unsafe protocol or whitespace',()=>{
- for(const url of ['http://host.example/','javascript:alert(1)','file:///private','https://user:password@host.example/','https://host.example/?code=secret','https://host.example/#session','https://host.example/?','https://host.example/#',' https://host.example/','https://host.example/\n'])assert.equal(SharingHttpsUrl.safeParse(url).success,false,url);
+ for(const url of ['http://host.example/','javascript:alert(1)','file:///private','https://user:password@host.example/','https://@host.example/','https://host.example\\','https://host.example/?code=secret','https://host.example/#session','https://host.example/?','https://host.example/#',' https://host.example/','https://host.example/\n'])assert.equal(SharingHttpsUrl.safeParse(url).success,false,url);
 });
 test('preview path is exactly the existing signed capability index and expiry is bounded from issue time',()=>{
  ResolvedSharing.parse(f.preview);
- for(const path of ['/','/api/v1/session','/p/payload/index.html','/p/payload.signature/source.zip','/p/payload.signature/../index.html','/p/payload.signature/%69ndex.html'])assert.equal(ResolvedSharing.safeParse({...f.preview,url:'https://preview.example.test'+path}).success,false,path);
+ for(const path of ['/','/api/v1/session','/p/payload/index.html','/p/payload.signature/source.zip','/p/payload.signature/../index.html','/p/payload.signature/%69ndex.html','/other/../p/payload.signature/index.html','/%2e%2e/p/payload.signature/index.html'])assert.equal(ResolvedSharing.safeParse({...f.preview,url:'https://preview.example.test'+path}).success,false,path);
  for(const expiresAt of [f.preview.issuedAt,'2026-11-09T02:59:59.000Z','2026-11-09T03:15:00.001Z'])assert.equal(ResolvedSharing.safeParse({...f.preview,expiresAt}).success,false);
  assert.equal(ResolvedSharing.safeParse({...f.preview,subjectVersionId:null}).success,false);
 });
 test('build entry is the root login page, not an invitation credential or permission grant',()=>{
  ResolvedSharing.parse(f.buildEntry);assert.equal(f.buildEntry.expiresAt,null);assert.equal(f.buildEntry.temporary,true);
- for(const value of [{...f.buildEntry,url:'https://workbench.example.test/invite'},{...f.buildEntry,url:'https://workbench.example.test/#/projects/project_demo'},
+ for(const value of [{...f.buildEntry,url:'https://workbench.example.test/invite'},{...f.buildEntry,url:'https://workbench.example.test/a/..'},{...f.buildEntry,url:'https://workbench.example.test/%2e'},{...f.buildEntry,url:'https://workbench.example.test/a/../'},{...f.buildEntry,url:'https://workbench.example.test/#/projects/project_demo'},
   {...f.buildEntry,requiresExperienceCode:false},{...f.buildEntry,audience:'anyone_with_link'},
   {...f.buildEntry,expiresAt:'2026-11-09T03:15:00.000Z'},{...f.buildEntry,temporary:false},{...f.buildEntry,session:'not-a-real-session'}])assert.equal(ResolvedSharing.safeParse(value).success,false);
 });

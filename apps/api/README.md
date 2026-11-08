@@ -2,6 +2,21 @@
 
 Node/Fastify service implementing the v0.1.0 public protocol. The API owns identity, quotas, project locks, durable task state and final publication. It talks to the Agent over authenticated HTTP; no DSH implementation is imported.
 
+## M1 coordination (v0.2)
+
+The separate `coordination.ts` module implements `/api/v2` against `@atoms/contracts/conversation`. Existing v1 execution DTOs and routes remain intact. Natural language is sent to the Agent Router; the API does not substitute a temporary keyword classifier. Explicit structured status/sharing shortcuts use host facts without inference.
+
+- Messages and CoordinationTurns are independent of Runs. Consult/status/clarification do not reserve generation quota. The default auto mode admits clear explicit changes; ask never automatically builds or controls a Run.
+- Replies, proposals, clarifications, memory decisions and both cursor families persist. All v1 messages mirror into the v2 history projection with stable IDs/historySeq/revision; admitted changes reuse the original user message.
+- Per-project coordination is serialized until the previous result/memory transaction commits. The first outbound context/request/hash is persisted before HTTP; retries reuse the same body. The Coordinator polling lane is independent from Worker polling.
+- Selection answers carry a trusted full question/option snapshot and related proposal, even after the question leaves recent/pending history. Decisions retain source messages, turn, revisions and supersession; context contains a scrubbed fact subset, never preview signatures or service credentials.
+- Latest intent binds the newest successful version at Worker dispatch. Exact proposals require revision/base confirmation and fail before execution if the accepted base changes. Refresh creates a new read-only proposal, never rewrites the old confirmation.
+- Router cancellation cannot cancel an admitted Worker. Explicit `cancel_run` control validates target/ownership/revision and reuses v1 cancellation, with truthful stopping receipts.
+- Opaque host actions resolve only from the Turn's saved context. Signed preview URLs are issued only to the browser; resolving a cancellation action does not execute it.
+- Status prose is formatted from live API Run facts at reply commit. Model-invented public deployment/link claims are replaced by actual local-only platform facts; this output validation does not classify input intent.
+
+`test:contract` includes independent HTTP FakeCoordinator cases plus all original v1 regressions. Fake outcomes are explicitly supplied by tests and are not evidence of real natural-language routing accuracy. Real Router capability and project-session restart behavior require the separate Agent/integration gate.
+
 ## Start
 
 Use the root `pnpm dev:demo` for an explicit Fake DSH integration, or `pnpm dev` with the root `.env` configured for real DSH. The root launcher supplies ports and service credentials without printing them.

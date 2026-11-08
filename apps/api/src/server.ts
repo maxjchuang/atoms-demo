@@ -10,19 +10,21 @@ import {
   type AgentEventDto, type ProjectEventDto, type RunDto, type StartExecutionDto, type VersionDto,
 } from '@atoms/contracts';
 import { Store, type Code, type IdempotentResult, type RunRecord, type SessionRecord, type VersionRecord } from './store.js';
+import { registerCoordination } from './coordination.js';
 
 export interface ApiOptions {
   dataDir: string; agentUrl: string; serviceToken: string; previewSecret: string; previewOrigin: string;
   allowedOrigins?: string[]; secureCookies?: boolean; demoCode?: string; pollMs?: number; autoSchedule?: boolean;
+  coordinationMessageLimit?:number;coordinationMessagesPerMinute?:number;
 }
 type Result = { status: number; body?: unknown; cookie?: string };
 const now = () => new Date().toISOString();
 const id = (prefix: string) => `${prefix}_${randomBytes(10).toString('hex')}`;
 export const hash = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 const terminal = (status: string) => ['succeeded', 'failed', 'cancelled', 'interrupted'].includes(status);
-const canonical = (value: unknown): string => {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
-  if (value && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+export const canonical = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${Array.from(value,item=>canonical(item)).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.entries(value).filter(([,v])=>v!==undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
   return JSON.stringify(value) ?? 'null';
 };
 class HttpError extends Error { constructor(readonly status: number, readonly code: string, message: string, readonly retryable = false) { super(message); } }
@@ -46,12 +48,14 @@ export async function createApi(options: ApiOptions) {
   const app = Fastify({ logger: false, bodyLimit: 65536 });
   const preview = Fastify({ logger: false, routerOptions: { maxParamLength: 4096 } });
   let busy = false; let closed = false;
+  let coordination:ReturnType<typeof registerCoordination>|undefined;
   const loginAttempts = new Map<string, { since: number; count: number }>();
   const authHeaders = { authorization: `Bearer ${options.serviceToken}`, 'X-Atoms-Protocol-Version': PROTOCOL_VERSION, 'content-type': 'application/json' };
   const cookie = (token: string, clear = false) => `atoms_session=${clear ? '' : token}; Path=/; HttpOnly; SameSite=Lax${options.secureCookies ? '; Secure' : ''}; Max-Age=${clear ? 0 : 604800}`;
   const emit = (projectId: string, runId: string | null, event: ProjectEventDto['event'], occurredAt = now()) => {
     const seq = store.state.events.filter((entry) => entry.projectId === projectId).at(-1)?.seq ?? 0;
     store.state.events.push({ protocolVersion: PROTOCOL_VERSION, projectId, runId, seq: seq + 1, occurredAt, event: structuredClone(event) });
+    if(event.type==='message.updated')coordination?.mirror(event.payload,occurredAt);
   };
   const updateRun = (record: RunRecord, change: Partial<RunDto>) => {
     record.dto = Run.parse({ ...record.dto, ...change, revision: record.dto.revision + 1, updatedAt: now() });
@@ -211,8 +215,8 @@ export async function createApi(options: ApiOptions) {
       store.state.projects.push({ dto: project, codeId: session.codeId }); return { status: 201, body: project };
     });
   });
-  app.get('/api/v1/projects/:projectId/workspace', (request) => {
-    const project = ownProject(param(request, 'projectId'), authorize(request));
+  const workspaceFor = (projectId:string) => {
+    const project = store.state.projects.find(p=>p.dto.id===projectId)!;
     const runs = store.state.runs.filter((entry) => entry.dto.projectId === project.dto.id);
     const messages = store.state.messages.filter((entry) => entry.projectId === project.dto.id);
     const version = store.state.versions.find((entry) => entry.dto.id === project.dto.currentVersionId);
@@ -222,6 +226,9 @@ export async function createApi(options: ApiOptions) {
       latestRun: runs.at(-1)?.dto ?? null, currentVersion: version ? freshVersion(version) : null,
       messages: messages.slice(-50), olderMessagesCursor: messages.length > 50 ? Buffer.from(String(messages.length - 50)).toString('base64url') : null,
       eventCursor: store.state.events.filter((entry) => entry.projectId === project.dto.id).at(-1)?.seq ?? 0 });
+  };
+  app.get('/api/v1/projects/:projectId/workspace', (request) => {
+    const project=ownProject(param(request,'projectId'),authorize(request));return workspaceFor(project.dto.id);
   });
   app.get('/api/v1/projects/:projectId/messages', (request) => {
     const project = ownProject(param(request, 'projectId'), authorize(request)); const q = query(request);
@@ -237,18 +244,28 @@ export async function createApi(options: ApiOptions) {
     const rows = store.state.events.filter((entry) => entry.projectId === project.dto.id && entry.seq > after);
     const items = rows.slice(0, limit); return { items, nextCursor: items.at(-1)?.seq ?? after, hasMore: rows.length > items.length };
   });
+  const createRunCore = (projectId:string,prompt:string,mode:'build'|'plan',codeId:string,metadata?:{
+    sourceMessageId:string;originTurnId:string;proposalId:string;exactBaseVersionId?:string|null})=>{
+      const existing=metadata&&store.state.runs.find(r=>r.originTurnId===metadata.originTurnId&&r.dto.projectId===projectId);
+      if(existing)return existing;
+    CreateRunRequest.parse({prompt,mode});
+      const code=store.state.codes.find(c=>c.id===codeId)!;
+      const records=store.state.runs.filter(r=>r.codeId===codeId);
+      if(records.filter(r=>r.started||!terminal(r.dto.status)).length>=code.runLimit)fail(403,'QUOTA_EXCEEDED','生成额度已用完');
+      const run = Run.parse({ id: id('run'), projectId, revision: 1, status: 'queued', phase: null,
+        mode, baseVersionId: null, resultVersionId: null, executionId: null, pendingAttention: null,
+        pendingAnswer: null, checks: [], createdAt: now(), updatedAt: now(), error: null });
+      const record:RunRecord={dto:run,prompt,codeId,started:false,sourceSeq:0,...metadata};store.state.runs.push(record);
+      const message=metadata?store.state.messages.find(m=>m.id===metadata.sourceMessageId&&m.projectId===projectId&&m.role==='user'):
+        {id:id('message'),projectId,runId:run.id,role:'user' as const,status:'complete' as const,content:prompt,createdAt:now()};
+      if(!message)fail(409,'CONFLICT','来源消息不可用');
+      message!.runId=run.id;if(!metadata)store.state.messages.push(message!);
+      emit(projectId,run.id,{type:'message.updated',payload:message!});emit(projectId,run.id,{type:'run.updated',payload:run});return record;
+  };
   app.post('/api/v1/projects/:projectId/runs', (request, reply) => {
     const session = authorize(request); const project = ownProject(param(request, 'projectId'), session); const body = CreateRunRequest.parse(request.body);
     return mutation(request, reply, session.id, () => {
-      const quota = sessionDto(session).quota;
-      if (quota.runsReserved + quota.runsUsed >= quota.runLimit) fail(403, 'QUOTA_EXCEEDED', '生成额度已用完');
-      const run = Run.parse({ id: id('run'), projectId: project.dto.id, revision: 1, status: 'queued', phase: null,
-        mode: body.mode, baseVersionId: null, resultVersionId: null, executionId: null, pendingAttention: null,
-        pendingAnswer: null, checks: [], createdAt: now(), updatedAt: now(), error: null });
-      store.state.runs.push({ dto: run, prompt: body.prompt, codeId: session.codeId, started: false, sourceSeq: 0 });
-      const message = { id: id('message'), projectId: project.dto.id, runId: run.id, role: 'user' as const, status: 'complete' as const, content: body.prompt, createdAt: now() };
-      store.state.messages.push(message); emit(project.dto.id, run.id, { type: 'message.updated', payload: message });
-      emit(project.dto.id, run.id, { type: 'run.updated', payload: run }); return { status: 202, body: { run } };
+      const record=createRunCore(project.dto.id,body.prompt,body.mode,session.codeId);return {status:202,body:{run:record.dto}};
     });
   });
   app.get('/api/v1/runs/:runId', (request) => ownRun(param(request, 'runId'), authorize(request)).dto);
@@ -265,14 +282,16 @@ export async function createApi(options: ApiOptions) {
       return { status: 202, body: { run: record.dto } };
     });
   });
+  const cancelRunCore=(record:RunRecord)=>{
+      if(terminal(record.dto.status))return;
+      updateRun(record,{status:'cancelling',pendingAttention:null,pendingAnswer:null});record.answerCommand=undefined;
+      if(!record.dto.executionId){updateRun(record,{status:'cancelled'});release(record);}else record.cancelCommand??={commandId:id('command')};
+  };
   app.post('/api/v1/runs/:runId/cancel', (request, reply) => {
     const session = authorize(request); const record = ownRun(param(request, 'runId'), session);
     return mutation(request, reply, session.id, () => {
       if (terminal(record.dto.status)) return { status: 200, body: { run: record.dto } };
-      updateRun(record, { status: 'cancelling', pendingAttention: null, pendingAnswer: null });
-      record.answerCommand = undefined;
-      if (!record.dto.executionId) { updateRun(record, { status: 'cancelled' }); release(record); }
-      else record.cancelCommand ??= { commandId: id('command') };
+      cancelRunCore(record);
       return { status: 202, body: { run: record.dto } };
     });
   });
@@ -472,6 +491,9 @@ export async function createApi(options: ApiOptions) {
         if (project.dto.activeRunId) continue;
         const record = store.state.runs.find((entry) => entry.dto.projectId === project.dto.id && entry.dto.status === 'queued' && !entry.dto.executionId);
         if (!record) continue;
+        if(Object.hasOwn(record,'exactBaseVersionId')&&project.dto.currentVersionId!==record.exactBaseVersionId){
+          store.transaction(()=>{finish(record,'failed','CONFLICT','已确认提案的版本已变化，未执行；请刷新提案重新确认。');coordination?.markExactConflict(record);});continue;
+        }
         store.transaction(() => {
           const base = store.state.versions.find((entry) => entry.dto.id === project.dto.currentVersionId);
           const executionId = id('execution');
@@ -479,7 +501,7 @@ export async function createApi(options: ApiOptions) {
             attempt: 1, prompt: record.prompt, mode: record.dto.mode, baseVersionId: project.dto.currentVersionId,
             input: base ? { kind: 'version', versionId: base.dto.id, artifactId: base.artifactId, manifestSha256: hash(base.manifestRaw) } : { kind: 'template', templateId: 'react-vite-v1' },
             mandate: { scope: 'react_frontend', allowDependencyChanges: false, allowPublicDeployment: false, allowExternalMessaging: false,
-              projectMemory: base?.dto.summary ?? '' },
+              projectMemory: [coordination?.projectMemory(project.dto.id),base?.dto.summary].filter(Boolean).join('\n').slice(0,20000) },
             budget: { maxWallTimeMs: 600000, maxWaitingInputMs: 86400000, maxRepairRounds: 2, maxModelSteps: 30, maxInputTokens: 100000,
               maxOutputTokens: 30000, maxArtifactBytes: 20971520 } };
           project.dto.activeRunId = record.dto.id;
@@ -520,8 +542,15 @@ export async function createApi(options: ApiOptions) {
     store.state.codes.push(record); return record.id;
   });
   if (options.demoCode) seedCode(options.demoCode);
+  coordination=registerCoordination({app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,id,now,hash,canonical,fail,
+    messageLimit:options.coordinationMessageLimit,messagesPerMinute:options.coordinationMessagesPerMinute,
+    authorize,ownProject,ownRun,mutation,sessionDto,workspace:workspaceFor,createRun:createRunCore,cancelRun:cancelRunCore,
+    versionInfo:freshVersion,
+    emitMessage:(message)=>emit(message.projectId,message.runId,{type:'message.updated',payload:message})});
   const timer = options.autoSchedule === false ? null : setInterval(() => { void tick(); }, options.pollMs ?? 500);
+  const coordinationTimer=options.autoSchedule===false?null:setInterval(()=>{void coordination!.tick();},options.pollMs??500);
   timer?.unref();
-  const close = async () => { closed = true; if (timer) clearInterval(timer); while (busy) await new Promise((resolve) => setTimeout(resolve, 10)); await app.close(); await preview.close(); store.close(); };
-  return { app, preview, tick, close, seedCode, store };
+  coordinationTimer?.unref();
+  const close = async () => { closed = true; if (timer) clearInterval(timer);if(coordinationTimer)clearInterval(coordinationTimer);await coordination!.close(); while (busy) await new Promise((resolve) => setTimeout(resolve, 10)); await app.close(); await preview.close(); store.close(); };
+  return { app, preview, tick, tickCoordination:()=>coordination!.tick(), close, seedCode, store };
 }

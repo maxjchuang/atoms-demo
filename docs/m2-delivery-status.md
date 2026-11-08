@@ -1,6 +1,6 @@
 # M2 可信交付实施状态
 
-更新日期：2026-11-09。G0、三线独立验证、完整 Fake mixed/只读 UI、真实生成→修改→恢复后修改及 reviewed-exact 续跑的只读 UI/严格重启已有实际证据。**第三次代码任务经明确接受 exact 提案执行，原 mixed runner 的 auto 准入断言仍失败；三次真实交付均 partial，未出现真实行为失败→修复链。M2 App 尚未升级用户 live，主仓当前仅合入共享基线 `a1c7c23`；M3/G5 未开始。**职责见 [并行计划](m2-parallel-plan.md)，字段与政策见 [delivery 协议](protocol-delivery-v0.1.md)。
+更新日期：2026-11-09。G0、三线独立验证、完整 Fake mixed/只读 UI、真实生成→修改→恢复后修改及 reviewed-exact 续跑的只读 UI/严格重启已有实际证据。**第三次代码任务经明确接受 exact 提案执行，原 mixed runner 的 auto 准入断言仍失败；三次真实交付均 partial；另一次独立受控故障已通过真实 DSH 失败→修复→同计划及 clean ZIP 复验。M2 App 已合入 main 并安全升级用户 live（应用基线 `78bba58`）；M3 三线设计已启动，G5 尚未开始。**职责见 [并行计划](m2-parallel-plan.md)，字段与政策见 [delivery 协议](protocol-delivery-v0.1.md)。
 
 ## 独立验证与完整 Fake 门禁
 
@@ -37,9 +37,17 @@ API 独立回归覆盖唯一 Preparation、原目标与来源、immutable outbox
 | `run_91970bfc4d0882843eb9` | V2 `version_e494864c4b20e3dbcca9`，base=V1 | partial；1 canonical + 10 derived；8 auto leaf、2 manual leaf，父汇总 manual | attempt_0 passed，repairRound=0，8/8 cases；clean ZIP 同计划 8/8 |
 | `run_e48a5937c3874a457955` | V4 `version_b7c360e659a778d45caa`，base/parent=恢复 V3 | partial；5 canonical + 10 derived；8 auto leaf、2 manual leaf；父投影 2 auto/3 manual，不能称 10 个独立自动用例 | attempt_0 passed，repairRound=0，8/8 cases；clean ZIP 同计划 8/8；Seed=explicit_proposal_acceptance |
 
-三个 report 的真实 provenance 均为 model_output/dsh；Run.status=succeeded，phase 保留最后 publishing，不表示新执行。manual 涵盖源码多文件结构或中文说明/交互体验人工审查，canonical 父项仅为保守元数据汇总。三次均无 failed attempt、无 repairRound>0；本次**没有真实失败→修复→复验链**，不能以 Schema、fixture 或静态审阅补造该门禁。
+三个 report 的真实 provenance 均为 model_output/dsh；Run.status=succeeded，phase 保留最后 publishing，不表示新执行。manual 涵盖源码多文件结构或中文说明/交互体验人工审查，canonical 父项仅为保守元数据汇总。三次均无 failed attempt、无 repairRound>0；这三个业务 Run 本身没有失败修复；新增独立受控修复证据见下节，不回写业务历史。
 
 初次计划对新增、编辑、删除、搜索、拖拽、刷新文字/位置均有 required 自动 leaf。7/8/8 个用例实际通过只证明各自冻结步骤/断言；例如初版删除只测单便签，刷新用例未先编辑，fill 中文不等于输入法 composition 事件。不能把字符串覆盖、计划语法或静态代码审查扩大为全部自然语言语义已验证。
+
+### 独立真实受控修复门禁
+
+主管独立通过新增 3 项本地测试及 Agent check 后，提交 `678fce1`，只执行一次有界真实验证（session 31856，exit 0）。证据目录 `atoms-controlled-repair-8tSEg2`；Run=`run_controlled_446a4f19249e41aca2183a`，execution=`execution_controlled_a684df287f0244fb9b7893`。此工具不经过业务 API、不新增 Router 或发布 Version，原三个业务 Run/报告/源码保持不变。
+
+原 V4 真实源码先通过原 8 cases / 70 steps / 15 required，随后宿主在独立副本注入 localStorage 写入失效；attempt_0 来源明确为 `controlled_regression`，真实浏览器捕获持久化失败。正常 DshAdapter 在 attempt_1 / repairRound=1 修复，来源为 `model_output/dsh`。冻结计划 hash=`da0bc554e5ab9d931b42523d4dd1c6208ac1dad3a087504673cc9786a80d8321`；步骤/断言/required 不变，最终 8/8 与独立精确 ZIP 的同计划 8/8 通过。它证明受控故障的真实修复能力，不宣称自然模型首次生成曾失败。
+
+总用量：1 observable model step、9,931 有效输入、4,842 输出、102,861ms active，均在原单 Run 总预算内。初始源码载入和宿主计划不冒充模型生成或模型步骤。质量仍 partial，原 manual 缺口保留。reportHash=`3980ef07ed9f8ef554c7c1d0d6a62bf61313f1751a697b9849d2551cdbe5d6a3`，archiveHash=`b142d0c2aae25ee838e9d874ace4610db2dd45abae7e3cfd501116e68b92630d`。完整来源、护栏与命令见 [受控修复说明](../apps/agent/CONTROLLED-REPAIR.md)。Linux/OS 隔离与公网仍由 M3 单独验收。
 
 ### Router、原证据与最终重启
 
@@ -67,4 +75,4 @@ API 独立回归覆盖唯一 Preparation、原目标与来源、immutable outbox
 
 Fake 完整入口仍为 `ATOMS_KEEP_TEST_DATA=1 pnpm test:delivery --mixed-router --verify-web-readonly`；默认 direct 不行使 Router，省略只读 flag 仅称 Web HTTP ready。受控续跑、只读 receipt、三 guard、备份/私有凭证/实际限制见 [DELIVERY-RESUME](../tests/integration/DELIVERY-RESUME.md)。真实调用仅由主管显式授权；不能为了证明失败修复而自动追加 Code。
 
-密钥仅传 Agent，不进 Web、fixture、生成应用或 ZIP。公开/内部协议、required/发布政策未改变。M2 App 和本次数据位于隔离 worktree/临时空间，未升级 live 5173 或改写 data/review-real。主仓当前仅有共享 `a1c7c23`；应用合并、live drain/停服/备份/升级待主管另行安排。M3 Docker/系统隔离/双隧道/外部分享未启动。
+密钥仅传 Agent，不进 Web、fixture、生成应用或 ZIP。公开/内部协议、required/发布政策未改变。M2 实际模型样例位于隔离临时空间，未灌入用户数据。主管确认 live 全部 5 Run succeeded、0 Coordination Turn、无 delivery preparation 后停止服务，完整备份 `data/backups/review-real-pre-m2-20261109` 的 277 文件并核对字节。main fast-forward 至 `78bba58`，offline frozen 安装及全仓 check 通过，`ATOMS_DATA_ROOT=data/review-real pnpm dev` 重启。API ready、工作台 HTTP 200、认证 Agent health 200；备份与重启后 codes/sessions/projects/runs/versions/messages/events/sourceEvents/idempotency/coordination 全部深度相等，保留 2 项目/5 Run/5 Version/55 消息和原额度，未触发新模型。M3 三线设计开始，Docker/隔离/双隧道/外部分享仍须独立 G5。

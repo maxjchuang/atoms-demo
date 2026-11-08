@@ -69,3 +69,52 @@ Stable **Fake-only examples** for independent HTTP integration (not a natural-la
 For option answers always use the returned option ID and explicit clarification revision; do not hard-code the host-generated IDs. A `proposal_refresh` operation must include the exact trusted proposal in context and stays read-only/exact-version. Context canonical hashing recursively sorts object keys, preserves array order, omits only the top-level hash and hashes compact UTF-8 JSON; the shared fixture vector is asserted independently in Agent/API tests.
 
 Token budgets for new real Worker and Router requests count effective input, including reported cache reads/writes. Settled SDK usage is normalized against `totalTokens` so a provider whose input already includes cache is not charged cache twice. Duplicate settled event IDs are ignored; final RunResult summaries are not added again. Ambiguous fields use a conservative reported bound and private numerical accounting metadata. The old public DTO shape is unchanged; existing completed historical snapshots are not silently rewritten.
+
+## M2 trusted delivery (internal 0.1.0 module)
+
+Delivery uses `/internal/delivery/v1` and `X-Atoms-Delivery-Version: 0.1.0`; existing v1 execution and v2 coordination DTOs remain unchanged. The frozen shared module is the only wire definition. The API fetches authenticated `GET /toolchains/toolchain_react_v1`, stores its actual descriptor, then sends a unique immutable Preparation for its Run/execution. Preparation is read-only with respect to application source and shares the generation slot with Workers; project Router inference uses its separate lane.
+
+Both explicit host profiles and the no-tools DSH planner preserve the complete authorized RequirementSeed. DSH proposes typed generic cases/coverage; host fills IDs/hashes and missing declarations remain unsupported. Structural mapping is not a proof of semantic completeness. API freezes the returned Spec/Plan and sends the full execution wrapper. Runtime compares it with the persisted measured Preparation, verifies every frozen hash/toolchain/exact input, and enforces total minus planning active time/steps/effective tokens. A different preparation ID cannot reset a Run. No source is written before a validated wrapper.
+
+The fixed browser interpreter implements the shared no-code DSL (roles/labels/test IDs, count/box variables, fill/click/check/press/drag/reload and bounded assertions), without notes/calculator branches or evaluating model JavaScript. It checks source hashes before/after each attempt, limits case/step/time budgets, uses fresh browser contexts and blocks outbound navigation, frames and popups. Frozen assertions/required flags are never changed during repair. Build source imports are additionally restricted to the controlled source tree and fixed React packages; host/remote assets, arbitrary import.meta expansion and external CSS resolution are rejected. This is a local execution policy, **not an OS sandbox**.
+
+The actual source ZIP contains exactly `source/` files plus root `contents-manifest.json`; unpack and `cd source`. Host-owned package/scripts/config and a public-registry `pnpm-lock.yaml` are included. The runtime extracts the **same ZIP bytes**, verifies file/contents/source hashes, installs with pnpm 10.33.0 frozen lock and disabled lifecycle scripts in an independent directory, rejects links outside that directory, runs its locally installed TypeScript/Vite, and replays the same frozen browser plan. The standalone package does not contain platform workspace links. Stage failures, all attempts, case logs/screenshots, patch provenance, external export/clean reports and final report remain separately readable even without a successful candidate. API owns file verification, final quality/publication and cancellation fences.
+
+Default tests make **zero model calls**. They do perform actual Chrome checks and public registry installs for independent export builds:
+
+```bash
+pnpm --filter @atoms/contracts check
+pnpm --filter @atoms/contracts test
+pnpm --filter @atoms/agent check
+pnpm --filter @atoms/agent build
+pnpm --filter @atoms/agent test:contract
+# Shorter preparation/coordination boundary checks:
+pnpm --filter @atoms/agent exec tsx --test test/delivery-planning.test.ts test/delivery-boundaries.test.ts
+```
+
+Fake inputs are deterministic protocol fixtures, not natural-language accuracy claims:
+
+| Explicit Fake input/config | Effect |
+| --- | --- |
+| `创建便签墙` | Fake planner/Worker notes example; six frozen behavior cases |
+| `[calculator] 创建计算器` | Fake planner/Worker calculator example; same interpreter, two cases |
+| `ATOMS_TEST_CONTROLLED_REGRESSION=1`, `AGENT_MODE=fake`, prompt includes `[controlled-persistence]` | Host injects the known Fake persistence regression once; source/patch hashes and `controlled_regression` provenance are recorded; assertions stay frozen |
+| `mode=plan` | Existing Run plan Attention; approval continues the same execution and budget |
+
+Controlled regression defaults off, is ignored in DSH mode, and is never labeled a natural model defect. The first Fake notes exact-locator failure was manually fixed with an accessible button label; it is not counted as autonomous model repair. Ordinary questions and cancellation retain the legacy limits. A completed Preparation cancelled before Worker dispatch preserves its immutable completed snapshot/result while its independent report records final cancellation; it cannot subsequently start execution.
+
+Delivery-aware coordination uses the separate typed outer wrapper on `/internal/delivery/v1/coordination-turns`. Inner ContextSnapshot/hash stays unchanged; the authenticated outer hash and delivery facts are persisted and cannot be downgraded via the old v2 PUT. Model input includes authoritative quality/gaps/asOf, and consult/status output includes a host-rendered delivery fact summary. Run publication success alone never establishes complete behavior coverage. API host actions provide downloads; the model receives no signed URL.
+
+M2 billing uses the first actual adapter step/settled positive token observation for its existing `execution.started` event. Input loading and host-only plan approval remain visibly active without claiming inference; approval/restart stays in the same execution. API settles preparation/Worker usage once per Run. The optional legacy `behavior` summary reports actual results (including zero-case `not_run`); it never lowers any frozen Spec criterion's required flag. The delivery report remains authoritative for required failures and partial publication.
+
+For retained Fake HTTP evidence, run `ATOMS_KEEP_AGENT_TEST_DATA=1 pnpm --filter @atoms/agent exec tsx --test test/delivery-runtime.test.ts`; printed paths contain only isolated test data. See the G1 evidence section in COMPATIBILITY for exact observed test counts and retained final-prefix artifacts.
+
+Clean export installation explicitly passes `--ignore-workspace --ignore-pnpmfile` (both verified in pnpm 10.33.0 help), in addition to frozen lock/public registry/disabled scripts. This prevents an Agent data directory nested below the platform repository from selecting the parent workspace or running its package hook. The generated source README uses the same independent install command; its trusted template fingerprint changes accordingly, while package/scripts/lock stay unchanged. Existing failed reports are immutable and are not upgraded in place. Reproduce this boundary with `pnpm --filter @atoms/agent exec tsx --test test/delivery-export.test.ts`; it creates a parent workspace/platform package/throwing hook and requires actual extracted-app tools and node_modules, successful build/DSL, and no platform installation.
+
+Preparation uses the pinned Messages provider's verified `reasoningEffort=off` / `thinking.disabled`; Worker remains low. Structured JSON is still strictly parsed (the current Messages route is not claimed to enforce Chat JSON mode). New interrupted native requests with missing settled usage expose null token totals while keeping private settled lower bounds; unknown usage cannot continue/freeze. Retry admission uses the same remaining budget and the preceding observed cost. See [MODEL-CONFIGURATION.md](MODEL-CONFIGURATION.md) for primary sources, local CLI/serializer proof and zero-network replay commands. Historical terminal usage/report bytes are not rewritten.
+
+Preparation JSON and model DSL-schema errors now share the same single structured retry and remaining budget. The syntax prompt is generated from shared-schema-validated operation/locator examples; all goal/Seed/required constraints remain authoritative. Safe field issues can guide one correction; extra fields, uppercase IDs and missing assertion fields remain strictly rejected. Input authorization/hash failures, SDK errors and unknown usage never become format retries. Reproduce the sanitized seven-case/46-step/twelve-issue failure with `pnpm --filter @atoms/agent exec tsx --test test/planning-schema-retry.test.ts`; no provider request is made.
+
+Fresh DSH planning now explicitly refines Seed requirements into derived criteria (`r*` refs with `sourceSeedRefs`), with opaque IDs and required flags filled by the host. It retains original canonical Seed criteria and uses the frozen shared conservative parent projection; manual/unsupported children remain visible and cannot become automatic. Full Goal preservation, one coverage per derived criterion and two-way case edges are validated before freeze. Existing completed host-profile/seed-only model results replay unchanged. See [DERIVED-CRITERIA-DESIGN.md](DERIVED-CRITERIA-DESIGN.md) for the exact internal format, six-core-behavior-plus-human local fixture and compatibility boundaries.
+
+The isolated controlled-repair smoke tool is ready for supervisor review: [CONTROLLED-REPAIR.md](CONTROLLED-REPAIR.md). `smoke:controlled:repair -- --fake` rehearses 6 fixture cases without a provider; guarded real mode imports the reviewed original V4 **8-case/70-step/15-required** source/plan, creates one separate host_profile Run and asks the real Worker only for repair after a recorded controlled persistence failure. Constructor-only callbacks have no main/env/wire activation. No real repair has been run yet; it must not be inferred from Fake success or the earlier three first-pass real CodeRuns.

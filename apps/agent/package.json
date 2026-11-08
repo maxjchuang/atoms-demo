@@ -12,6 +12,7 @@
     "test": "tsx --test test/*.test.ts",
     "test:contract": "tsx --test test/*.test.ts",
     "smoke:real": "tsx src/smoke-real.ts",
+    "smoke:controlled:repair": "tsx src/smoke-controlled-repair.ts",
     "smoke:coordination:real": "tsx src/smoke-coordination-real.ts"
   },
   "dependencies": {

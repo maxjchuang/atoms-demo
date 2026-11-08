@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-export function verifyDshToolPolicy(home: string, patch: string) {
+export function verifyDshToolPolicy(home: string, patch: string, options: { requireThinkingOff?: boolean } = {}) {
   const sdkRequire = createRequire(require.resolve('@deepseek-ai/dsh-sdk-client'));
   const manifestPath = sdkRequire.resolve('@deepseek-ai/dsh/package.json');
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { version: string };
@@ -23,5 +23,9 @@ export function verifyDshToolPolicy(home: string, patch: string) {
     || modelTools.some((block) => !/^  disabled: true\s*$/m.test(block))) {
     throw new Error('DSH exposes an unapproved model tool; refusing execution');
   }
-  return { runtimeVersion: manifest.version, disabledModelTools: ids, verified: true as const };
+  if (options.requireThinkingOff) {
+    const provider = blocks.find((block) => /^- id: llm-deepseek\n/.test(block));
+    if (!provider || !/name: ['"]?@deepseek-ai\/dsh-llm-deepseek-api-key/.test(provider) || !/^    thinking: disabled\s*$/m.test(provider) || !/^    reasoningEffort: ['"]?off['"]?\s*$/m.test(provider)) throw new Error('Planning provider did not compose thinking disabled/off; refusing execution');
+  }
+  return { runtimeVersion: manifest.version, disabledModelTools: ids, ...(options.requireThinkingOff ? { thinking: 'disabled' as const, reasoningEffort: 'off' as const } : {}), verified: true as const };
 }

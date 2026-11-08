@@ -27,9 +27,9 @@ export default function App() {
   const [query, setQuery] = useState('');
   useEffect(() => localStorage.setItem(key, JSON.stringify(notes)), [notes]);
   const update = (id: string, patch: Partial<Note>) => setNotes(v => v.map(n => n.id === id ? { ...n, ...patch } : n));
-  return <main><header><div><span className="eyebrow">YOUR EVERYDAY CANVAS</span><h1>灵感便签墙</h1><p>留住每个值得记下的想法。</p></div><button onClick={() => setNotes(v => [...v, { id: crypto.randomUUID(), text: '', x: 30 + v.length * 24, y: 30 + v.length * 24 }])}>＋ 新建便签</button></header>
+  return <main><header><div><span className="eyebrow">YOUR EVERYDAY CANVAS</span><h1>灵感便签墙</h1><p>留住每个值得记下的想法。</p></div><button aria-label="新建便签" onClick={() => setNotes(v => [...v, { id: crypto.randomUUID(), text: '', x: 30 + v.length * 24, y: 30 + v.length * 24 }])}>＋ 新建便签</button></header>
   ${search ? '<input className="search" aria-label="搜索便签" placeholder="搜索你的灵感…" value={query} onChange={e => setQuery(e.target.value)} />' : ''}
-  <section className="board">{notes.filter(n => n.text.toLowerCase().includes(query.toLowerCase())).map(n => <NoteCard key={n.id} note={n} onChange={patch => update(n.id, patch)} onDelete={() => setNotes(v => v.filter(item => item.id !== n.id))} />)}</section>
+  <section className="board" data-testid="note_board">{notes.filter(n => n.text.toLowerCase().includes(query.toLowerCase())).map(n => <NoteCard key={n.id} note={n} onChange={patch => update(n.id, patch)} onDelete={() => setNotes(v => v.filter(item => item.id !== n.id))} />)}</section>
   <footer>自动保存在当前浏览器 · 拖动顶栏移动便签</footer></main>;
 }
 `,
@@ -37,7 +37,7 @@ export default function App() {
 export type Note = { id: string; text: string; x: number; y: number };
 export function NoteCard({ note, onChange, onDelete }: { note: Note; onChange: (patch: Partial<Note>) => void; onDelete: () => void }) {
   const start = useRef({ x: 0, y: 0, left: 0, top: 0 });
-  return <article className="note" style={{ left: note.x, top: note.y }}>
+  return <article className="note" data-testid="note_card" style={{ left: note.x, top: note.y }}>
     <div className="handle" aria-label="拖动便签" onPointerDown={e => { start.current = { x: e.clientX, y: e.clientY, left: note.x, top: note.y }; e.currentTarget.setPointerCapture(e.pointerId); }} onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) onChange({ x: Math.max(0, start.current.left + e.clientX - start.current.x), y: Math.max(0, start.current.top + e.clientY - start.current.y) }); }} onPointerUp={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); }}>·····<button aria-label="删除便签" onPointerDown={e => e.stopPropagation()} onClick={onDelete}>×</button></div>
     <textarea aria-label="便签内容" value={note.text} placeholder="写下一个新想法…" onChange={e => onChange({ text: e.target.value })} />
   </article>;

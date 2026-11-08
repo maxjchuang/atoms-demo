@@ -19,10 +19,18 @@ import { CoordinationError } from './coordination-context.js';
 import type { CoordinatorAdapter } from './coordinator-adapters.js';
 import { CoordinationProtocolVersion } from '@atoms/contracts/conversation';
 import { TOKEN_ACCOUNTING_VERSION } from './native-usage.js';
+import { GenerationPool } from './generation-pool.js';
+import { DeliveryPlanningRuntime, DeliveryError, type PlanningAdapter, type TrustedHostPlan } from './delivery-planning.js';
+import { DeliveryProtocolVersion, DeliveryCommand, DeliveryCoordinationRequest, type DeliveryExecutionRequestDto } from '@atoms/contracts/delivery';
+import { trustedTemplate, TOOLCHAIN_ID } from './trusted-template.js';
+import { SourceBaselineAdapter, type TrustedSourceFault } from './controlled-repair.js';
+import { DeliveryExecutionRuntime } from './delivery-execution.js';
 
 type RuntimeBody = ReturnType<typeof RuntimeEvent.parse>;
 type CheckValue = ReturnType<typeof Check.parse>;
-type RecordValue = {
+export type RecordValue = {
+  usageKnown?: boolean; pendingModelRequest?: boolean; usageObservationVersion?: 'settled-request-v1';
+  delivery?: DeliveryExecutionRequestDto;
   request: StartExecutionDto; hash: string; snapshot: ExecutionSnapshotDto;
   events: AgentEventDto[]; commands: Record<string, { hash: string; snapshot: ExecutionSnapshotDto }>;
   started: boolean; plan: PlanValue | null; planConfirmed: boolean; queueOrder: number;
@@ -44,16 +52,24 @@ export interface AgentOptions {
   dataDir: string; serviceToken: string; apiInternalUrl?: string;
   mode?: 'fake' | 'dsh'; apiKey?: string; model?: string; adapter?: ModelAdapter;
   coordinationMode?: 'fake' | 'dsh'; coordinatorAdapter?: CoordinatorAdapter;
+  /** Trusted test constructors only; not wired to main/env/HTTP. */
+  trustedHostPlan?: TrustedHostPlan; trustedSourceFault?: TrustedSourceFault;
+  allowControlledRegression?: boolean; generationPool?: GenerationPool; isDeliveryReserved?: (id: string) => boolean; planningAdapter?: PlanningAdapter;
 }
 
 export class AgentRuntime {
   readonly records = new Map<string, RecordValue>();
   readonly adapter: ModelAdapter;
+  deliveryEngine?: DeliveryExecutionRuntime;
+  readonly activeSince = new Map<string, number>();
   private controllers = new Map<string, AbortController>();
   private pumping: Promise<void> | null = null;
   private closed = false;
   private timer: ReturnType<typeof setInterval>;
+  private pool: GenerationPool;
   constructor(readonly options: AgentOptions) {
+    if (options.adapter instanceof SourceBaselineAdapter && !options.trustedSourceFault) throw new Error('Source baseline adapter requires the trusted controlled provenance hook');
+    this.pool = options.generationPool || new GenerationPool();
     mkdirSync(options.dataDir, { recursive: true });
     this.adapter = options.adapter || (options.mode === 'fake' ? new FakeDshAdapter() : new DshAdapter({ apiKey: options.apiKey, model: options.model }));
     const ledger = this.ledgerPath();
@@ -63,6 +79,7 @@ export class AgentRuntime {
         this.records.set(item.request.executionId, item);
         if (!terminal.has(item.snapshot.status) && item.snapshot.status !== 'waiting_input' && item.snapshot.status !== 'accepted') {
           // Children are owned by this process; a full restart is fenced by fresh execution directories.
+          if (item.usageObservationVersion === 'settled-request-v1' && item.pendingModelRequest) item.usageKnown = false;
           item.snapshot.status = 'interrupted'; item.snapshot.pendingAttention = null;
           this.emit(item, { type: 'execution.interrupted', payload: { reason: 'Runtime restarted; explicit retry required. External processes are not resumed.' } });
         }
@@ -93,6 +110,7 @@ export class AgentRuntime {
       runId: item.request.runId, sourceSeq: seq, occurredAt: now(), event });
     item.events.push(envelope); this.persist();
   }
+  checkEvent(item: RecordValue, check: CheckValue) { this.emit(item, { type: 'check.completed', payload: check }); }
   private update(item: RecordValue, changes: Partial<ExecutionSnapshotDto>) {
     item.snapshot = { ...item.snapshot, ...changes, revision: item.snapshot.revision + 1,
       lastSourceSeq: item.events.length + 1, updatedAt: now() };
@@ -104,9 +122,10 @@ export class AgentRuntime {
     if (!record) throw new HttpError(404, 'NOT_FOUND', 'Execution not found');
     return record;
   }
-  start(raw: unknown, pathId: string) {
+  start(raw: unknown, pathId: string, delivery?: DeliveryExecutionRequestDto) {
     const request = StartExecutionRequest.parse(raw);
     if (pathId !== request.executionId) throw new HttpError(400, 'INVALID_REQUEST', 'Execution ID mismatch');
+    if (!delivery && this.options.isDeliveryReserved?.(pathId)) throw new HttpError(409, 'CONFLICT', 'Execution ID belongs to delivery preparation, not legacy start');
     const hash = sha256(canonical(request));
     const existing = this.records.get(pathId);
     if (existing) {
@@ -115,10 +134,11 @@ export class AgentRuntime {
     }
     if (!this.adapter.ready()) throw new HttpError(503, 'RUNTIME_UNAVAILABLE', 'DeepSeek credentials are not configured');
     const item: RecordValue = {
-      request, hash, snapshot: { protocolVersion: PROTOCOL_VERSION, id: pathId, runId: request.runId,
+      request, hash, ...(delivery ? { delivery } : {}), snapshot: { protocolVersion: PROTOCOL_VERSION, id: pathId, runId: request.runId,
         status: 'accepted', phase: null, revision: 1, lastSourceSeq: 0, pendingAttention: null, artifactId: null, updatedAt: now() },
       events: [], commands: {}, started: false, plan: null, planConfirmed: request.mode === 'build',
       queueOrder: Date.now(), activeMs: 0, waitingAt: null, usage: { modelSteps: 0, inputTokens: 0, outputTokens: 0 },
+      usageKnown: true, pendingModelRequest: false, usageObservationVersion: 'settled-request-v1',
       ordinaryQuestions: 0, answers: [], repairRoundsUsed: 0, verificationErrors: null, repairClaimed: false,
       tokenAccountingVersion: TOKEN_ACCOUNTING_VERSION,
     };
@@ -162,7 +182,7 @@ export class AgentRuntime {
       this.update(item, { status: 'cancelling', pendingAttention: null });
       const controller = this.controllers.get(id);
       if (controller) controller.abort();
-      else { item.snapshot.status = 'cancelled'; this.emit(item, { type: 'execution.cancelled', payload: {} }); }
+      else { item.snapshot.status = 'cancelled'; if (item.delivery) this.deliveryEngine?.fail(item, 'cancelled', 'Cancelled before execution or while waiting.'); this.emit(item, { type: 'execution.cancelled', payload: {} }); }
     }
     item.commands[input.commandId] = { hash, snapshot: clone(item.snapshot) }; this.persist();
     return clone(item.snapshot);
@@ -179,7 +199,7 @@ export class AgentRuntime {
       while (!this.closed) {
         const next = [...this.records.values()].filter((item) => item.snapshot.status === 'accepted').sort((a, b) => a.queueOrder - b.queueOrder)[0];
         if (!next) break;
-        await this.process(next);
+        await this.pool.run(async () => { if (!this.closed && next.snapshot.status === 'accepted') await this.process(next); });
       }
     }).finally(() => { this.pumping = null; if (!this.closed && [...this.records.values()].some((item) => item.snapshot.status === 'accepted')) this.schedule(); });
   }
@@ -209,17 +229,23 @@ export class AgentRuntime {
   }
   private async process(item: RecordValue) {
     const id = item.request.executionId; const controller = new AbortController(); this.controllers.set(id, controller);
-    const startedAt = Date.now();
+    const startedAt = Date.now(); this.activeSince.set(id, startedAt);
     const timer = setTimeout(() => controller.abort('budget'), Math.max(1, item.request.budget.maxWallTimeMs - item.activeMs));
     const root = path.join(this.options.dataDir, 'executions', id);
     const workspace = path.join(root, 'workspace'); const evidence = path.join(root, 'evidence');
     const context: AdapterContext = { request: item.request, workspace,
       home: path.join(this.options.dataDir, 'dsh', item.request.projectId), signal: controller.signal,
-      remainingOutputTokens: () => item.request.budget.maxOutputTokens - (item.usage?.outputTokens || 0),
+      remainingOutputTokens: () => item.usageKnown === false ? 0 : item.request.budget.maxOutputTokens - (item.usage?.outputTokens || 0),
+      remainingActiveMs: () => Math.max(0, item.request.budget.maxWallTimeMs - item.activeMs - (Date.now() - startedAt)),
+      usageIsKnown: () => item.usageKnown !== false, observedUsage: () => item.usage,
+      beginModelRequest: () => { item.pendingModelRequest = true; this.persist(); },
+      settleModelRequest: () => { item.pendingModelRequest = false; this.persist(); },
+      markUsageUnknown: () => { item.usageKnown = false; this.persist(); },
       report: (content) => this.emit(item, { type: 'message.completed', payload: { messageId: `message_${randomUUID().replaceAll('-', '')}`, content } }),
       fileChanged: (change) => this.emit(item, { type: 'file.changed', payload: change }),
       runAnswers: item.answers ?? [],
       meter: (usage) => {
+        if (item.delivery && !item.started && ((usage.modelSteps || 0) > 0 || (usage.inputTokens || 0) > 0 || (usage.outputTokens || 0) > 0)) { item.started = true; this.emit(item, { type: 'execution.started', payload: {} }); }
         item.usage ??= { modelSteps: 0, inputTokens: 0, outputTokens: 0 };
         for (const key of ['modelSteps', 'inputTokens', 'outputTokens'] as const) item.usage[key] += usage[key] || 0;
         this.persist();
@@ -230,15 +256,17 @@ export class AgentRuntime {
         }
       },
     };
+    if (item.delivery) this.deliveryEngine!.context(item, context);
     try {
+      if (item.usageKnown === false) throw new Error('Model usage is unknown; further inference is fenced.');
       this.update(item, { status: 'running', pendingAttention: null,
         phase: !item.plan || !item.planConfirmed ? 'planning' : item.verificationErrors ? 'repairing' : 'generating' });
-      if (!item.started) { item.started = true; this.emit(item, { type: 'execution.started', payload: {} }); }
+      if (!item.delivery && !item.started) { item.started = true; this.emit(item, { type: 'execution.started', payload: {} }); }
       if (!item.plan) {
         context.report(item.request.input.kind === 'template' ? '正在准备受控 React 模板。' : '正在载入并校验上一版本源码快照。');
         await this.prepareWorkspace(item, workspace, controller.signal);
         context.report('源码工作目录已准备完成，开始整理实现计划。');
-        item.plan = await this.adapter.plan(context); this.persist();
+        item.plan = item.delivery ? await this.deliveryEngine!.initialize(item, workspace) : await this.adapter.plan(context); this.persist();
         context.report(`计划已整理：${item.plan.summary.slice(0, 240)}\n${item.plan.tasks.slice(0, 5).map((task, index) => `${index + 1}. ${task.slice(0, 120)}`).join('\n')}`);
       }
       if (!item.planConfirmed) {
@@ -272,16 +300,18 @@ export class AgentRuntime {
         }
         summary = generated;
         this.update(item, { phase: 'verifying' });
-        const verified = await verifyApplication(workspace, evidence, controller.signal,
+        const verified = item.delivery ? await this.deliveryEngine!.verify(item, workspace, context) : await verifyApplication(workspace, evidence, controller.signal,
           (check) => this.emit(item, { type: 'check.completed', payload: check }), context.report);
         checks = verified.checks; errors = verified.errors;
         item.verificationErrors = errors; item.repairClaimed = false; this.persist();
         if (!errors) break;
       }
       if (errors) throw new HttpError(422, 'VERIFICATION_FAILED', '验证失败且修复次数已用完：' + errors.slice(-1000));
+      if (item.delivery) await this.deliveryEngine!.finish(item, workspace, context);
       const behavior: CheckValue = { id: 'check_behavior', kind: 'behavior', name: '需求行为验收', required: false,
         status: 'not_run', summary: '最小闭环只验证类型、构建和页面加载；功能行为待人工验收。', evidenceIds: [] };
-      checks.push(behavior); this.emit(item, { type: 'check.completed', payload: behavior });
+      if (!item.delivery) { checks.push(behavior); this.emit(item, { type: 'check.completed', payload: behavior }); }
+
       context.report('必要检查已通过，开始打包候选源码、预览产物和验证证据。');
       const artifactId = `artifact_${id}`;
       const artifactRoot = path.join(root, 'artifacts', artifactId); await mkdir(artifactRoot, { recursive: true });
@@ -298,7 +328,7 @@ export class AgentRuntime {
       if (total > item.request.budget.maxArtifactBytes) throw new HttpError(422, 'BUDGET_EXCEEDED', '产物大小超过预算');
       const manifest: ArtifactManifestDto = ArtifactManifest.parse({ protocolVersion: PROTOCOL_VERSION, id: artifactId,
         executionId: id, runId: item.request.runId, baseVersionId: item.request.baseVersionId,
-        summary, files, checks, evidence: [
+        summary, files, checks, evidence: item.delivery ? this.deliveryEngine!.artifactEvidence(id) : [
           ...['typecheck', 'build', 'smoke'].map((kind) => ({ id: `evidence_${kind}`, path: `evidence/${kind}.log`, kind: 'log' })),
           { id: 'evidence_screenshot', path: 'evidence/screenshot.png', kind: 'screenshot' },
         ], createdAt: now() });
@@ -311,18 +341,20 @@ export class AgentRuntime {
       this.emit(item, { type: 'execution.completed', payload: { artifactId } });
     } catch (error) {
       await this.adapter.close(id).catch(() => {});
+      if (item.usageObservationVersion === 'settled-request-v1' && item.pendingModelRequest) item.usageKnown = false;
       item.snapshot.pendingAttention = null; item.snapshot.revision++;
+      if (item.delivery) this.deliveryEngine!.fail(item, item.snapshot.status === 'cancelling' || this.closed ? 'cancelled' : 'failed', error instanceof Error ? error.message : 'Delivery execution failed', controller.signal.reason === 'budget' || (error instanceof DeliveryError && error.code === 'BUDGET_EXCEEDED') ? 'BUDGET_EXCEEDED' : undefined);
       if (item.snapshot.status === 'cancelling' || this.closed) {
-        item.snapshot.status = 'cancelled'; this.emit(item, { type: 'execution.cancelled', payload: {} });
+        item.snapshot.status = 'cancelled'; if (item.delivery) this.deliveryEngine?.fail(item, 'cancelled', 'Cancelled before execution or while waiting.'); this.emit(item, { type: 'execution.cancelled', payload: {} });
       } else {
         item.snapshot.status = 'failed';
         const code = controller.signal.aborted ? 'BUDGET_EXCEEDED'
-          : error instanceof HttpError ? ErrorCode.parse(error.code) : 'INTERNAL_ERROR';
+          : error instanceof HttpError || error instanceof DeliveryError ? ErrorCode.parse(error.code) : 'INTERNAL_ERROR';
         this.emit(item, { type: 'execution.failed', payload: { code,
           message: error instanceof Error ? error.message.slice(0, 1500) : '执行失败' } });
       }
     } finally {
-      clearTimeout(timer); item.activeMs += Date.now() - startedAt; this.controllers.delete(id); this.persist();
+      clearTimeout(timer); item.activeMs += Date.now() - startedAt; this.controllers.delete(id); this.activeSince.delete(id); this.persist();
     }
   }
   async artifact(id: string, artifactId: string, file: string) {
@@ -342,23 +374,85 @@ export class AgentRuntime {
   }
 }
 
-async function jsonBody(req: IncomingMessage) {
+async function jsonBody(req: IncomingMessage, limit = 100000) {
   const chunks: Buffer[] = []; let bytes = 0;
-  for await (const chunk of req) { bytes += chunk.length; if (bytes > 100000) throw new HttpError(400, 'INVALID_REQUEST', 'Request too large'); chunks.push(chunk); }
+  for await (const chunk of req) { bytes += chunk.length; if (bytes > limit) throw new HttpError(400, 'INVALID_REQUEST', 'Request too large'); chunks.push(chunk); }
   try { return JSON.parse(Buffer.concat(chunks).toString() || '{}'); }
   catch { throw new HttpError(400, 'INVALID_REQUEST', 'Invalid JSON'); }
 }
 export function createAgentServer(options: AgentOptions) {
-  const runtime = new AgentRuntime(options);
+  const pool = new GenerationPool(); let planning!: DeliveryPlanningRuntime;
+  const runtime = new AgentRuntime({ ...options, generationPool: pool, isDeliveryReserved: (id) => planning?.reserved(id) ?? false });
+  planning = new DeliveryPlanningRuntime({ dataDir: path.join(options.dataDir, 'delivery'), pool, mode: options.mode,
+    apiKey: options.apiKey, model: options.model, apiUrl: options.apiInternalUrl, serviceToken: options.serviceToken,
+    legacyExists: (id, runId) => runtime.records.has(id) || [...runtime.records.values()].some((item) => item.request.runId === runId), executionStarted: (id) => runtime.records.has(id), adapter: options.planningAdapter, trustedHostPlan: options.trustedHostPlan });
+  const delivery = new DeliveryExecutionRuntime(runtime, planning, { allowControlledRegression: options.allowControlledRegression, trustedSourceFault: options.trustedSourceFault }); runtime.deliveryEngine = delivery;
+  for (const item of runtime.records.values()) if (item.delivery && ['interrupted', 'cancelled', 'failed'].includes(item.snapshot.status) && !delivery.report(item.request.executionId)) delivery.fail(item, item.snapshot.status as 'interrupted', 'Runtime restarted or execution terminated.');
   const coordinator = new CoordinatorRuntime({ ...options, mode: options.coordinationMode ?? options.mode });
   const server = createServer(async (req, res) => {
     const json = (status: number, data: unknown) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(data)); };
     const url = new URL(req.url || '/', 'http://runtime');
     const coordinationRequest = url.pathname.startsWith('/internal/v2/');
-    res.setHeader(coordinationRequest ? 'x-atoms-coordination-version' : 'x-atoms-protocol-version', coordinationRequest ? CoordinationProtocolVersion : PROTOCOL_VERSION);
+    const deliveryRequest = url.pathname.startsWith('/internal/delivery/v1/');
+    res.setHeader(deliveryRequest ? 'x-atoms-delivery-version' : coordinationRequest ? 'x-atoms-coordination-version' : 'x-atoms-protocol-version', deliveryRequest ? DeliveryProtocolVersion : coordinationRequest ? CoordinationProtocolVersion : PROTOCOL_VERSION);
     try {
       const expected = Buffer.from(`Bearer ${options.serviceToken}`); const actual = Buffer.from(req.headers.authorization || '');
       if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new HttpError(401, 'UNAUTHENTICATED', 'Internal service authentication required');
+      if (deliveryRequest) {
+        if (req.headers['x-atoms-delivery-version'] !== DeliveryProtocolVersion) throw new DeliveryError(400, 'INVALID_REQUEST', 'Unsupported delivery version');
+        if (url.pathname === `/internal/delivery/v1/toolchains/${TOOLCHAIN_ID}` && req.method === 'GET') return json(200, (await trustedTemplate()).descriptor);
+        const coordinationRoute = url.pathname.match(/^\/internal\/delivery\/v1\/coordination-turns\/([a-z][a-z0-9_-]{2,127})(?:\/(events|cancel))?$/);
+        if (coordinationRoute) {
+          const [, id, action] = coordinationRoute;
+          const outer = () => { const record = coordinator.get(id); if (!record.delivery) throw new DeliveryError(404, 'NOT_FOUND', 'No delivery-aware coordination');
+            const { projectId, revision, asOf, hash } = record.delivery.deliveryFacts; return { protocolVersion: DeliveryProtocolVersion, coordination: record.snapshot, deliveryFactsUsed: { projectId, revision, asOf, hash } }; };
+          if (!action && req.method === 'PUT') { const wrapper = DeliveryCoordinationRequest.parse(await jsonBody(req, 2097152)); const result = coordinator.start(wrapper.coordination, id, wrapper); return json(result.created ? 201 : 200, outer()); }
+          const snapshot = outer();
+          if (!action && req.method === 'GET') return json(200, snapshot);
+          if (action === 'events' && req.method === 'GET') { const after = Number(url.searchParams.get('after') || 0), limit = Number(url.searchParams.get('limit') || 100);
+            if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new DeliveryError(400, 'INVALID_REQUEST', 'Invalid delivery cursor');
+            return json(200, { protocolVersion: DeliveryProtocolVersion, deliveryFactsUsed: snapshot.deliveryFactsUsed, page: coordinator.events(id, after, limit) }); }
+          if (action === 'cancel' && req.method === 'POST') { await coordinator.cancel(id, await jsonBody(req)); return json(202, outer()); }
+          throw new DeliveryError(404, 'NOT_FOUND', 'Delivery coordination route not found');
+        }
+        const executionRoute = url.pathname.match(/^\/internal\/delivery\/v1\/executions\/([a-z][a-z0-9_-]{2,127})(?:\/(events|inputs|cancel|report|evidence\/([a-z][a-z0-9_-]{2,127})|export\/([a-z][a-z0-9_-]{2,127})))?$/);
+        if (executionRoute) {
+          const [, id, action, evidenceId, archiveId] = executionRoute;
+          if (!action && req.method === 'PUT') { const result = await delivery.start(await jsonBody(req, 2097152), id); return json(result.created ? 201 : 200, result.snapshot); }
+          const snapshot = delivery.snapshot(id);
+          if (!action && req.method === 'GET') return json(200, snapshot);
+          if (action === 'events' && req.method === 'GET') {
+            const after = Number(url.searchParams.get('after') || 0), limit = Number(url.searchParams.get('limit') || 100);
+            if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new DeliveryError(400, 'INVALID_REQUEST', 'Invalid delivery cursor');
+            return json(200, { protocolVersion: DeliveryProtocolVersion, binding: snapshot.binding, page: runtime.events(id, after, limit) });
+          }
+          if (action === 'inputs' && req.method === 'POST') { runtime.answer(id, await jsonBody(req)); return json(202, delivery.snapshot(id)); }
+          if (action === 'cancel' && req.method === 'POST') { await runtime.cancel(id, await jsonBody(req)); return json(202, delivery.snapshot(id)); }
+          if (action === 'report' && req.method === 'GET') { const report = delivery.report(id); return json(200, report ? { protocolVersion: DeliveryProtocolVersion, state: 'available', binding: snapshot.report, report }
+            : { protocolVersion: DeliveryProtocolVersion, state: 'pending', preparationId: runtime.get(id).delivery!.bundle.binding.preparationId, executionId: id, runId: snapshot.execution.runId, revision: snapshot.execution.revision }); }
+          if (evidenceId && req.method === 'GET') { const entry = delivery.report(id)?.evidence.find((entry) => entry.id === evidenceId); res.setHeader('content-type', entry?.mediaType || 'application/octet-stream'); res.end(await delivery.evidence(id, evidenceId)); return; }
+          if (archiveId && req.method === 'GET') { res.setHeader('content-type', 'application/zip'); res.end(await delivery.export(id, archiveId)); return; }
+          throw new DeliveryError(404, 'NOT_FOUND', 'Delivery execution route not found');
+        }
+        const match = url.pathname.match(/^\/internal\/delivery\/v1\/preparations\/([a-z][a-z0-9_-]{2,127})(?:\/(events|cancel|report|evidence\/([a-z][a-z0-9_-]{2,127})))?$/);
+        if (!match) throw new DeliveryError(404, 'NOT_FOUND', 'Delivery route not found');
+        const [, id, action, evidenceId] = match;
+        if (!action && req.method === 'PUT') { const result = await planning.start(await jsonBody(req, 2097152), id); return json(result.created ? 201 : 200, result.snapshot); }
+        if (!action && req.method === 'GET') return json(200, planning.get(id).snapshot);
+        if (action === 'events' && req.method === 'GET') {
+          const after = Number(url.searchParams.get('after') || 0), limit = Number(url.searchParams.get('limit') || 100);
+          if (!Number.isSafeInteger(after) || after < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new DeliveryError(400, 'INVALID_REQUEST', 'Invalid delivery cursor');
+          return json(200, planning.events(id, after, limit));
+        }
+        if (action === 'cancel' && req.method === 'POST') { const command = DeliveryCommand.parse(await jsonBody(req)); return json(202, await planning.cancel(id, command.commandId)); }
+        if (action === 'report' && req.method === 'GET') {
+          const record = planning.get(id); const report = record.report;
+          return json(200, report ? { protocolVersion: DeliveryProtocolVersion, state: 'available', binding: { deliveryId: report.id, reportHash: report.hash, reportRevision: report.revision, sourceSnapshotHash: null }, report }
+            : { protocolVersion: DeliveryProtocolVersion, state: 'pending', preparationId: id, executionId: record.request.executionId, runId: record.request.runId, revision: record.snapshot.revision });
+        }
+        if (evidenceId && req.method === 'GET') { res.setHeader('content-type', 'text/plain; charset=utf-8'); res.end(await planning.evidence(id, evidenceId)); return; }
+        throw new DeliveryError(404, 'NOT_FOUND', 'Delivery route not found');
+      }
       if (coordinationRequest) {
         if (req.headers['x-atoms-coordination-version'] !== CoordinationProtocolVersion) throw new CoordinationError(400, 'INVALID_REQUEST', 'Unsupported coordination version');
         const route = url.pathname.match(/^\/internal\/v2\/coordination-turns\/([a-z][a-z0-9_-]{2,127})(?:\/(events|cancel))?$/);
@@ -408,19 +502,19 @@ export function createAgentServer(options: AgentOptions) {
       throw new HttpError(404, 'NOT_FOUND', 'Route not found');
     } catch (error) {
       const invalid = error && typeof error === 'object' && 'issues' in error;
-      const known = error instanceof HttpError || error instanceof CoordinationError;
+      const known = error instanceof HttpError || error instanceof CoordinationError || error instanceof DeliveryError;
       const code = known ? error.code : invalid ? 'INVALID_REQUEST' : 'INTERNAL_ERROR';
       const status = known ? error.status : invalid ? 400 : 500;
       json(status, { error: { code, message: known ? error.message : invalid ? 'Request does not match protocol' : 'Internal runtime error',
         retryable: status === 503, requestId: `request_${randomUUID().replaceAll('-', '')}` } });
     }
   });
-  return { server, runtime, coordinator,
+  return { server, runtime, coordinator, planning, delivery,
     async listen(port = 0, host = '127.0.0.1') {
       await new Promise<void>((resolve) => server.listen(port, host, resolve));
       const address = server.address(); if (!address || typeof address === 'string') throw new Error('No runtime address');
       return `http://${host}:${address.port}`;
     },
-    async close() { await Promise.all([runtime.close(), coordinator.close()]); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); },
+    async close() { await Promise.all([runtime.close(), coordinator.close(), planning.close()]); server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve())); },
   };
 }

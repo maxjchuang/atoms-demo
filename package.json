@@ -30,7 +30,11 @@
     "m3:down": "node scripts/m3-public.mjs down",
     "m3:test-context": "node scripts/m3-test-context.mjs",
     "m3:test": "pnpm --filter @atoms/api exec tsx ../../scripts/m3-check.mjs",
-    "m3:test-unit": "node --test deploy/m3/gateway.test.mjs scripts/m3-lib.test.mjs",
-    "m3:clean-check": "node scripts/m3-clean-check.mjs"
+    "m3:test-unit": "node --test deploy/m3/gateway.test.mjs scripts/m3-lib.test.mjs scripts/m3-runtime-mode.test.mjs",
+    "m3:clean-check": "node scripts/m3-clean-check.mjs",
+    "m3:certify": "node scripts/m3-certify.mjs",
+    "m3:tunnels": "node scripts/m3-tunnels.mjs",
+    "m3:smoke-real": "pnpm --filter @atoms/api exec tsx ../../scripts/m3-smoke-real.mjs",
+    "m3:test-stage2": "node --test scripts/m3-stage2.test.mjs"
   }
 }

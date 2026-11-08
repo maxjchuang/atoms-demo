@@ -1,0 +1,61 @@
+# M3 第二阶段操作候选（主管执行，尚未执行）
+
+日期：2026-11-09。基础 infra 已由主管接受 `6a05d2f`。本页和三个新命令只提供后续操作编排；默认输出plan，不启动Docker认证、公网隧道或模型。本实现线只执行了 syntax/plan/guard 小测试。实际动作须主管审查后明确执行，不能把这些脚本存在当作M3/G5通过。
+
+## 1. 独立 certifier operator
+
+```sh
+pnpm m3:certify --plan
+ATOMS_ALLOW_M3_CERTIFY=1 pnpm m3:certify --project atoms-m3-public --actual-agent --certify
+```
+
+先正常drain，确认本project的API、可信Agent、正常Broker全停且Run/Turn无未完成工作，broker所有leases也确认停止。命令不自动停服务、不替用户答题。它用同一已审核trusted-Broker image建一次性operator，UID1000+实际socket GID、network=none、readonly rootfs、cap-dropALL/no-new-privileges、Docker log-driver none，只挂Docker socket、broker-data与broker-token。API/Agent数据、provider卷和模型Key均不提供。
+
+资源明确分开：正式Broker仍256MiB；一次性operator额外2GiB、2CPU、256PID、/tmp128MiB；untrusted builder/browser原1.5–2GiB等限额不改。Docker VM最低5GiB（operator+最大job+余量）；不足时拒绝而不是OOM后误认probe失败。broker-data要求至少2GiB可用和100k空闲inodes；TMPDIR固定到broker-data/certifier-tmp，HOME另设certifier-home，不把offline cache/node_modules塞进128MiB临时文件系统。
+
+Agent certifier须把父解析后的**实际sha256 JOB_IMAGE**传给每个smoke/child，TMPDIR也显式传递；不能父测固定digest而子用默认可变tag。Operator串行运行**11项实际门禁**（原10项+broker永不恢复时独立watchdog），最多70分钟总控制期限；正常Broker/Job策略不因测试扩额。失败保留0600完整日志，proof保持notready；若硬终止，主管检查实际owned jobs/lease后处理，不自动清扫别的资源。
+
+成功必须是certifier实际原子落盘的 image/policy/cache/probe/evidence绑定，不能用环境变量、fixture、tag存在或旧日志声明ready。恢复正常Broker/Agent后读取认证的 `GET /internal/isolation/v1/capabilities`，再由主管对照当前job image、policy、cache、watchdog及toolchain生成配置。独立watchdog修复会改变这些binding，**不得提前stamp旧c62/ab64 tuple**。初始化尚未configured时API使用toolchain_unconfigured并拒绝生成，不回落旧host toolchain。
+
+## 2. 双 Quick Tunnel 只指向已核验 loopback gateways
+
+```sh
+pnpm m3:tunnels plan
+ATOMS_ALLOW_M3_PUBLIC_TUNNELS=1 pnpm m3:tunnels start --project atoms-m3-public
+ATOMS_ALLOW_M3_PUBLIC_TUNNELS=1 pnpm m3:tunnels renew --project atoms-m3-public
+ATOMS_ALLOW_M3_PUBLIC_TUNNELS=1 pnpm m3:tunnels stop --project atoms-m3-public
+pnpm m3:tunnels status --project atoms-m3-public
+```
+
+start/renew要求实际认证isolation ready、当前job digest一致、业务drained/API已停；核对workbench/preview网关来自当前受审image且仅绑定127.0.0.1:18080/18081。目标分别为两个网关，永不指向Vite dev、API3001、Agent4100、broker4310、Docker、旧live或私有数据目录。构造独立0700 cloudflared HOME，避免读取操作者旧account/config；只使用官方 `tunnel --url`，不加email第二登录、不启debug。不假设SSE，仍走execution/conversation双cursor轮询。
+
+controller保存PID、启动时间+命令fingerprint与角色/port，只能停止匹配的自有进程，PID重用/身份不符即拒绝。日志0600，不输出cookie/code/cap；成功stdout仅临时公网origins及下一步。QuickTunnel无SLA、最多200in-flight、重建域名改变、停止进程后URL失效，不承诺永久可用。
+
+新origins经过严格HTTPS/不同host校验，原子更新host metadata/新epoch；preview域名改变时轮换signing secret。API仍须通过已审控制器重启，再由外部浏览器实际验证；配置完成不等于receipt verified。旧descriptor resolve409、旧cap在新origin403，owner/Run/Version/报告/额度不重置。停止connector本身不等于取消已授权的工作；停止/续签流程先drain。外部URL与preview cap只给浏览器，不喂模型或对话。
+
+此脚本尚无实际tunnel成功证据，操作者须在最终拓扑/认证/role mounts通过后才执行；脚本不替代外部浏览器的TLS/cookie/资源/剪贴板/过期/轮询验证。
+
+## 3. 最多一个真实 Code + 一个 mode=ask 分享咨询
+
+```sh
+pnpm m3:smoke-real --plan
+ATOMS_ALLOW_M3_REAL_SMOKE=1 pnpm m3:smoke-real --project atoms-m3-public --run
+```
+
+前提：fresh公共namespace只有一个已发码身份、没有任何Run/Version/项目；actual Agent及Coordinator均dsh，UI image manifest为dsh；最新实际isolation proof ready且与当前reviewed tuple匹配。任何已有失败/成功任务都使此入口拒绝，不复活旧任务、不重置quota。Raw provider credential不由smoke读取，只由先前主管受控ingress经stdin写入独立provider卷，仅可信Agent可见；不进argv/env/镜像/API/GW/Broker/admin/job。
+
+本脚本从current-owner0600 reviewer code文件登录，创建一个项目和**一次**Code Run，保存原Idempotency-Key。代码预算：8 observable steps/65,536有效输入（含缓存）/24,576输出/900,000ms active time；Prepare、Worker、验证/修复/clean共用，不能阶段重置。Run进入实际generation/verification阶段后（若极快完成则之后）最多一次自然语言分享咨询，显式mode=ask；协调预算独立3steps/90s/32,768输入/8,192输出。无自动第二Run/第二咨询、澄清续问或预算扩张。
+
+waiting_input只记录真实绑定并失败停下，主管再判断如何在原mandate内处理；不自动答题。任一阶段失败/未知最终真实用量/超额/非DSH provenance/未发布都保留私有ledger并退出；不会用一条新的模型请求“补证”。分享答复必须consult/status，不得新增代码任务，前后生成额度不变；实际typed internal snapshot核已知Router usage，源码/版本/报告及DSH来源保留。
+
+传输是受控本机loopback gateway+canonical HTTPS Host，**不是外部浏览器G5证明**。真实Code成功可partial并诚实列gap；不能据成功Run声称全部语义验证。G5另用已经提交的existing-project只读Web工具，经两个真实HTTPS域读取报告/日志/PNG/ZIP/diff/preview/刷新及cap轮换；不再调用模型或创建任务。
+
+## 4. 默认与测试边界
+
+`pnpm m3:test-stage2` 只跑5项plan/guard测试：operator资源/无provider挂载、smoke最多1+1、不带guard拒绝、tunnel默认plan/双polling、check project不能创建公网。它们不认证Docker、不启动Cloudflare、不读取provider Key、不执行模型。包入口仅新增m3命名脚本，不改旧行为、依赖或lock。主管实际执行每阶段后才更新证据/状态；若新watchdog协议尚未被接受，所有实际binding步骤保持待执行。
+
+## 持久运行模式修正
+
+首次public启动用显式 `--fake` 测试，或 `ATOMS_ALLOW_M3_REAL=1 ... --real --provider-key-file ...` 授权初次Key ingress；成功后私有0600 runtime-mode.json 保存project/dsh/providerConfigured，**不保存Key**。后续普通up、renew之后的up都保留dsh，不再要求或读取raw key路径。`--real`不再决定每次启动mode；Fake manifest与已配置dsh冲突或显式Fake降级均拒绝，不自动fallback。模式尚未初配时up缺明确选择则失败。此修正只影响host lifecycle/private metadata，不改业务协议、额度、模型调用预算或SDK；持久模式正反回归零provider执行。
+
+主管独立复验本候选：core/mode9项与Stage2 plan/guard5项、三个操作入口及host mode helper语法检查通过。真实模式普通重启/更新域名后不重新读取Key、不回退Fake；这仍是零provider测试，不能代替后续实际operator11-gate认证、临时隧道或有限真实Code/ask。

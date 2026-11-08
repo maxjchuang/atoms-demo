@@ -50,7 +50,7 @@ test('build invitation is exact workbench root with no code/session, not preview
   await dialog(page).getByRole('button', { name: '邀请体验构建', exact: true }).click(); await expect(dialog(page)).toContainText('对方仍需另行取得体验码');
   await dialog(page).getByRole('button', { name: '复制工作台入口', exact: true }).click(); await expect(dialog(page).locator('.sharing-result')).toContainText('链接已复制');
   expect(await dialog(page).getByLabel('工作台入口（不含体验码）').inputValue()).toBe('https://workbench-demo.example.test/');
-  await expect(dialog(page)).toContainText('null 不代表永久有效'); await expect(dialog(page)).toContainText('不会自动登录');
+  await expect(dialog(page)).toContainText('未承诺固定期限；服务停止或临时域名更换后链接可能失效'); await expect(dialog(page)).not.toContainText('null'); await expect(dialog(page)).toContainText('不会自动登录');
   await page.screenshot({ path: 'review-artifacts/m3-mock/build-invitation.png', mask: [dialog(page).locator('.sharing-link input')] });
 });
 

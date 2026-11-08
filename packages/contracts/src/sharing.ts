@@ -13,13 +13,14 @@ const Availability={available:z.boolean(),reasonCode:SharingReason.nullable()};
 /** Authority is checked against host configuration by the API, never supplied by a model. */
 export const SharingHttpsUrl=z.string().min(1).max(SHARING_LIMITS.maxUrlCharacters).url().superRefine((value,ctx)=>{
  let url:URL;try{url=new URL(value);}catch{return;}
- if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash||/[?#\s\u0000-\u001f\u007f]/.test(value))ctx.addIssue({code:'custom',message:'Sharing URL requires HTTPS without userinfo, query, fragment or whitespace'});
+ const authority=value.split('://')[1]?.split('/')[0]??'';
+ if(url.protocol!=='https:'||url.username||url.password||authority.includes('@')||url.search||url.hash||/[?#\\\s\u0000-\u001f\u007f]/.test(value))ctx.addIssue({code:'custom',message:'Sharing URL requires HTTPS without userinfo, query, fragment or whitespace'});
 });
 export const AppPreviewSharingUrl=SharingHttpsUrl.refine(value=>{
- try{return /^\/p\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\/index\.html$/.test(new URL(value).pathname);}catch{return false;}
+ try{const url=new URL(value),start=value.indexOf('/',value.indexOf('://')+3),rawPath=start<0?'/':value.slice(start);return rawPath===url.pathname&&/^\/p\/[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\/index\.html$/.test(url.pathname);}catch{return false;}
 },'App preview URL must use the fixed signed preview path');
 export const BuildEntrySharingUrl=SharingHttpsUrl.refine(value=>{
- try{return new URL(value).pathname==='/';}catch{return false;}
+ try{const url=new URL(value),start=value.indexOf('/',value.indexOf('://')+3),rawPath=start<0?'/':value.slice(start);return rawPath==='/'&&url.pathname==='/';}catch{return false;}
 },'Build entry URL must be the workbench root login entry');
 
 export const SharingDescriptor=z.object({

@@ -1,0 +1,3 @@
+import{readFileSync}from'node:fs';import{IsolationCapabilities}from'@atoms/contracts/isolation';
+const token=process.env.ATOMS_SERVICE_TOKEN_FILE?readFileSync(process.env.ATOMS_SERVICE_TOKEN_FILE,'utf8').trim():process.env.ATOMS_SERVICE_TOKEN;if(!token)throw new Error('Service secret file/env required');
+const response=await fetch((process.env.ISOLATION_AGENT_URL||'http://127.0.0.1:4100')+'/internal/isolation/v1/capabilities',{headers:{authorization:'Bearer '+token,'x-atoms-isolation-version':'0.1.0'},signal:AbortSignal.timeout(10000)});if(!response.ok)throw new Error('Capability read failed HTTP'+response.status);console.log(JSON.stringify(IsolationCapabilities.parse(await response.json())));

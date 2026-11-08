@@ -18,6 +18,7 @@ import { CoordinatorRuntime } from './coordinator.js';
 import { CoordinationError } from './coordination-context.js';
 import type { CoordinatorAdapter } from './coordinator-adapters.js';
 import { CoordinationProtocolVersion } from '@atoms/contracts/conversation';
+import { TOKEN_ACCOUNTING_VERSION } from './native-usage.js';
 
 type RuntimeBody = ReturnType<typeof RuntimeEvent.parse>;
 type CheckValue = ReturnType<typeof Check.parse>;
@@ -29,6 +30,7 @@ type RecordValue = {
   usage: { modelSteps: number; inputTokens: number; outputTokens: number };
   ordinaryQuestions: number; answers: ResolvedRunQuestion[];
   repairRoundsUsed: number; verificationErrors: string | null; repairClaimed: boolean;
+  tokenAccountingVersion?: typeof TOKEN_ACCOUNTING_VERSION;
 };
 const terminal = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
 const now = () => new Date().toISOString();
@@ -118,6 +120,7 @@ export class AgentRuntime {
       events: [], commands: {}, started: false, plan: null, planConfirmed: request.mode === 'build',
       queueOrder: Date.now(), activeMs: 0, waitingAt: null, usage: { modelSteps: 0, inputTokens: 0, outputTokens: 0 },
       ordinaryQuestions: 0, answers: [], repairRoundsUsed: 0, verificationErrors: null, repairClaimed: false,
+      tokenAccountingVersion: TOKEN_ACCOUNTING_VERSION,
     };
     this.records.set(pathId, item);
     this.update(item, {}); const snapshot = clone(item.snapshot); this.schedule();

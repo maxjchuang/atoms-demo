@@ -103,3 +103,27 @@ The operator checks both frozen ledgers, both identical consumed receipt copies,
 If the original session/key/body already has an API idempotency receipt, the operator verifies its exact Run and continues observing it **without another POST**. Otherwise current state must still be one failed Run, zero generation/coordination used or reserved, no version or pending work; it creates an additional exclusive continuation receipt before the one allowed transport replay, retaining the same key and canonical body. It never clears the consumed receipt, resets quota, creates a project/new mandate, or retries a second transport invocation. All original unknown usage remains unknown. The existing at-most-one new Code plus at-most-one ask budget and final two-Runs/one-Version/used-one checks remain unchanged. No actual continuation/model operation has been run by the implementation lane.
 
 主管独立通过本次完整31项host/gateway/mode/guard/continuation回归与4个语法入口检查；live synthetic gateway lifecycle测试属于该回归，不冒充真实模型或新部署操作。实际同会话传输续跑仍须主管显式guard执行。
+
+### One specifically reviewed R2 output-failure recovery
+
+R2 (`run_4d1b3a5d59d7589accff`) ended blocked, with no candidate or Version: Prepare settled one step (1,774 input / 2,264 output), followed by two Worker settled max-token responses with empty output bodies (16,000 and 6,312 output). The reviewed total is three steps / 15,647 input / 24,576 output, exactly the original output cap. The original sharing ask `turn_4c835731068ba98fe23f` completed as a read-only consult (one step / 1,768 input / 471 output). Both failed Runs, all reports and original token observations are retained. The Agent lane is separately correcting retry usage aliasing and disabling Worker thinking for structured source output; this operator does not change SDK/model/budget or deploy that fix.
+
+A final, separately guarded operator is bound to `real-smoke-1794179816372.json`, the exact project/R2/execution/ask IDs and immutable report hash `885e998858b45c481afc0843f82f62ec13111f606f1a6910d194610bf278d546`. It is not a general retry policy. It requires current two failed Runs / zero Versions / generation used-one, reserved-zero / one completed ask / coordination used-one, reserved-zero / no pending work. It verifies the first failed Run/report too, current real mode, current OS tuple, and that the gateway is actually unpaused before admission. It does not alter old ledgers, reports, usage or quotas.
+
+Provider-free plan (no ledger read or services in plan mode):
+
+```sh
+pnpm m3:smoke-real --project atoms-m3-public --recover-reviewed-output-failure "$HOME/.atoms-m3/public/real-smoke-1794179816372.json"
+```
+
+Only after reviewing the separate Worker fix and its zero-network evidence may the manager execute this once:
+
+```sh
+ATOMS_ALLOW_M3_REAL_SMOKE=1 ATOMS_ALLOW_M3_REVIEWED_OUTPUT_RECOVERY=1 pnpm m3:smoke-real --project atoms-m3-public --run --recover-reviewed-output-failure "$HOME/.atoms-m3/public/real-smoke-1794179816372.json"
+```
+
+Before the one POST it creates an owner-private API-data tar with SQLite/WAL byte-stability checks, saves the original ledger and typed old execution/ask/report evidence, and writes an exclusive one-use receipt including backup/ledger/body hashes and the new idempotency key. Existing receipt refuses even a new login; any later failure or lost response leaves the receipt consumed. It creates exactly one new Code in the same project with the original full goal and unchanged 8-step / 65,536-input / 24,576-output / 900-second budget. It creates **zero new coordination messages**, never answers Attention, retries admission or creates another project/task. There is no automatic fallback to either earlier recovery operator.
+
+Success requires three total Runs, one Version, generation used-two/reserved-zero, original ask unchanged, coordination quota unchanged, both old report hashes unchanged, actual DSH source provenance, and known cumulative Code usage within the fixed cap. A failure stops and retains evidence. This implementation has only provider-free plan/guard/positive/negative tests until the manager explicitly executes it; it is not a claimed real generation or external-browser pass.
+
+主管独立通过本候选与旧host/gateway/mode/guard合计37/37、两个语法入口与diff检查。Worker独立修复已由主管完整90项/check/build及实际零网络serializer验证；该operator仍不会自动执行，新增一次Code须独立guard明确授权。

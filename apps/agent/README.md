@@ -67,3 +67,5 @@ Stable **Fake-only examples** for independent HTTP integration (not a natural-la
 | `[read-source:source/src/App.tsx] 解释保存方式` | one controlled source-read pass before consult |
 
 For option answers always use the returned option ID and explicit clarification revision; do not hard-code the host-generated IDs. A `proposal_refresh` operation must include the exact trusted proposal in context and stays read-only/exact-version. Context canonical hashing recursively sorts object keys, preserves array order, omits only the top-level hash and hashes compact UTF-8 JSON; the shared fixture vector is asserted independently in Agent/API tests.
+
+Token budgets for new real Worker and Router requests count effective input, including reported cache reads/writes. Settled SDK usage is normalized against `totalTokens` so a provider whose input already includes cache is not charged cache twice. Duplicate settled event IDs are ignored; final RunResult summaries are not added again. Ambiguous fields use a conservative reported bound and private numerical accounting metadata. The old public DTO shape is unchanged; existing completed historical snapshots are not silently rewritten.

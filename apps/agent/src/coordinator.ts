@@ -14,11 +14,13 @@ import {
 } from './coordination-context.js';
 import { DshCoordinatorAdapter, FakeCoordinatorAdapter, type CoordinatorAdapter, type CoordinationModelContext } from './coordinator-adapters.js';
 import { ProjectSessionFence } from './project-session-fence.js';
+import { TOKEN_ACCOUNTING_VERSION } from './native-usage.js';
 
 type CoordinatorRecord = {
   request: StartCoordinationRequestDto; requestHash: string; order: number;
   snapshot: CoordinationExecutionSnapshotDto; events: CoordinationSourceEventDto[];
   commands: Record<string, { hash: string; snapshot: CoordinationExecutionSnapshotDto }>;
+  tokenAccountingVersion?: typeof TOKEN_ACCOUNTING_VERSION;
 };
 type SourceBody = CoordinationSourceEventDto['event'];
 const now = () => new Date().toISOString();
@@ -89,7 +91,7 @@ export class CoordinatorRuntime {
     if ([...this.records.values()].filter((record) => record.request.projectId === request.projectId && !terminal.has(record.snapshot.status)).length >= COORDINATION_DEFAULTS.maxPendingTurnsPerProject) {
       throw new CoordinationError(429, 'RATE_LIMITED', 'Project Router queue is full');
     }
-    const record: CoordinatorRecord = { request, requestHash, order: Date.now(), events: [], commands: {},
+    const record: CoordinatorRecord = { request, requestHash, order: Date.now(), events: [], commands: {}, tokenAccountingVersion: TOKEN_ACCOUNTING_VERSION,
       snapshot: { protocolVersion: CoordinationProtocolVersion, id: request.turnId, projectId: request.projectId,
         revision: 1, status: 'accepted', lastSourceSeq: 0, contextUsed: usedContext(request), result: null, error: null,
         usage: { modelSteps: 0, inputTokens: null, outputTokens: null }, updatedAt: now() } };

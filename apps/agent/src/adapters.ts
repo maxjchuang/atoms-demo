@@ -8,6 +8,7 @@ import { verifyDshToolPolicy } from './dsh-policy.js';
 import { requestStructuredJson, type ModelResult } from './structured-output.js';
 import type { DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
 import { applySourceEdit, type FileChange } from './source-edits.js';
+import { NativeUsageAccounting, UsageAccountingError, nativeEventIdentity, type NativeTokenUsage } from './native-usage.js';
 
 export type PlanValue = ReturnType<typeof Plan.parse>;
 export type GenerationQuestion = { kind: 'question'; title: string; description: string; options: string[]; allowText: boolean };
@@ -102,6 +103,7 @@ export class DshAdapter implements ModelAdapter {
     });
     this.harnesses.set(context.request.executionId, harness);
     const onAbort = () => { void harness.close(); };
+    const accounting = new NativeUsageAccounting();
     context.signal.addEventListener('abort', onAbort, { once: true });
     try {
       await harness.start();
@@ -112,12 +114,17 @@ export class DshAdapter implements ModelAdapter {
       context.report(`${roleLabel}模型会话已就绪，开始请求${role === 'router' ? '实现计划' : 'React 多文件代码'}。`);
       const result = await session.run(prompt, { onNotification(notification) {
           if (notification.method !== 'session.event') return;
-          const event = notification.params.event as { type?: string; data?: { usage?: { inputTokens?: number; outputTokens?: number } } } | undefined;
-          if (event?.type === 'step/start') context.meter({ modelSteps: 1 });
-          if (event?.type === 'assistant/message' && event.data?.usage) context.meter(event.data.usage);
+          const event = notification.params.event as { type?: string; seq?: unknown; data?: { turn?: unknown; step?: unknown; usage?: NativeTokenUsage } } | undefined;
+          const identity = event ? nativeEventIdentity(notification.params.sessionId, event) : undefined;
+          if (event?.type === 'step/start' && accounting.step(identity)) context.meter({ modelSteps: 1 });
+          if (event?.type === 'assistant/message' && event.data?.usage) {
+            const usage = accounting.add(identity, event.data.usage);
+            if (usage) context.meter({ inputTokens: usage.inputTokens, outputTokens: usage.outputTokens });
+          }
         },
       });
       abort(context.signal);
+      accounting.assertObservable();
       await writeFile(sessionRecord, JSON.stringify({ sessionId: result.sessionId }));
       await appendFile(path.join(context.home, 'atoms-diagnostics.jsonl'), JSON.stringify({
         time: new Date().toISOString(), executionId: context.request.executionId, role,
@@ -127,9 +134,13 @@ export class DshAdapter implements ModelAdapter {
       return { text: result.finalResponse, finishReason: result.finishReason };
     } catch (error) {
       if (context.signal.aborted) throw new Error('DSH execution aborted');
+      if (error instanceof UsageAccountingError) throw new Error('模型用量不可核验，已停止本轮执行以保持预算边界。');
       // SDK diagnostics may contain provider requests. Keep them out of visitor events.
       throw new Error('DSH 请求失败：请检查模型访问、会话和网络配置。');
     } finally {
+      await appendFile(path.join(context.home, 'token-accounting.jsonl'), JSON.stringify({
+        time: new Date().toISOString(), executionId: context.request.executionId, role, ...accounting.metadata(),
+      }) + '\n').catch(() => {});
       context.signal.removeEventListener('abort', onAbort);
       await harness.close();
       this.harnesses.delete(context.request.executionId);

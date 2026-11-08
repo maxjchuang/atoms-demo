@@ -11,6 +11,7 @@ import { DeliveryError, type DeliveryPlanningRuntime } from './delivery-planning
 import { trustedTemplate } from './trusted-template.js';
 import { assertSealed, seal, sameToolchain, fingerprints, inventoryHash } from './delivery-files.js';
 import { putFile, safeFile, sha256, listFiles } from './files.js';
+import type { TrustedSourceFault } from './controlled-repair.js';
 import { assertControlledSource } from './source-policy.js';
 import { verifyApplication } from './verify.js';
 import { runBrowserPlan } from './browser-dsl.js';
@@ -22,7 +23,7 @@ type State = { phase?: 'clean_export'; attempts: Attempt[]; evidence: Evidence[]
 const now = () => new Date().toISOString();
 export class DeliveryExecutionRuntime {
   private states = new Map<string, State>();
-  constructor(readonly runtime: AgentRuntime, readonly planning: DeliveryPlanningRuntime, private options: { allowControlledRegression?: boolean }) {}
+  constructor(readonly runtime: AgentRuntime, readonly planning: DeliveryPlanningRuntime, private options: { allowControlledRegression?: boolean; trustedSourceFault?: TrustedSourceFault }) {}
   private root(id: string) { return path.join(this.runtime.options.dataDir, 'executions', id); }
   private state(id: string) {
     let state = this.states.get(id); if (!state) {
@@ -73,7 +74,29 @@ export class DeliveryExecutionRuntime {
     const attemptId = `attempt_${index}_${item.request.executionId}`; const relative = `attempt_${index}`;
     const dir = path.join(this.root(item.request.executionId), 'evidence', relative); await mkdir(dir, { recursive: true });
     let sourceProvenance: Attempt['sourceProvenance'] = { kind: 'model_output', adapterMode: this.runtime.adapter.mode };
-    if (index === 0 && this.options.allowControlledRegression && this.runtime.adapter.mode === 'fake' && item.request.prompt.includes('[controlled-persistence]')) {
+    if (index === 0 && this.options.trustedSourceFault) {
+      const baseFiles = await fingerprints(workspace, 'source/'); const base = inventoryHash(baseFiles);
+      const controlled = path.join(this.root(item.request.executionId), 'controlled'); await mkdir(controlled, { recursive: true });
+      for (const file of baseFiles) await putFile(controlled, 'base/' + file.path, await readFile(await safeFile(workspace, file.path.slice(7))));
+      const fault = await this.options.trustedSourceFault({ workspace, plan: bundle.plan, signal: context.signal, baselineEvidenceDir: path.join(controlled, 'baseline-evidence'), report: context.report });
+      if (inventoryHash(await fingerprints(workspace, 'source/')) !== base) throw new Error('Trusted fault hook changed source before the recorded patch');
+      if (!fault.edits.length || fault.origin.sourceHash !== base || new Set(fault.edits.map(edit => edit.path)).size !== fault.edits.length) throw new Error('Controlled fault baseline or edit set mismatch');
+      const edits = [];
+      for (const edit of fault.edits) {
+        if (!edit.path.startsWith('src/') || !/\.(tsx?|css|json)$/.test(edit.path)) throw new Error('Controlled fault path must stay in permitted source files');
+        const target = await safeFile(workspace, edit.path);
+        const before = await readFile(target, 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+        if ((before === null ? null : sha256(before)) !== edit.expectedBeforeSha256 || edit.after === before) throw new Error('Controlled fault file fingerprint mismatch');
+        edits.push({ path: edit.path, before, after: edit.after, beforeHash: before === null ? null : sha256(before), afterHash: sha256(edit.after) });
+      }
+      for (const edit of edits) { await putFile(workspace, edit.path, edit.after); context.fileChanged({ path: edit.path, operation: edit.before === null ? 'added' : 'modified' }); }
+      const injected = inventoryHash(await fingerprints(workspace, 'source/'));
+      for (const file of await fingerprints(workspace, 'source/')) await putFile(controlled, 'injected/' + file.path, await readFile(await safeFile(workspace, file.path.slice(7))));
+      const patch = canonicalDeliveryJson({ kind: 'controlled_regression', edits, explanation: fault.explanation, origin: fault.origin, baseSourceHash: base, injectedSourceHash: injected, originalPlanHash: fault.origin.originalPlanHash, frozenPlanHash: bundle.plan.hash });
+      await putFile(dir, 'controlled-patch.json', patch);
+      sourceProvenance = { kind: 'controlled_regression', baseSourceHash: base, patchHash: sha256(patch), injectedSourceHash: injected, patchEvidenceId: `evidence_attempt_${index}_controlled-patch` };
+      context.report('可信测试已对已核验源码副本注入受控故障；不是新模型生成或自然模型缺陷。原计划/断言未变。');
+    } else if (index === 0 && this.options.allowControlledRegression && this.runtime.adapter.mode === 'fake' && item.request.prompt.includes('[controlled-persistence]')) {
       const base = inventoryHash(await fingerprints(workspace, 'source/')); const target = 'src/App.tsx'; const before = await readFile(await safeFile(workspace, target), 'utf8');
       const after = before.replace('useEffect(() => localStorage.setItem(key, JSON.stringify(notes)), [notes]);', 'useEffect(() => {}, [notes]);');
       if (after === before) throw new Error('Controlled regression target does not match explicit Fake sample');

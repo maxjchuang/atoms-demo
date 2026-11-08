@@ -231,7 +231,19 @@ export function registerCoordination(host:CoordinationHost) {
         {kind:'proposal_refresh',proposalId:proposal.id,expectedRevision:proposal.revision,forceProposalOnly:true})};
     });
   });
-  const accept=(proposal:ChangeProposalDto,record:CoordinationRecord,runMode:'build'|'plan')=>{
+  const acceptedGoal=(proposal:ChangeProposalDto,record:CoordinationRecord,runId:string,actorSessionId:string|null)=>{
+    if(state().proposalConfirmations.some(receipt=>receipt.proposalId===proposal.id))return;
+    const confirmedAt=now();
+    state().proposalConfirmations.push({proposalId:proposal.id,runId,actorSessionId,kind:actorSessionId?'explicit_accept':'auto_clear',confirmedAt,proposalRevision:proposal.revision});
+    let view=state().memories.find(m=>m.projectId===proposal.projectId);if(!view){view=structuredClone(memory(proposal.projectId));state().memories.push(view);}
+    // Host-confirmed scope, not the model's unaccepted memory prose; no invented user message.
+    view.decisions.push({id:id('decision'),projectId:proposal.projectId,revision:1,kind:'goal',text:proposal.goal,status:'active',
+      sourceTurnId:record.dto.id,sourceMessageIds:proposal.sourceMessageIds,sourceProposalId:proposal.id,sourceClarificationId:record.replyTo?.clarificationId??null,
+      supersedesDecisionId:null,confirmedAt,createdAt:confirmedAt,updatedAt:confirmedAt});
+    view.revision++;view.summary=view.decisions.filter(d=>d.status==='active').map(d=>`${d.kind}: ${d.text}`).join('\n');
+    view.summaryThroughConversationRevision=state().revisions[proposal.projectId]??0;view.updatedAt=confirmedAt;
+  };
+  const accept=(proposal:ChangeProposalDto,record:CoordinationRecord,runMode:'build'|'plan',actorSessionId:string|null=null)=>{
     if(proposal.acceptedRunId)return store.state.runs.find(r=>r.dto.id===proposal.acceptedRunId)!;
     const project=store.state.projects.find(p=>p.dto.id===proposal.projectId)!;
     const code=store.state.codes.find(c=>c.id===record.codeId);
@@ -244,6 +256,7 @@ export function registerCoordination(host:CoordinationHost) {
       {sourceMessageId:record.dto.userMessageId,originTurnId:record.dto.id,proposalId:proposal.id,
         ...(proposal.basePolicy.kind==='exact_version'?{exactBaseVersionId:proposal.basePolicy.expectedBaseVersionId}:{})});}
     catch(error){if((error as {code?:string}).code==='QUOTA_EXCEEDED')fail(403,'GENERATION_QUOTA_EXCEEDED','生成额度已用完；项目对话额度独立计算');throw error;}
+    acceptedGoal(proposal,record,run.dto.id,actorSessionId);
     proposal.status='accepted';proposal.acceptedRunId=run.dto.id;proposal.revision++;proposal.updatedAt=now();proposal.lastAdmissionError=null;
     coordEvent(proposal.projectId,record.dto.id,{type:'proposal.updated',payload:proposal});return run;
   };
@@ -253,7 +266,7 @@ export function registerCoordination(host:CoordinationHost) {
       if(proposal.acceptedRunId)return {status:200,body:{proposal,run:host.ownRun(proposal.acceptedRunId,session).dto}};
       if(proposal.revision!==body.expectedRevision)fail(409,'STALE_REVISION','提案已变化');
       const record=state().turns.find(t=>t.dto.id===proposal.originatingTurnId)!;
-      const run=accept(proposal,record,body.runMode);return {status:202,body:{proposal,run:run.dto}};
+      const run=accept(proposal,record,body.runMode,session.id);return {status:202,body:{proposal,run:run.dto}};
     });
   });
 
@@ -360,13 +373,15 @@ export function registerCoordination(host:CoordinationHost) {
     if(!result.memoryUpdates.length)return;
     let view=state().memories.find(m=>m.projectId===record.dto.projectId);
     if(!view){view=structuredClone(memory(record.dto.projectId));state().memories.push(view);}
+    let changed=false;
     for(const update of result.memoryUpdates){
       for(const messageId of update.sourceMessageIds)if(!store.state.messages.some(m=>m.id===messageId&&m.projectId===record.dto.projectId&&m.role==='user'))fail(403,'FORBIDDEN','项目记忆来源不可验证');
       if(update.supersedesDecisionId){const previous=view.decisions.find(d=>d.id===update.supersedesDecisionId&&d.status==='active');if(!previous)fail(409,'CONFLICT','被纠正决定不存在或已变化');previous!.status='superseded';previous!.revision++;previous!.updatedAt=now();}
       const decision:ProjectDecisionDto={id:id('decision'),projectId:record.dto.projectId,revision:1,kind:update.kind,text:update.text,status:'active',sourceTurnId:record.dto.id,
         sourceMessageIds:update.sourceMessageIds,sourceProposalId:null,sourceClarificationId:record.replyTo?.clarificationId??null,supersedesDecisionId:update.supersedesDecisionId,confirmedAt:now(),createdAt:now(),updatedAt:now()};
-      view.decisions.push(decision);
+      view.decisions.push(decision);changed=true;
     }
+    if(!changed)return;
     view.revision++;view.summary=view.decisions.filter(d=>d.status==='active').map(d=>`${d.kind}: ${d.text}`).join('\n');
     view.summaryThroughConversationRevision=record.request!.context.conversationRevision;view.updatedAt=now();
   };
@@ -410,6 +425,10 @@ export function registerCoordination(host:CoordinationHost) {
         contextUsed:result.contextUsed,status:'open',acceptedRunId:null,supersedesProposalId:refreshed?record.operation.kind==='proposal_refresh'?record.operation.proposalId:null:null,
         lastAdmissionError:null,expiresAt:new Date(Date.now()+DEFAULTS.proposalTtlMs).toISOString(),createdAt:now(),updatedAt:now()};
       state().proposals.push(proposal);let admission:'proposed'|'run_queued'|'blocked'='proposed';let runId:string|null=null;
+      for(const update of result.memoryUpdates)for(const messageId of update.sourceMessageIds){
+        if(!store.state.messages.some(m=>m.id===messageId&&m.projectId===projectId&&m.role==='user'))fail(403,'FORBIDDEN','提案记忆建议来源不可验证');
+      }
+      state().proposalMemorySuggestions[proposal.id]=structuredClone(result.memoryUpdates);
       if(record.dto.mode!=='ask'&&!refreshed&&result.origin!=='inferred_suggestion'&&proposal.basePolicy.kind==='latest_on_dispatch'){
         try {const run=accept(proposal,record,record.dto.runMode);runId=run.dto.id;admission='run_queued';}
         catch(error){const code=(error as {code?:string}).code;proposal.lastAdmissionError={code:code==='QUOTA_EXCEEDED'||code==='GENERATION_QUOTA_EXCEEDED'?'GENERATION_QUOTA_EXCEEDED':'CONFLICT',message:'理解了修改目标，但未通过执行准入；尚未创建任务。',retryable:false};admission='blocked';}
@@ -430,8 +449,8 @@ export function registerCoordination(host:CoordinationHost) {
       outcome={kind:'control',action:'cancel_run',targetRunId:result.targetRunId,replyMessageId:replyId,receipt,run:target!.dto,reason};
       coordEvent(projectId,record.dto.id,{type:'control.receipt',payload:{turnId:record.dto.id,targetRunId:result.targetRunId,receipt,run:target!.dto}});
     }
-    // No memory is accepted from blocked admissions or read-only control rejection.
-    if(!(outcome.kind==='change_proposal'&&outcome.admission==='blocked')&&!(outcome.kind==='control'&&outcome.receipt==='not_applied'))applyMemory(record,result);
+    // A proposal suggestion is not an accepted decision. Explicit accept records host-confirmed goal scope.
+    if(outcome.kind!=='change_proposal'&&!(outcome.kind==='control'&&outcome.receipt==='not_applied'))applyMemory(record,result);
     putMessage(projectId,record.dto.id,text,'assistant',replyId,record.dto.userMessageId);
     updateTurn(record,{status:'completed',result:outcome,error:null,completedAt:now()});
   };

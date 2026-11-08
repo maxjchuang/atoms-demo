@@ -1,6 +1,6 @@
 # M1 项目协调实施记录
 
-日期：2026-11-08。协议基线：`docs/protocol-v0.2.md`；执行侧仍为 v0.1.0。本文只记录已经运行的验证，不把三方向独立测试等同于已完成整产品联调。
+日期：2026-11-08。协议基线：`docs/protocol-v0.2.md`；执行侧仍为 v0.1.0。**M1 应用验收门禁已闭合，本机 live 也已安全升级并核对数据**。主管完成服务、有限真实 Router、分段浏览器、计量修正与升级校验；最后文档提交/推送待主管执行。这里的本机升级不是 M3 公网部署，M2/M3 仍为候选和后续范围。
 
 ## 当前状态
 
@@ -8,11 +8,12 @@
 | --- | --- |
 | API v2 | 独立 coordination 模块、全部冻结端点、任务/消息分离、API 权威记忆、双事件序列、历史合并与旧数据库迁移已实现 |
 | API G1 | `check`/`build` 通过；`test:contract` 30/30（旧 v1 10 项 + 新协调 20 项）已由主代理复验，包含取消未决 outbox 与提案记忆授权修正 |
-| 全仓节点验证 | 主代理在隔离集成 worktree 运行 check 与 142 项节点测试通过：contracts 42 / API 30 / Agent 28 / Web 42；下述缓存计量修正后的最终回归另行补充 |
+| 节点回归记录 | 当前 148 项均有主管独立通过记录：contracts 42 / API 30 / Agent 34 / Web 42；全仓 check/build 此前通过，本补修 Agent check + 34/34 再次通过（新增 6 计量回归），保留分段验证来源 |
 | M1 Fake HTTP 集成 | 主代理复跑 `pnpm test:coordination --no-web` 及包含 Web HTTP 的默认入口，6 组断言通过；真实 API/Agent v2 HTTP + 显式 FakeRouter/FakeDSH + 真实 React 构建/生成应用浏览器 smoke；Web HTTP 就绪不等于 Web 浏览器交互验收 |
 | M1 真实 Router | 主代理显式启动的六轮自然中文样例全部通过：真实 DSH/DeepSeek Router + Fake Worker；不是完整真实代码 G4，不代表任意自然语言准确率 |
-| M1 Web 浏览器 | 前端正用独立 5185 和真实 HTTP 服务验收，结果待主代理确认；不提前标通过 |
-| 输入预算计量 | 真实样例发现缓存读取未纳入有效输入预算；Agent 正修 Worker/Router 计量并做独立测试，未为此重复调用模型；修复未验收前明确保留该缺口 |
+| M1 Web 浏览器 | 分段真实 HTTP 浏览器证据已由主管视觉 review：首轮咨询零 Run、计划确认刷新、Fake 构建/iframe 交互持久化、ask 不建 Run/接受提案 V2；复用轮咨询/暖色记忆刷新；最后 source-only exit 0，精确来源在视野且 submittedMessages=0 / createdRuns=0 / revision、latestRunID、quota 不变 |
+| 输入预算计量 | Worker/Router 均已纳入 cache read/write 的有效输入并去重 settled 用量；原生六轮向量与预算边界等新增 6 测试通过，主管复验 Agent 34/34；未重跑收费样例、旧 ledger 不回写 |
+| 本机 live 升级 | 主管停服前后 drain=0；完整目录备份并 diff -qr 一致，main ff 至 732695e，offline frozen 安装通过；真实 DSH 服务重启，Web 5173 / API 3001 health 均 200。旧空间仍项目 2 / Run 5 / 版本 5 / 消息 55 / 非终态 0，协调字段已迁移，无自动新 Run/重跑，数据与额度保留 |
 | M2/M3 | 不属于本轮实现；可信交付、完整 G4、隔离公网 G5 仍按能力路线图待完成 |
 
 ## API 独立测试覆盖
@@ -78,9 +79,35 @@ ATOMS_ALLOW_REAL_COORDINATION_INTEGRATION=1 ATOMS_KEEP_TEST_DATA=1 pnpm test:coo
 
 六轮各 1 个可观察 modelStep，总计 6；SDK 非缓存输入 9,094 tokens，缓存读取 16,640 tokens，**有效输入 25,734**，输出 1,401，总用量 27,135。不能把 9,094 当作本次全部输入或完整成本依据。
 
-本次 review 同时发现原 Worker/Router 输入预算计量漏掉缓存读取，Agent 正修正归一化与预算测试。已有六轮功能证据保留，但不把它扩张为“计量已正确”；修复结果与最终回归待主代理补充，不为了修统计再执行同一批付费样例。
+本次 review 发现原 Worker/Router 输入预算计量漏掉缓存读取，现已修正归一化：缓存 read/write 计入有效输入，重复 settled 用量去重。主管亲自复验 Agent check + 全套 34/34，包含原生六轮向量和新增 6 项计量回归；没有为修统计再次运行付费样例。旧 ledger/原始证据不回写，上述 25,734 / 1,401 / 27,135 是从原生用量核对得到的真实样例口径。
 
 本轮真实只验证消息 Router，Worker 明确为 Fake；普通 Run question、异常竞态和完整真实代码 G4 不能据此补标通过。没有 Fake 回退掩盖真实 Router 结果。
+
+## 分段浏览器证据
+
+真实 HTTP 浏览器验收按三段记录，不能合并描述为一条从头到尾无中断的脚本：
+
+1. 首轮：初始咨询零 Run、计划确认后刷新恢复、实际 Fake Worker 构建与 iframe 新增/编辑/刷新持久化、ask 不建 Run及显式接受提案生成 V2。
+2. 复用轮：同一项目稳定咨询 UI 与暖色记忆刷新。
+3. 最终 source-only：exit 0，已有 decision 的精确来源显示在视野内，submittedMessages=0、createdRuns=0；conversationRevision、latestRunID 与 quota 不变，未为截图制造新业务。
+
+中间两次失败来自测试 first()/重复文案定位假设，已修正测试驱动；没有发现对应产品故障。主管已视觉 review 这组稳定证据。隔离集成 worktree 的本机截图为：
+
+```text
+apps/web/review-artifacts/m1-services/consult.png
+apps/web/review-artifacts/m1-services/memory-and-preview.png
+apps/web/review-artifacts/m1-services/memory-source.png
+```
+
+这些证据不代表任意生成应用的所有行为通过，也不扩张为真实 Worker 代码 G4 或 M3 公网验收。
+
+## live 升级记录与边界
+
+主管已在停服前后确认 drain=0，安全停服并将整个原数据根备份到 `data/backups/review-real-pre-m1-20261108`；备份当时 `diff -qr` 一致，覆盖 SQLite/WAL、版本产物、Agent 账本/session 与本地签名凭证。随后 main fast-forward 到 `732695e`，offline frozen 依赖安装通过，真实 DSH 本机服务已重启。
+
+主管核对 Web `http://localhost:5173` 和 API 3001 `/health` 均返回 200。升级后 SQLite 仍有项目 2、Run 5、版本 5、消息 55、非终态 0；主管进一步核对 legacy `codes/sessions/projects/runs/versions/messages/events/sourceEvents` 与备份 JSON 字节一致。协调字段为增量迁移，没有自动建 Run、重跑历史或重置额度，密钥未进入变更 diff。此为升级时点记录，不代表以后始终没有新任务。
+
+本机升级已完成，最后文档提交/推送由主管继续执行。未执行 M3 Docker 隔离/公网隧道验收，不得将 localhost 就绪称作公网交付；原生账本和旧验收证据不回写。
 
 ## 本地独立启动
 

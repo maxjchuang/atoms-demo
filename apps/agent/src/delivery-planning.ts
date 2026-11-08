@@ -34,6 +34,7 @@ export interface PlanningContext {
   beginModelRequest?: () => void; settleModelRequest?: () => void; markUsageUnknown?: () => void;
   remainingActiveMs?: () => number; usageIsKnown?: () => boolean; remainingOutput: () => number; apiUrl?: string; serviceToken: string;
 }
+export interface TrustedHostPlan { id: string; hash: string; prepare(request: PrepareDeliveryPlanRequestDto): Promise<{ spec: PlanResult['spec']; plan: PlanResult['plan'] }> }
 export interface PlanningAdapter {
   ready(): boolean; plan(context: PlanningContext): Promise<{ spec: PlanResult['spec']; plan: PlanResult['plan'] }>;
   close(id: string): Promise<void>;
@@ -125,7 +126,7 @@ export class DeliveryPlanningRuntime {
   private controllers = new Map<string, AbortController>();
   private closed = false; private pending = new Set<Promise<void>>(); private file: string;
   constructor(private options: { dataDir: string; pool: GenerationPool; mode?: 'fake' | 'dsh'; apiKey?: string; model?: string;
-    apiUrl?: string; serviceToken: string; legacyExists: (id: string, runId?: string) => boolean; adapter?: PlanningAdapter; executionStarted?: (id: string) => boolean }) {
+    apiUrl?: string; serviceToken: string; legacyExists: (id: string, runId?: string) => boolean; adapter?: PlanningAdapter; trustedHostPlan?: TrustedHostPlan; executionStarted?: (id: string) => boolean }) {
     mkdirSync(options.dataDir, { recursive: true }); this.file = path.join(options.dataDir, 'preparations.json');
     this.adapter = options.adapter || (options.mode === 'fake' ? new FakePlanningAdapter() : new DshPlanningAdapter(options));
     if (existsSync(this.file)) for (const record of JSON.parse(readFileSync(this.file, 'utf8')) as PlanRecord[]) {
@@ -177,7 +178,13 @@ export class DeliveryPlanningRuntime {
       } };
     try {
       await mkdir(context.directory, { recursive: true }); let result;
-      if (record.request.planningMode === 'host_profile') result = await profileProposal(record.request, record.request.profileHint!.id);
+      if (record.request.planningMode === 'host_profile') {
+        const trusted = this.options.trustedHostPlan;
+        if (trusted && record.request.profileHint?.id === trusted.id) {
+          if (record.request.profileHint.hash !== trusted.hash) throw new DeliveryError(409, 'BINDING_MISMATCH', 'Trusted captured profile fingerprint changed');
+          result = await trusted.prepare(record.request); context.report('可信测试使用已绑定的 captured host_profile；准备阶段未调用模型，原步骤与 required 不变。');
+        } else result = await profileProposal(record.request, record.request.profileHint!.id);
+      }
       else for (let retry = 0; ; retry++) {
         const attemptStartedAt = Date.now(); const outputBefore = record.settledUsage?.outputTokens ?? 0;
         try { result = await this.adapter.plan(context); break; }

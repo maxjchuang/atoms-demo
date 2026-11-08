@@ -20,9 +20,10 @@ import type { CoordinatorAdapter } from './coordinator-adapters.js';
 import { CoordinationProtocolVersion } from '@atoms/contracts/conversation';
 import { TOKEN_ACCOUNTING_VERSION } from './native-usage.js';
 import { GenerationPool } from './generation-pool.js';
-import { DeliveryPlanningRuntime, DeliveryError, type PlanningAdapter } from './delivery-planning.js';
+import { DeliveryPlanningRuntime, DeliveryError, type PlanningAdapter, type TrustedHostPlan } from './delivery-planning.js';
 import { DeliveryProtocolVersion, DeliveryCommand, DeliveryCoordinationRequest, type DeliveryExecutionRequestDto } from '@atoms/contracts/delivery';
 import { trustedTemplate, TOOLCHAIN_ID } from './trusted-template.js';
+import { SourceBaselineAdapter, type TrustedSourceFault } from './controlled-repair.js';
 import { DeliveryExecutionRuntime } from './delivery-execution.js';
 
 type RuntimeBody = ReturnType<typeof RuntimeEvent.parse>;
@@ -51,6 +52,8 @@ export interface AgentOptions {
   dataDir: string; serviceToken: string; apiInternalUrl?: string;
   mode?: 'fake' | 'dsh'; apiKey?: string; model?: string; adapter?: ModelAdapter;
   coordinationMode?: 'fake' | 'dsh'; coordinatorAdapter?: CoordinatorAdapter;
+  /** Trusted test constructors only; not wired to main/env/HTTP. */
+  trustedHostPlan?: TrustedHostPlan; trustedSourceFault?: TrustedSourceFault;
   allowControlledRegression?: boolean; generationPool?: GenerationPool; isDeliveryReserved?: (id: string) => boolean; planningAdapter?: PlanningAdapter;
 }
 
@@ -65,6 +68,7 @@ export class AgentRuntime {
   private timer: ReturnType<typeof setInterval>;
   private pool: GenerationPool;
   constructor(readonly options: AgentOptions) {
+    if (options.adapter instanceof SourceBaselineAdapter && !options.trustedSourceFault) throw new Error('Source baseline adapter requires the trusted controlled provenance hook');
     this.pool = options.generationPool || new GenerationPool();
     mkdirSync(options.dataDir, { recursive: true });
     this.adapter = options.adapter || (options.mode === 'fake' ? new FakeDshAdapter() : new DshAdapter({ apiKey: options.apiKey, model: options.model }));
@@ -381,8 +385,8 @@ export function createAgentServer(options: AgentOptions) {
   const runtime = new AgentRuntime({ ...options, generationPool: pool, isDeliveryReserved: (id) => planning?.reserved(id) ?? false });
   planning = new DeliveryPlanningRuntime({ dataDir: path.join(options.dataDir, 'delivery'), pool, mode: options.mode,
     apiKey: options.apiKey, model: options.model, apiUrl: options.apiInternalUrl, serviceToken: options.serviceToken,
-    legacyExists: (id, runId) => runtime.records.has(id) || [...runtime.records.values()].some((item) => item.request.runId === runId), executionStarted: (id) => runtime.records.has(id), adapter: options.planningAdapter });
-  const delivery = new DeliveryExecutionRuntime(runtime, planning, { allowControlledRegression: options.allowControlledRegression }); runtime.deliveryEngine = delivery;
+    legacyExists: (id, runId) => runtime.records.has(id) || [...runtime.records.values()].some((item) => item.request.runId === runId), executionStarted: (id) => runtime.records.has(id), adapter: options.planningAdapter, trustedHostPlan: options.trustedHostPlan });
+  const delivery = new DeliveryExecutionRuntime(runtime, planning, { allowControlledRegression: options.allowControlledRegression, trustedSourceFault: options.trustedSourceFault }); runtime.deliveryEngine = delivery;
   for (const item of runtime.records.values()) if (item.delivery && ['interrupted', 'cancelled', 'failed'].includes(item.snapshot.status) && !delivery.report(item.request.executionId)) delivery.fail(item, item.snapshot.status as 'interrupted', 'Runtime restarted or execution terminated.');
   const coordinator = new CoordinatorRuntime({ ...options, mode: options.coordinationMode ?? options.mode });
   const server = createServer(async (req, res) => {

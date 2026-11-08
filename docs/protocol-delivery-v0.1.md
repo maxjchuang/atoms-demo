@@ -79,6 +79,7 @@ Runtime 再校验 bundle、base、flavor 和剩余预算后才能开始应用写
 - prepare 与 Worker 共用受限生成资源池，Router 使用独立槽；不能阶段切换就重置总预算。
 - planning 子预算不超过总预算：建议最多 3 模型步骤、60 秒有效时间、32,768 有效输入、8,192 输出、一次结构化重试；host_profile 模型用量为 0。
 - 实际模型步骤事件 `planning.model_started` 首次出现时，API 将同 Run 生成预占结算 used；后续 execution.started 不再扣一次。纯 host planning 在 Worker 实际开始前不结算生成 used。
+- M2 wrapper 的 `execution.started` 仅在首次实际 adapter 模型 step，或无 step 通知时首次正值 settled token 用量后发出一次；仅受理、载入输入或等待批准不触发 used。准备阶段已结算则不重复扣额。准备/载入/等待的真实状态与进度仍先行公开，批准原冻结计划保持同一 execution；legacy v1 的既有 started 语义不变。
 - API 以可观察、已结算 usage 计算 Worker 剩余时间/步数/有效输入/输出，封入首次 execution.budget。无法核验 usage 或已耗尽则 blocked，不悄悄扩大。
 - 总有效时间包含 prepare、Worker、验证/修复及 clean export 的实际执行，不含资源排队和等待用户。preparation snapshot 的可信 usage.activeMs 以毫秒累计；remaining wall/model/input/output 分别为 total 减已发生规划消费，修复次数/单问题等待/产物上限不因阶段重新放大。
 - 缓存读写纳入有效输入，重复 settled 事件去重，沿用 M1 修正。所有阶段仍可能有在途消费，不宣称绝对费用硬限。

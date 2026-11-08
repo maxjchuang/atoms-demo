@@ -176,3 +176,40 @@ ATOMS_READONLY_REAL_SERVICES=1 ATOMS_WEB_URL=http://localhost:<隔离端口> \
 canonical Seed / derived leaf 呈现补充（2026-11-09）：仅通过共享 `hasDerivedModelCriteria` 与 Seed 明确 ID 分组；默认具体 leaf 缺口在前，原始总体目标另列汇总，保留 required、manual/unsupported/not_run 和完整原始审计。父汇总不作为额外已测行为，实际 case 仍逐条显示一次。旧 host/seed-only 报告、公共 client、质量计算与异步绑定未改。
 
 定向验证：projection 与现 delivery 单元 10/10；mixed/allauto 两尺寸加既有 complete/partial/切版本浏览器 7/7；最后默认说明行调整后 projection 两尺寸 4/4；check/build 通过，未重跑无关全量、未操作实际服务或调用模型。截图：`review-artifacts/m2/projection-{mixed,auto}-{preview,report}-{1440,1366}-mock.png`，mixed 的 `audit` 图另展示展开后的原始父 reason/ID。全部为合成 Mock，不作真实模型或行为执行证明。
+
+## M3 分享（共享 G0 后的 Web 实现）
+
+独立 sharing client 使用 `@atoms/contracts/sharing` 与 `X-Atoms-Sharing-Version`，不变更 v1/v2/delivery。预览工具栏及历史版本支持分享：固定已发布版本、点击重读部署代际再解析、临时签名 expiry、剪贴板实际成功/拒绝手动复制、新窗口阻止 fallback、登录过期/部署冲突/限流/不可达。邀请构建只复制工作台根入口，不带体验码；同码共享演示身份/项目/配额的限制可见。M2 partial/legacy 质量与缺口仍显示，不因分享变成 complete。
+
+生产验证 HTTPS/path、kind/project/subject/epoch；预览必须不同主机，构建入口必须精确等于浏览器当前 origin。API exact authenticated resolver 是 canonical authority，不以旧 Version.previewUrl 阻止合法轮换。显式 `--mode mock` 仅向同一校验函数注入合成 `https://workbench-demo.example.test` 浏览器 origin，配套共享 fixtures 中的合成预览域；没有访问它们，也没有因 API 错误切换 Mock。生产构建应无此 Mock 分支/handler。
+
+```bash
+pnpm --filter @atoms/contracts check
+pnpm --filter @atoms/contracts test
+pnpm --filter @atoms/web check
+pnpm --filter @atoms/web test
+pnpm --filter @atoms/web build
+pnpm --filter @atoms/web exec playwright test e2e/sharing.spec.ts
+```
+
+Mock 使用实际浏览器 clipboard write/read 比对成功；拒绝场景明确为合成权限拒绝，不冒充外网证据。截图存于 `review-artifacts/m3-mock/`（不提交），链接输入在截图中遮罩。历史首轮 16 项中的 390px setup 因等待小屏隐藏的“开启体验”按钮失败，随后改为等待 App 输入就绪，390px 单独复跑通过；该失败不删除、不描述成当时全量通过。最新精确结果见 [M3 Web 状态](M3-SHARING-STATUS.md)。
+
+### 实际外部双域名审计工具（尚未运行，须主管 OS/网关/隧道门禁后显式启动）
+
+`scripts/check-sharing-external.mjs` 与已有只允许 localhost 的只读工具分开，未放宽旧 guard。新工具只接受两个显式公共 HTTPS root origins、已批准的已有项目/当前版本、仓库外当前用户拥有且精确0600的普通非symlink体验码文件及经审阅的当前应用新增/编辑选择器。codefile在任何浏览器/网络启动前用lstat检查，O_NOFOLLOW打开、fstat核对dev/inode/类型/owner/权限后读取；错误不回显路径或内容。仅允许 GET/HEAD、精确登录 POST 和 typed sharing resolve POST；禁止消息、Run、恢复、取消及第三域请求。阻止 Service Worker，仅 `route.continue/abort`，没有 `route.fulfill`、MSW 或 provider 调用。
+
+```bash
+# 以下是待主管配置后手工运行的命令模板；不启动服务、不生成任务。
+# 选择器对应主管已批准且会自动保存的已有示例，不是通用行为验收保证。
+ATOMS_ALLOW_EXTERNAL_SHARING_AUDIT=1 ATOMS_EXTERNAL_OS_GATE=accepted \
+ATOMS_EXTERNAL_WORKBENCH_ORIGIN=https://approved-workbench.trycloudflare.com \
+ATOMS_EXTERNAL_PREVIEW_ORIGIN=https://approved-preview.trycloudflare.com \
+ATOMS_EXTERNAL_PROJECT_ID=project_existing ATOMS_EXTERNAL_VERSION_ID=version_existing \
+ATOMS_EXTERNAL_CODE_FILE=/private/runtime/reviewer-code.txt \
+ATOMS_EXTERNAL_APP_ADD_SELECTOR='#add-note' ATOMS_EXTERNAL_APP_EDITOR_SELECTOR=textarea \
+pnpm --filter @atoms/web exec node --import tsx scripts/check-sharing-external.mjs
+```
+
+标志表示操作者声明门禁已接受，本身不证明隔离成立。工具验证实际外部 HTTPS 登录/Secure host-only Cookie/刷新、实际复制比对、无工作台 Cookie 新浏览器打开、真实模块资源/新增编辑后刷新保存、M2 精确 ZIP 实际 bytes/hash、匿名源码拒绝、内部端点与非法签名拒绝，以及前后双游标/消息/Run/版本/配额不变。结果不记录完整 capability、Cookie 或体验码；截图遮罩输入，不启用 trace/raw URL 日志。
+
+输出在 `review-artifacts/m3-external/`；失败报告只记阶段和脱敏请求，不能把任何 HTTP200/health 或 Mock 通过当 G5。真实到期、code撤销、域名/key轮换和恶意Origin写入仍由后端/主管独立控制门禁，工具不会自行重启隧道或制造模型任务。目前未执行此工具，没有实际外网/G5通过声明。

@@ -143,11 +143,17 @@ Mock 通过真实 fetch/MSW 边界消费共享 fixtures，`/__mock/delivery/seed
 ```bash
 ATOMS_FAKE_SERVICES=1 ATOMS_WEB_URL=http://localhost:<隔离工作台端口> \
   ATOMS_DELIVERY_PROJECT=<已有M2项目ID> \
-  pnpm --filter @atoms/web exec node scripts/check-delivery-services.mjs
+  pnpm --filter @atoms/web exec node --import tsx scripts/check-delivery-services.mjs
 ```
 
 脚本/截图范围会单独记录在 `review-artifacts/m2-services/result.json`。仅 HTTP 健康不算 UI 验收；当前 Mock 证据不抵充实际服务或真实 DSH G4。M3 公网与 OS 隔离仍独立。
 
 M2 G1 独立验证记录（2026-11-08）：共享 contracts check 与 80 项契约测试、Web 50 项单元测试、生产 build 通过。完整浏览器回归 37 passed / 1 条件 skip，随后 M2 最终 25 项定向聚合全部通过（含 required manual / unsupported / 支持但 not_run 三类合法 partial）；最后对象归属文案调整另定向复验 complete/partial/blocked/截图证据，不重复声称全量重跑。所有浏览器写入均在独立 5183 Mock，没有访问 live 5173、没有调用模型。正文 14px / 元信息 12px，两尺寸报告与长行 diff 无页面横向溢出。
 
-稳定证据：`review-artifacts/m2/partial-preview-{1440,1366}-mock.png`、`blocked-preview-{1440,1366}-mock.png` 为默认预览，明确当前预览版本及本次任务归属；另有 `complete-mock.png`、`partial-mock.png`、`repair-mock.png`、`diff-mock.png`。全部显式 Mock，截图不随代码提交；实际三服务脚本尚未运行，等待独立集成环境，不能将本记录视为 G2/G3/G4 完成。
+稳定证据：`review-artifacts/m2/partial-preview-{1440,1366}-mock.png`、`blocked-preview-{1440,1366}-mock.png` 为默认预览，明确当前预览版本及本次任务归属；另有 `complete-mock.png`、`partial-mock.png`、`repair-mock.png`、`diff-mock.png`。全部显式 Mock，截图不随代码提交；G1 当时尚未运行实际三服务脚本，不能将这批 Mock 记录视为 G2/G3/G4 完成；后续只读实际服务结果另列如下。
+
+M2 实际 Fake HTTP 浏览器只读验收（2026-11-08）：在主管 integration 栈 `localhost:5185` 复用 `project_c1e25b6c308aa0570651`，已提交脚本经 `node --import tsx` 运行退出 0。验证已发布 complete 报告、逐项覆盖/尝试、实际日志、精确源码 ZIP 指纹、首版源码 diff 和刷新。直接 `node` 启动因 contracts 内部 `.js` → TS 解析报错，发生在浏览器/HTTP 启动前；应使用上述既有 tsx loader，不是 UI 或服务失败。
+
+另一次补充只读浏览器检查退出 0：真实预览 React root 已加载且存在可见交互控件；PNG 证据通过工作台 descriptor/指纹/MIME 校验后以 blob 展示，实际解码 1280×876。补充检查拦截除登录外全部 API 写请求，无此类请求；前后 runsUsed=2、runsReserved=0、协调 used=0/reserved=0、conversationRevision=2、当前版本和完整版本列表均不变。两次检查均未提交消息或创建 Run，没有 MSW；Fake 模型与真实构建/DSL/clean 服务不等于真实 DSH 模型证据。
+
+实际截图与结果保存在 integration 的 `apps/web/review-artifacts/m2-services/`：`preview-quality.png`、`report.png`、`diff.png`、`preview-loaded.png`、`png-evidence.png`、`result.json`、`readonly-supplement.json`。本次不验证历史失败 Run 的 UI 可选入口、回滚、第三轮修改、OS 沙箱或公网部署；不把这些只读证据扩称完整 G3/G4。

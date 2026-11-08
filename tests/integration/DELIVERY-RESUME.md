@@ -18,7 +18,9 @@ From the repository root:
 pnpm --filter @atoms/contracts exec tsx ../../tests/integration/delivery-resume.mjs --directory ORIGINAL_DATA_DIRECTORY
 ```
 
-This reads only the API-owned SQLite state and emits the safe proposal receipt, actual V3/restoration interpretation, current counts, and canonical receipt hash. It does not load `.env`, create credentials/files, start a service, contact a provider, submit a message, or accept a proposal. Root independently reviews the exact receipt and hash.
+This reads only the API-owned SQLite state and emits the safe proposal receipt, actual V3/restoration interpretation, current counts, and canonical receipt hash. It copies DB/WAL/SHM as opaque files into a temporary 0700 directory, queries only that replica and removes it in `finally`. Source sizes, nanosecond mtimes and opaque hashes must be stable before/after copying and querying, otherwise review stops. It makes no original-data/control-directory writes, loads no `.env`, creates no credentials, starts no service, contacts no provider, submits no message and accepts no proposal. Root independently reviews the exact receipt and hash.
+
+Opening SQLite with `readOnly:true` can still touch the original SHM mtime. Review and execution preflight therefore use the private replica, while reconciliation after services have started continues using the original live reader. `immutable=1` is not used: it can ignore uncheckpointed WAL data. The full backup comparison still includes SHM and exact timestamps; no mtime is reset or ignored.
 
 ```sh
 pnpm --filter @atoms/contracts exec tsx ../../tests/integration/delivery-resume.mjs --help

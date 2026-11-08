@@ -7,7 +7,7 @@ import {existsSync,createWriteStream} from 'node:fs';
 import {spawn,execFileSync} from 'node:child_process';
 import {once} from 'node:events';
 import net from 'node:net';
-import {canonical,receiptHash,reviewReceipt,readApiState,assertExecutionGuards,assertResumeState,assertNoActiveState,
+import {canonical,receiptHash,reviewReceipt,readApiState,readApiStateForReview,assertExecutionGuards,assertResumeState,assertNoActiveState,
  privateJson,resumeSecrets,childEnvironment,verifyBackup,immutableEvidence,submitWithReconciliation,logRedactor,sha,QUALITY_ASK} from './delivery-resume-helpers.mjs';
 import {deliveryRestartCheckpoint,auditCoordinationUsage} from './delivery-audit.mjs';
 import {webReadonlyInvocation} from './delivery-web-readonly.mjs';
@@ -22,12 +22,12 @@ if(help||!value('--directory')){
  if(!help)process.exitCode=1;
 }else{
  const directory=path.resolve(value('--directory')),control=path.join(directory,'resume-control'),reviewFile=path.join(control,'review.json');
- const state=readApiState(directory),saved=existsSync(reviewFile)?JSON.parse(await readFile(reviewFile,'utf8')):null;
+ const state=await readApiStateForReview(directory),saved=existsSync(reviewFile)?JSON.parse(await readFile(reviewFile,'utf8')):null;
  const receipt=saved?.receipt??reviewReceipt(state,directory);assert.equal(receipt.directory,directory);
  const hash=receiptHash(receipt),execute=argv.includes('--execute');
  if(!execute){
   const status=assertResumeState(state,receipt);
-  console.log(JSON.stringify({mode:'dry-run; no services, credentials, writes or model calls',receipt,receiptHash:hash,
+  console.log(JSON.stringify({mode:'dry-run; no source/control writes, services or model calls; temporary private SQLite replica cleaned after reading',receipt,receiptHash:hash,
    current:{runCount:state.runs.length,versionCount:state.versions.length,coordinationTurnCount:state.coordination.turns.length,proposalStatus:status.proposal.status,acceptedRunId:status.proposal.acceptedRunId},
    backupRequired:true,execution:'reviewed exact accept; original strict auto failure remains failed'},null,2));
  }else{

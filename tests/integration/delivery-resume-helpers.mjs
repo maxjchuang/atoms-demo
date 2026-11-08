@@ -1,9 +1,10 @@
 /** Test-runner policy only. No App/Agent implementation imports and no model calls. */
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
-import {open,readFile,lstat,mkdir,readdir,readlink,realpath} from 'node:fs/promises';
+import {open,readFile,lstat,mkdir,readdir,readlink,realpath,mkdtemp,copyFile,chmod,rm} from 'node:fs/promises';
 import {DatabaseSync} from 'node:sqlite';
 import {createReadStream} from 'node:fs';
+import {tmpdir} from 'node:os';
 import path from 'node:path';
 
 export const RESUME_TARGET=Object.freeze({proposalId:'proposal_91e10bb774cd2b59b217',projectId:'project_ad7a08e8a7b7b839befc',
@@ -18,6 +19,27 @@ const terminal=status=>['succeeded','failed','cancelled','interrupted','complete
 export function readApiState(directory){
  const db=new DatabaseSync(path.join(directory,'api/api.sqlite'),{readOnly:true});
  try{return JSON.parse(db.prepare('SELECT document FROM app_state WHERE id=1').get().document);}finally{db.close();}
+}
+async function opaqueHash(file){const hash=createHash('sha256');for await(const bytes of createReadStream(file))hash.update(bytes);return hash.digest('hex');}
+/** Read review/preflight data without allowing SQLite's read-only connection to touch original SHM. */
+export async function readApiStateForReview(directory,{copy=copyFile}={}){
+ const names=['api.sqlite','api.sqlite-wal','api.sqlite-shm'];
+ const sourceSnapshot=async()=>{
+  const entries=[];for(const name of names){const file=path.join(directory,'api',name);
+   let stat;try{stat=await lstat(file,{bigint:true});}catch(error){if(error.code==='ENOENT'&&name!=='api.sqlite'){entries.push({name,present:false});continue;}throw error;}
+   assert.ok(stat.isFile()&&!stat.isSymbolicLink(),'Review SQLite inputs must be regular non-symlink files.');
+   entries.push({name,present:true,bytes:String(stat.size),mtimeNs:String(stat.mtimeNs),hash:await opaqueHash(file)});
+  }return entries;
+ };
+ const before=await sourceSnapshot(),replica=await mkdtemp(path.join(tmpdir(),'atoms-resume-review-'));
+ try{
+  await chmod(replica,0o700);await mkdir(path.join(replica,'api'),{mode:0o700});
+  for(const entry of before)if(entry.present){const target=path.join(replica,'api',entry.name);await copy(path.join(directory,'api',entry.name),target);await chmod(target,0o600);
+   assert.ok(await opaqueHash(target)===entry.hash,'Review SQLite inputs changed while copying; stop and establish a stable snapshot.');}
+  const state=readApiState(replica);
+  assert.ok(canonical(before)===canonical(await sourceSnapshot()),'Review SQLite inputs are unstable; source size/mtime/opaque bytes changed.');
+  return state;
+ }finally{await rm(replica,{recursive:true,force:true});}
 }
 export function reviewReceipt(state,directory,now=Date.now()){
  const t=RESUME_TARGET,proposal=state.coordination.proposals.find(p=>p.id===t.proposalId),project=state.projects.find(p=>p.dto.id===t.projectId)?.dto;
@@ -119,7 +141,6 @@ export async function verifyBackup(directory,backup){
  const source=await realpath(directory),copy=await realpath(backup);assert.ok(source!==copy&&!copy.startsWith(source+path.sep)&&!source.startsWith(copy+path.sep),'Backup must be a separate full directory.');
  const entries=await treeMetadata(source);
  assert.ok(canonical(entries)===canonical(await treeMetadata(copy)),'Full backup paths, types, sizes, timestamps and symlink targets must match before any service starts.');
- const opaqueHash=async file=>{const hash=createHash('sha256');for await(const bytes of createReadStream(file))hash.update(bytes);return hash.digest('hex');};
  let regularFileCount=0,totalBytes=0;
  for(const entry of entries)if(entry.type==='file'){
   // Raw Buffer hashing only: never decode/parse/output native traces, credentials or individual hashes.

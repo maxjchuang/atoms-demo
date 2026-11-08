@@ -54,7 +54,7 @@ const prompts=real?[
  '创建中文便签墙：可新增、编辑、删除便签，搜索文字，拖动便签；刷新后文字和位置保留。使用 React 多文件实现。',
  '在现有便签墙中增加清楚的搜索无结果提示，保留新增、编辑、删除、搜索、拖拽以及刷新后文字和位置持久化。',
  '在恢复的便签墙版本中增加一段简短使用说明，继续保留新增、编辑、删除、搜索、拖拽和刷新持久化。',
-]:['创建便签墙','给便签墙增加搜索无结果提示','恢复后增加便签墙使用说明'];
+]:['创建便签墙','给便签墙增加搜索无结果提示','增加便签墙使用说明，基于当前恢复后的版本继续修改。'];
 try{
  let agent=start('@atoms/agent'),api=start('@atoms/api');if(withWeb)start('@atoms/web');await ready(agentOrigin+'/internal/v1/health',{Authorization:`Bearer ${token}`,'X-Atoms-Protocol-Version':'0.1.0'});await ready(origin+'/health');if(withWeb)await ready(`http://localhost:${webPort}`);
  const descriptor=await fetch(agentOrigin+'/internal/delivery/v1/toolchains/toolchain_react_v1',{headers:{Authorization:`Bearer ${token}`,'X-Atoms-Delivery-Version':'0.1.0'}});assert.equal(descriptor.status,200,'Actual delivery Runtime must support the frozen toolchain; never fall back to legacy.');

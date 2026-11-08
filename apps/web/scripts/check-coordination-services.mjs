@@ -11,6 +11,8 @@ assert.ok(process.env.ATOMS_WEB_URL, 'ATOMS_WEB_URL must explicitly identify the
 const target = new URL(process.env.ATOMS_WEB_URL);
 const reusedProjectId = process.env.ATOMS_REUSE_PROJECT_ID;
 if (reusedProjectId) assert.match(reusedProjectId, /^project_[a-z0-9_-]+$/, 'Reuse requires an explicit project ID.');
+const sourceOnly = process.env.ATOMS_VERIFY_EXISTING_SOURCE_ONLY === '1';
+if (sourceOnly) assert.ok(reusedProjectId, 'Source-only verification requires an explicit existing project.');
 assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(target.hostname), 'Only local isolated integration services are allowed.');
 assert.notEqual(target.port, '5173', 'Refusing the existing live workbench on port 5173.');
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
@@ -46,6 +48,30 @@ try {
     await page.goto(`${target.origin}/#/projects/${reusedProjectId}`);
     await expect(page.getByLabel('项目消息', { exact: true })).toBeVisible();
   }
+  if (sourceOnly) {
+    const before = await workspace(), quotaBefore = await account();
+    assert.equal(before.execution.activeRun, null, 'Do not inspect an actively changing test project');
+    await page.getByRole('tab', { name: /项目约定/ }).click();
+    const memory = await page.evaluate(async () => (await fetch(`/api/v2/projects/${location.hash.split('/').at(-1)}/memory`)).json());
+    const warmDecision = memory.decisions.find(decision => decision.status === 'active' && decision.text.includes('暖色'));
+    assert.ok(warmDecision?.sourceMessageIds?.[0], 'Existing warm preference needs a canonical source');
+    await expect(page.locator('.memory-card.active').filter({ hasText: '暖色' }).first()).toBeVisible();
+    await page.reload(); await page.getByRole('tab', { name: /项目约定/ }).click();
+    await expect(page.locator('.memory-card.active').filter({ hasText: '暖色' }).first()).toBeVisible();
+    await mkdir('review-artifacts/m1-services', { recursive: true });
+    await page.screenshot({ path: 'review-artifacts/m1-services/memory-and-preview.png' });
+    await page.locator('.memory-card.active').filter({ hasText: '暖色' }).first().getByRole('button', { name: /查看来源/ }).first().click();
+    const source = page.locator(`[data-message-id=\"${warmDecision.sourceMessageIds[0]}\"] .message.user p`);
+    await expect(source).toContainText('暖色'); await expect(source).toBeInViewport();
+    await page.screenshot({ path: 'review-artifacts/m1-services/memory-source.png' });
+    const after = await workspace(), quotaAfter = await account();
+    assert.equal(after.conversationRevision, before.conversationRevision, 'Source inspection must not submit a message');
+    assert.equal(after.execution.latestRun?.id, before.execution.latestRun?.id);
+    assert.equal(quotaAfter.session.quota.runsUsed, quotaBefore.session.quota.runsUsed);
+    console.log(JSON.stringify({ target: target.origin, projectId: reusedProjectId, scope: 'existing preference, refresh persistence and exact canonical source jump only',
+      submittedMessages: 0, createdRuns: 0, canonicalSourceMessageId: warmDecision.sourceMessageIds[0], sourceInViewport: true,
+      screenshots: ['review-artifacts/m1-services/memory-and-preview.png', 'review-artifacts/m1-services/memory-source.png'] }, null, 2));
+  } else {
   const previousRunId = reusedProjectId ? (await workspace()).execution.latestRun?.id ?? null : null;
   const initialAccount = await account();
   await send('如何分享这个应用给别人？', 'ask'); await settled();
@@ -95,8 +121,13 @@ try {
   await expect(page.locator('.memory-card.active').filter({ hasText: '暖色' }).first()).toContainText('暖色');
   assert.equal((await account()).session.quota.runsUsed, usedAfterBuilds);
   await page.screenshot({ path: 'review-artifacts/m1-services/memory-and-preview.png' });
+  const memory = await page.evaluate(async () => (await fetch(`/api/v2/projects/${location.hash.split('/').at(-1)}/memory`)).json());
+  const warmDecision = memory.decisions.find(decision => decision.status === 'active' && decision.text.includes('暖色'));
+  assert.ok(warmDecision?.sourceMessageIds?.[0], 'Warm decision needs a canonical saved source');
   await page.locator('.memory-card.active').filter({ hasText: '暖色' }).first().getByRole('button', { name: /查看来源/ }).first().click();
-  await expect(page.locator('.message.user p').filter({ hasText: /^请记住我的项目偏好/ })).toBeVisible();
+  const source = page.locator(`[data-message-id=\"${warmDecision.sourceMessageIds[0]}\"] .message.user p`);
+  await expect(source).toContainText('暖色');
+  await expect(source).toBeInViewport();
   await page.screenshot({ path: 'review-artifacts/m1-services/memory-source.png' });
   console.log(JSON.stringify({ target: target.origin, projectId: second.execution.project.id,
     verification: 'real HTTP services, no MSW; operator-attested Fake Router/Worker; actual builds and preview',
@@ -106,6 +137,7 @@ try {
       askProposalWithoutBuild: reusedProjectId ? 'not repeated in this run' : true, explicitProposalAcceptance: reusedProjectId ? 'not repeated in this run' : true, memoryAndSourcesAcrossRefresh: true },
     versions: [first.execution.currentVersion.id, second.execution.currentVersion.id],
     screenshots: ['review-artifacts/m1-services/consult.png', 'review-artifacts/m1-services/memory-and-preview.png', 'review-artifacts/m1-services/memory-source.png'] }, null, 2));
+  }
 } catch (error) {
   if (page) {
     await mkdir('review-artifacts/m1-services', { recursive: true });

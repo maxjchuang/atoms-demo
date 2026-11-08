@@ -118,3 +118,7 @@ pnpm --filter @atoms/api build
 M2 仍依赖受信内部验证器，hash 证明一致性而非远程执行证明；本机干净目录、受控 DSL 不等于 M3 OS/网络隔离或公网分享验收。
 
 主管批准的附加 mixed 入口需另行显式选择：Fake 为 `pnpm test:delivery --no-web --mixed-router`；真实为同时设置 `ATOMS_ALLOW_REAL_DELIVERY_INTEGRATION=1 ATOMS_ALLOW_REAL_DELIVERY_ROUTER=1 pnpm test:delivery:real --no-web`。它仍只有三 Run，第三个恢复后修改改走 v2 auto → delivery-aware Router → Prepare/Worker；另加一次 ask 质量咨询，断言不新增 Run/生成额、实际 outer facts hash 与当前版本质量/缺口对应，保留实际短答供主管 review。两个 Router Turn 独立最多各 3 steps /90s /32,768 有效输入 /8,192 输出（共最多 6 Router steps），不计入代码 Run envelope，也不自动扩调用。当前只完成脚本语法验证，未执行真实模型。
+
+可选现有应用 UI 只读验收：`pnpm test:delivery --mixed-router --verify-web-readonly`（需要启动 Web，不能加 `--no-web`）。它在三 Run 和两 Router 均结束、交付 final/verified 且双流 sealed 后，CLI 调用已提交的 `apps/web/scripts/check-delivery-services.mjs`：`node --import tsx`，只传现有 project、Web URL、公开测试体验码及互斥的 Fake/readonly_real 模式。子进程环境使用浏览器必需项白名单，模型 Key、内部 token、预览 secret 和 NODE_OPTIONS 不继承。Web 脚本仅允许读取及登录，任何其他 API 写尝试均使验收失败；runner 还在前后严格比较 sealed checkpoint 和生成额度，允许增加登录 session，不增加消息、Run 或模型调用。CLI 非零或 180 秒超时即失败，日志保留在临时证据目录。默认不启用此 flag，省略时仍只声称 Web HTTP ready。
+
+主管最终真实 UI 门禁可显式使用 `ATOMS_ALLOW_REAL_DELIVERY_INTEGRATION=1 ATOMS_ALLOW_REAL_DELIVERY_ROUTER=1 pnpm test:delivery:real --verify-web-readonly`；预算仍是三代码 Run + 两 Router Turn，无额外模型调用。`--verify-web-readonly --no-web` 在加载根 `.env`、启动服务或创建任务前拒绝。编排小测试：`node --test tests/integration/delivery-web-readonly.test.mjs`；真实服务/浏览器门禁须主管集成前端只读脚本后实际执行，本次未启动。

@@ -12,12 +12,13 @@ import type { Check } from '@atoms/contracts';
 type CheckValue = ReturnType<typeof Check.parse>;
 const require = createRequire(import.meta.url);
 export const agentRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+export const browserEnvironment = () => Object.fromEntries(['PATH', 'HOME', 'TMPDIR', 'SystemRoot'].flatMap((key) => process.env[key] ? [[key, process.env[key]!]] : []));
 export const mediaType = (name: string) => name.endsWith('.html') ? 'text/html; charset=utf-8'
   : name.endsWith('.js') ? 'application/javascript; charset=utf-8'
     : name.endsWith('.css') ? 'text/css; charset=utf-8'
       : name.endsWith('.png') ? 'image/png' : name.endsWith('.json') ? 'application/json' : 'text/plain; charset=utf-8';
 
-async function command(args: string[], workspace: string, signal: AbortSignal) {
+export async function verificationCommand(args: string[], workspace: string, signal: AbortSignal) {
   return await new Promise<{ success: boolean; log: string }>((resolve, reject) => {
     if (signal.aborted) return reject(new Error('Execution aborted'));
     const child = spawn(process.execPath, args, { cwd: workspace, detached: process.platform !== 'win32',
@@ -44,14 +45,14 @@ export async function linkDependencies(workspace: string) {
 }
 
 export async function verifyApplication(workspace: string, evidenceRoot: string, signal: AbortSignal,
-  report: (check: CheckValue) => void, activity: (message: string) => void = () => {}) {
+  report: (check: CheckValue) => void, activity: (message: string) => void = () => {}, options: { installedDependencies?: boolean } = {}) {
   await mkdir(evidenceRoot, { recursive: true });
-  await linkDependencies(workspace);
+  if (!options.installedDependencies) await linkDependencies(workspace);
   const checks: CheckValue[] = [];
   const checkCommand = async (kind: 'typecheck' | 'build', args: string[]) => {
     const label = kind === 'typecheck' ? 'TypeScript 类型检查' : 'Vite 生产构建';
     activity(`开始${label}。`);
-    const result = await command(args, workspace, signal);
+    const result = await verificationCommand(args, workspace, signal);
     await writeFile(path.join(evidenceRoot, `${kind}.log`), result.log);
     const check: CheckValue = { id: `check_${kind}`, kind, name: kind === 'build' ? 'Vite 生产构建' : 'TypeScript 类型检查', required: true,
       status: result.success ? 'passed' : 'failed', summary: result.success ? '命令执行通过' : result.log.slice(-1500), evidenceIds: [`evidence_${kind}`] };
@@ -59,9 +60,10 @@ export async function verifyApplication(workspace: string, evidenceRoot: string,
     activity(`${label}${result.success ? '通过' : '未通过，已保存检查日志'}。`);
     return result;
   };
-  const typed = await checkCommand('typecheck', [require.resolve('typescript/bin/tsc'), '--noEmit']);
+  const dependency = options.installedDependencies ? createRequire(path.join(workspace, 'package.json')) : require;
+  const typed = await checkCommand('typecheck', [dependency.resolve('typescript/bin/tsc'), '--noEmit']);
   if (!typed.success) return { checks, errors: typed.log };
-  const built = await checkCommand('build', [path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js'), 'build']);
+  const built = await checkCommand('build', [path.join(path.dirname(dependency.resolve('vite/package.json')), 'bin/vite.js'), 'build']);
   if (!built.success) return { checks, errors: built.log };
   activity('开始浏览器加载检查：验证页面可加载且无运行时异常。');
   const smoke = await smokeBrowser(path.join(workspace, 'dist'), evidenceRoot, signal);
@@ -92,7 +94,7 @@ async function smokeBrowser(dist: string, evidenceRoot: string, signal: AbortSig
   try {
     const chrome = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
       || (existsSync('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined);
-    browser = await chromium.launch({ headless: true, executablePath: chrome });
+    browser = await chromium.launch({ headless: true, executablePath: chrome, env: browserEnvironment() });
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));

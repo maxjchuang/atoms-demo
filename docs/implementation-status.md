@@ -1,18 +1,32 @@
 # 最小闭环实施与验证记录
 
-记录日期：2026-11-08。协议基线为 [v0.1.0](protocol-baseline-v0.1.md)。本文记录真实执行过的验证，不把协议规划或 fixture 当作已实现功能。
+更新日期：2026-11-09。原执行协议基线为 [v0.1.0](protocol-baseline-v0.1.md)，M2 独立 delivery 协议与实际证据见 [M2 状态](m2-delivery-status.md)。本文保留各阶段真实执行记录，不把旧阶段计数当当前包总数，也不把 fixture 当浏览器/模型证据。
 
 完整运行要求 **Node.js 24.9.0+、pnpm 10.33.0**；目前在 macOS arm64 / Node.js 26.5.0 验证。Node 22 只能覆盖部分基础能力，不满足当前固定 DSH 版本要求。
 
-最新增量：[M1 项目协调实施记录](m1-coordination-status.md)。M1 应用门禁及本机 live 安全升级均已完成：主管验证 Fake HTTP、六轮真实 Router + Fake Worker、分段浏览器和缓存计量修正。148 项（contracts 42 / API 30 / Agent 34 / Web 42）有主管独立通过记录；全仓 check/build 此前通过，补修 Agent check/34 再过。本机升级已排空停服、全目录备份、安装/重启与数据健康校验，最后文档提交推送待主管；这不是公网部署。此前 79 项及历史 G3/UI 证据保留。
+最新增量为 M2 隔离实现：主管 contracts 86、API 55、Web 56；Agent 作者报告 71，主管此前完整 61 与新 18 focused 分开记录；编排工具 22 另列。完整 Fake `Vd1rPn`、第四真实空间 `ryZwrG` 的生成/修改/恢复后 reviewed-exact 修改、真实只读 UI 与严格重启已通过。三次真实质量均 partial，均 attempt_0/repairRound0；另一次独立真实受控故障修复与同计划/clean ZIP 复验通过（1 模型步骤、9,931 有效输入、4,842 输出），不冒充自然生成失败。原 auto/exact 严格断言失败保留，不能称第三次 auto 准入成功。M2 App 已合入 main 并安全升级本机 live；M3 三线设计启动，尚未完成 G5。
 
-原设计复核后的范围见 [能力差距与路线图](capability-roadmap.md) 和 [v0.2 消息协调协议](protocol-v0.2.md)。原 v1 index/fixture/tests 未变；M1 项目协调已完成应用验收并由主管实际升级本机 live，不再是仅有每 Run Planner 的旧状态。下文旧真实代码成功记录保留，限定为 G4 最小子集；M1 真实验收使用 Fake Worker，不能补齐真实回滚后代码修改，完整 G4 仍待 M2。M2/M3 目前只有候选设计，未实施。
+M1 应用及本机 live 安全升级已完成，历史 148 项（42 / 30 / 34 / 42）、六轮真实 Router + Fake Worker、分段浏览器与缓存计量修正记录保留于 [M1 状态](m1-coordination-status.md)。此前 79 项与旧 G3/UI 同样保留，不与 M2 新计数混算。
 
-### 最新 M1 证据与部署边界
+原设计复核范围见 [能力路线图](capability-roadmap.md) 和 [v0.2 消息协调协议](protocol-v0.2.md)。原 v1 strict 契约保持兼容。下文 M0 两次真实代码历史仍仅为当时的 G4 子集；新增 M2 才补充恢复后真实修改证据，不回写旧 manifest 或以 M1 Fake Worker 冒充真实代码。M2 已实现并隔离验收，应用已合并并安全升级 live；M3/G5 尚未实施。
+
+### 最新 M2 证据与限制
+
+| 范围 | 当前实际结果 |
+| --- | --- |
+| Fake 全链路 | `atoms-m2-delivery-Vd1rPn` exit 0，实际 Runtime/Fake Model + 编译/DSL/干净 ZIP，3 Code/2 Router/只读 UI/严格重启；质量 complete/complete/partial |
+| 真实代码链 | `atoms-m2-delivery-ryZwrG` 前两真实 Code 成功；恢复 V3 后 exact 提案保持 proposed，使原 runner exit 1；主管审阅并显式接受后第三 Code 发布 V4，独立 resume exit 0 |
+| 真实交付质量 | 三次均 partial；自动 cases 7/8/8 和 clean ZIP 同计划均 passed；manual leaf/父汇总缺口保留；均 repairRound0，业务 Run 无失败；独立受控真实修复已验收 |
+| 授权与次数 | 第三 Seed=explicit_proposal_acceptance，base/parent=恢复 V3；总3 Code/4 Version/2 Router。原 auto Turn 仍 proposed；最后 ask/consult 只读，不增第四 Run |
+| 原证据与恢复 | 原2 Run/3 Version（除 URL 缓存）、110证据文件及原失败日志不变；真实只读 UI 与 API/Runtime sealed 严格重启通过，证据详见 M2 状态/最终 ledger |
+| 历史失败 | 前三真实 Preparation 失败 `PMMN5g/epad1z/HaEXjt`、第四次原 auto 断言失败和首次 resume 备份拒绝均保留，未复活/抹账 |
+| 部署 | M2 App 已安全升级 live，原数据/额度深度核对一致。M3 设计启动，Docker/系统隔离/双隧道/外部分享待实现验收 |
+
+### 已有 M1 证据与 live 边界（历史）
 
 | 项目 | 当前结果 | 来源 |
 | --- | --- | --- |
-| 节点测试 | 当前各包合计 148：42 / 30 / 34 / 42 均有主管独立通过记录；历史全仓 142 项及补修 Agent check + 34/34，含新增 6 计量用例 | 主管亲自复验，保留分段来源；全仓 check/build 此前通过 |
+| 节点测试 | M1 当时各包合计 148：42 / 30 / 34 / 42 均有主管独立通过记录；此前全仓 142 项及补修 Agent check + 34/34，含新增 6 计量用例 | 主管亲自复验，保留分段来源；全仓 check/build 此前通过 |
 | Fake HTTP 链路 | 六组通过，包含 Web HTTP 服务；实际 API/Agent v2 + FakeRouter/FakeDSH + 真实构建/smoke | 主代理亲自运行；不等于 Web 浏览器 E2E |
 | 六轮真实消息 Router | 全部通过，真实 DSH/DeepSeek Router + Fake Worker；记忆纠正和 API/Agent 重启 canonical memory 保留 | 主代理显式启动并验收，证据 `atoms-m1-integration-Ty23Ah` |
 | 本次用量 | 非缓存输入 9,094 + 缓存读取 16,640 = 有效输入 25,734；输出 1,401；总量 27,135；6 modelSteps | 本次真实样例计量复核，非绝对费用保证 |
@@ -27,12 +41,12 @@
 
 | 方向 | 已落地 | 验证边界 |
 | --- | --- | --- |
-| 前端 `apps/web` | React/Vite 工作台、公共 API client、独立 Mock、任务/问题/版本/预览及过程反馈界面 | 本轮 30 项单测、构建、Mock 浏览器 5 passed / 1 条件 skip；上一阶段真实服务浏览器主流程 1 项通过 |
-| 后端 `apps/api` | Fastify 公共 API、体验码 Cookie、配额/幂等、SQLite、任务队列/锁、事件投影、产物校验、签名预览、版本/恢复/下载 | 独立 Fake Runtime HTTP 契约与重启测试通过 |
-| Agent `apps/agent` | DSH 适配层、每任务 Planner/Worker、显式 Fake DSH、内部 HTTP、事件账本、计划回答、验证修复、候选产物 | Fake 独立测试通过；真实生成/修改/恢复子集通过，完整 G4 待补 |
-| 集成 | 根真实/Fake 启动器、临时目录端到端脚本 | API + Runtime + Fake DSH HTTP 闭环通过 |
+| 前端 `apps/web` | React/Vite 工作台、delivery 质量/缺口/来源、证据/diff/导出和旧交互 | 主管56项；Fake及真实既有应用的只读服务浏览器门禁通过 |
+| 后端 `apps/api` | 原身份/配额/队列/发布 + delivery Seed/冻结/预算、证据/精确ZIP/diff、来源恢复、签名缓存轮换 | 主管55项；Fake与真实exact续跑、严格重启通过；单进程取舍保留 |
+| Agent `apps/agent` | DSH Router/Worker、Prepare/derived提议、受控DSL、验证/有限修复、干净ZIP复验与候选报告 | 作者71；主管此前完整61+最新focused18分别记录；三真实交付round0通过，真实失败修复未遇到 |
+| 集成 | Fake/真实启动器、受控exact resume、只读Web、sealed重启与完整备份门禁 | Fake Vd1rPn及真实ryZwrG reviewed-exact续跑通过，原auto失败不改写 |
 
-## 2. 已执行检查
+## 2. 历史 v1 已执行检查（不代表当前 M2 包计数）
 
 | 命令/检查 | 结果 | 复验来源 |
 | --- | --- | --- |
@@ -52,11 +66,11 @@
 | `ATOMS_KEEP_TEST_DATA=1 pnpm test:integration:real` | 最后一轮 exit 0：真实生成、计划确认、发布、签名预览、修改、不可变恢复、分页事件、API 重启恢复通过 | Agent 方向实际执行；主代理审查两版 manifest、源码关系及第二版截图 |
 | `apps/web/scripts/check-artifact.mjs` 真实第二版只读验收 | add / edit / searchMatch / searchEmpty / clearSearch / refreshPersistence / noPageErrors 全部 true；modelCalls=0、modifiedGeneratedFiles=false | 主代理亲自执行 |
 
-上述计数对应当前测试文件，后续增加测试后应同步更新。Node 26 下 tsx 的 module.register 弃用提示不影响这些测试结果。
+上述计数对应当时 v1 阶段，当前 M2 分项来源见本文开头及 M2 状态。Node 26 下 tsx 的 module.register 弃用提示不影响这些测试结果。
 
 以上旧生成链路证据来自每 Run Planner + Worker 阶段。M1 新增项目级消息 Router、API 权威目标/偏好/决定、纠正来源和持久恢复，已通过上述有限真实 Router 样例；通用工具型 Worker、任意场景行为验收和公网隔离仍未完成。源码编辑继续受宿主路径/协议约束，不能称为无限制 shell 编码代理或完整通用 Super-agent。
 
-## 3. G4 已验证的真实模型子集与历史问题
+## 3. 历史 M0 真实模型子集与问题（原证据不回写）
 
 最初真实整链路在计划确认后的生成阶段出现结构化 JSON 解析失败（Unexpected end of JSON input）。Agent 方向改进结构化输出处理，并固定适合该受控源码生成流程的低 reasoning 配置，最终整链路通过；任务预算没有放宽。
 
@@ -72,7 +86,7 @@
 
 这是追加的独立样例行为证据，不回写或篡改原始 manifest；自动 manifest 中 behavior 仍为 not_run。拖拽等未由本次样例检查覆盖的行为不得标记通过，也不能将这个样例推广为任意应用的行为保证。
 
-## 4. G3 集成实际证明的内容
+## 4. 历史 v1 G3 集成证明的内容
 
 此脚本运行真实 API 服务与真实 Runtime HTTP，模型适配明确为 Fake DSH；生成项目会实际运行 TypeScript、Vite 和浏览器 smoke。
 
@@ -89,7 +103,7 @@
 
 脚本没有证明真实模型能完成任意需求，也没有覆盖任意应用的所有行为验收。行为未执行项必须保持 not_run，不统一显示通过。
 
-真实模式脚本的范围为生成、修改、发布、恢复和 API 重启持久化；回滚后再次修改目前只由默认 Fake DSH 集成和后端独立测试覆盖，不能从 Fake 结果推断真实模型该路径已通过。
+以上旧脚本当时的真实范围为生成、修改、发布、恢复和 API 重启；恢复后真实修改的新增证据来自 M2 reviewed-exact 续跑，而非从这些旧 Fake 结果推断。
 
 ## 5. 后端独立补充验证
 
@@ -122,13 +136,13 @@ pnpm dev:demo
 
 ## 7. 尚未通过的门禁与限制
 
-- 完整 G4 尚未闭合：已有真实生成、修改、恢复和重启证据，仍缺真实回滚后继续修改；该项目前仅 Fake 验证。最初的解析失败、修复简述与成功子集证据保留，不删除历史。真实第二版的只读样例行为验收与自动 manifest 分别记录，不宣称通用行为覆盖。
+- M2 已补充恢复后真实修改、同计划行为/clean ZIP、真实只读 UI与严格重启；原 auto runner exact/proposed 断言仍失败，后续是显式接受。真实三Run均partial、首attempt/round0，独立受控故障已完成真实修复及同计划/clean ZIP 复验；不把静态审阅/fixture当动态或通用语义保证。
 - G2 浏览器与真实 API/Runtime（显式 Fake DSH）主流程已由主代理亲自复验通过，Mock 浏览器 3 项已通过；不代表真实模型的 G4 或任意行为覆盖。
 - G5 Docker 操作系统隔离、两个 Cloudflare 临时隧道、公网 Cookie/Origin 和预览资源验收尚未完成。
 - 本机验证不等于容器沙箱已安全隔离。不得开放公网生成或向用户宣称生产就绪。
 - 独立预览主机上的不同项目仍共享浏览器 origin 存储，需要项目命名空间；没有严格多租户存储隔离。
 - 临时域名受进程、网络和电脑休眠影响，无持续可用性保证。
 - DSH 底座版本固定；扩展点和模型能力需以兼容性记录及真实测试为依据。
-- M1 应用门禁和本机 live 升级已完成，消息路由/分段浏览器/缓存计量及旧数据迁移已验收；最后文档推送待主管。有限真实 Router 样例不保证所有表达分类正确，不代表通用 Super-agent 或 M2/M3 完成。
+- M1 live 已升级；M2 App已合并升级用户live，完成drain/停服/完整备份与原数据深度核验。有限Router和本次exact续跑不保证所有表达分类正确，不代表通用Super-agent或M3完成。
 
-当前阶段 check/test/build、最新 Fake 集成、真实模型最小集成与已有真实产物的只读行为验收均有上述实际结果。后续代码变更应按影响范围重新验证，G5 仍作为单独后续阶段。
+各阶段检查、Fake、历史真实子集及新增 M2 reviewed-exact 真实链路分别保留来源。后续变更按影响范围重验；M3/G5仍作为明确后续工作。

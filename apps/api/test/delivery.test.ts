@@ -1,0 +1,131 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {isPublicDeliveryLockfile} from '../src/delivery.js';
+import {createApi,hash} from '../src/server.js';
+import {fakeChange} from '../src/fake-coordinator.js';
+import {createFakeRuntime} from '../src/fake-runtime.js';
+import {createFakeDeliveryRuntime} from '../src/fake-delivery-runtime.js';
+import * as D from '@atoms/contracts/delivery';
+async function fixture(){
+ const directory=await mkdtemp(join(tmpdir(),'atoms-delivery-test-')),runtime=createFakeDeliveryRuntime();const address=await runtime.app.listen({host:'127.0.0.1',port:0});
+ const options={dataDir:directory,agentUrl:address,serviceToken:'delivery-test-token',previewSecret:'delivery-preview-secret',previewOrigin:'http://127.0.0.1:3002',autoSchedule:false,deliveryToolchain:runtime.toolchain};
+ let api=await createApi(options),cookie='';api.seedCode('delivery-demo',{projectLimit:8,runLimit:20});
+ const request=async(method:'GET'|'POST',url:string,body?:unknown,key=randomUUID())=>{const res=await api.app.inject({method,url,headers:{cookie,'x-atoms-coordination-version':'0.2.0','x-atoms-delivery-version':D.DeliveryProtocolVersion,'idempotency-key':key,...(body?{'content-type':'application/json'}:{})},payload:body?JSON.stringify(body):undefined});return {status:res.statusCode,data:res.headers['content-type']?.includes('application/json')?res.json():null,bytes:res.rawPayload,headers:res.headers};};
+ const login=async(code='delivery-demo')=>{const response=await request('POST','/api/v1/sessions',{code});assert.equal(response.status,201);cookie=String(response.headers['set-cookie']).split(';')[0];};await login();
+ const project=async()=>{const r=await request('POST','/api/v1/projects',{title:'Delivery fixture'});assert.equal(r.status,201);return r.data;};
+ const run=async(projectId:string,prompt='创建可交互页面')=>{const r=await request('POST',`/api/v1/projects/${projectId}/runs`,{prompt,mode:'build'});assert.equal(r.status,202);return r.data.run;};
+ const settle=async(runId:string)=>{for(let i=0;i<6;i++){await api.tick();const r=await request('GET',`/api/v1/runs/${runId}`);if(['succeeded','failed','cancelled','interrupted'].includes(r.data.status))return r.data;}throw new Error('Run did not settle '+JSON.stringify((await request('GET',`/api/v1/runs/${runId}`)).data));};
+ return {get api(){return api;},runtime,request,project,run,settle,login,async restart(){await api.close();api=await createApi(options);},async close(){await api.close();await runtime.app.close();await rm(directory,{recursive:true,force:true});}};
+}
+test('delivery default pipeline freezes real hashes and publishes one verified ZIP alias; restart/restore/edit retain origin',async()=>{
+ const f=await fixture();try{const p=await f.project(),r=await f.run(p.id);const done=await f.settle(r.id);assert.equal(done.status,'succeeded');
+ const record=f.api.store.state.runs.find(x=>x.dto.id===r.id)!;assert.ok(record.delivery?.wrapper);assert.equal(f.runtime.prepareCalls,1);assert.equal(f.runtime.executeCalls,1);
+ const prepare=record.delivery!.prepare!,wrapper=record.delivery!.wrapper!;assert.equal(wrapper.execution.budget.maxInputTokens,prepare.totalBudget.maxInputTokens-20);assert.equal(wrapper.execution.budget.maxWallTimeMs,prepare.totalBudget.maxWallTimeMs-10);
+ const view=D.DeliveryReadView.parse((await f.request('GET',`/api/delivery/v1/runs/${r.id}`)).data);assert.equal(view.state,'available');assert.equal(view.publication.status,'published');assert.ok(view.state==='available'&&view.quality==='complete');
+ const versionId=done.resultVersionId;const exported=D.ExportReadView.parse((await f.request('GET',`/api/delivery/v1/versions/${versionId}/export`)).data);assert.equal(exported.status,'verified');
+ const original=await f.request('GET',`/api/v1/versions/${versionId}/source.zip`),alias=await f.request('GET',`/api/delivery/v1/versions/${versionId}/source.zip`);assert.deepEqual(original.bytes,alias.bytes);assert.equal(hash(alias.bytes),exported.manifest!.archive.sha256);
+ const report=record.delivery!.report!;const descriptor=await f.request('GET',`/api/delivery/v1/deliveries/${report.id}/evidence/evidence_attempt`);D.EvidenceDescriptor.parse(descriptor.data);const content=await f.request('GET',`/api/delivery/v1/deliveries/${report.id}/evidence/evidence_attempt/content`);assert.equal(hash(content.bytes),descriptor.data.sha256);
+ const quota=(await f.request('GET','/api/v1/session')).data.quota;assert.equal(quota.runsUsed,1);await f.restart();await f.api.tick();assert.equal(f.runtime.prepareCalls,1);
+ const workspace=(await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data;const restore=await f.request('POST',`/api/v1/projects/${p.id}/restore`,{versionId,expectedProjectRevision:workspace.project.revision});assert.equal(restore.status,201);
+ const restored=D.DeliveryReadView.parse((await f.request('GET',`/api/delivery/v1/versions/${restore.data.version.id}`)).data);assert.ok(restored.state==='available'&&restored.provenance.evidenceReuse==='restored_unchanged_source'&&!restored.provenance.verificationRerun);assert.equal(f.runtime.prepareCalls,1);
+ const next=await f.run(p.id,'增加搜索'),edited=await f.settle(next.id);assert.equal(edited.status,'succeeded');assert.equal(edited.baseVersionId,restore.data.version.id);assert.equal(f.runtime.prepareCalls,2);
+ const diff=await f.request('GET',`/api/delivery/v1/projects/${p.id}/version-diff?headVersionId=${edited.resultVersionId}`);assert.equal(diff.status,200);D.VersionDiffPage.parse(diff.data);assert.ok(diff.data.files.some((x:{path:string})=>x.path==='source/src/App.tsx'));
+ }finally{await f.close();}
+});
+test('partial is automatically published with actual gaps; invalid clean plan/report/archive cannot replace preview',async()=>{
+ const f=await fixture();try{const p=await f.project();f.runtime.setFault('partial');const first=await f.run(p.id);const done=await f.settle(first.id);assert.equal(done.status,'succeeded');assert.match((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion.summary,/部分交付/);
+ const view=(await f.request('GET',`/api/delivery/v1/runs/${first.id}`)).data;assert.equal(view.quality,'partial');assert.ok(view.gaps.length);
+ for(const fault of ['clean_plan','report_subject','archive']){f.runtime.setFault(fault);const r=await f.run(p.id,fault);assert.equal((await f.settle(r.id)).status,'failed');if(fault==='archive')assert.equal(f.api.store.state.runs.find(record=>record.dto.id===r.id)!.delivery!.invalidReason,'ARCHIVE_CHECKSUM_MISMATCH');assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion.id,done.resultVersionId);}
+ }finally{await f.close();}
+});
+test('preparation response loss/restart reuses immutable request and billable work is charged only once',async()=>{
+ const f=await fixture();try{f.runtime.losePrepareResponse();const p=await f.project(),r=await f.run(p.id);await f.api.tick();const before=structuredClone(f.api.store.state.runs[0].delivery!.prepare);assert.equal(f.runtime.prepareCalls,1);await f.restart();assert.equal((await f.settle(r.id)).status,'succeeded');assert.deepEqual(f.api.store.state.runs[0].delivery!.prepare,before);assert.equal(f.runtime.prepareCalls,1);assert.equal((await f.request('GET','/api/v1/session')).data.quota.runsUsed,1);
+ }finally{await f.close();}
+});
+test('cancel persisted but undispatched preparation performs no PUT; uncertain outage holds lock and reserved quota',async()=>{
+ const f=await fixture();try{const p=await f.project(),r=await f.run(p.id);f.runtime.setUnavailable(true);await f.api.tick();await f.request('POST',`/api/v1/runs/${r.id}/cancel`,{});f.runtime.setUnavailable(false);await f.api.tick();assert.equal((await f.request('GET',`/api/v1/runs/${r.id}`)).data.status,'cancelled');assert.equal(f.runtime.prepareCalls,0);assert.equal((await f.request('GET','/api/v1/session')).data.quota.runsUsed,0);
+ f.runtime.setPreparationHold(true);const next=await f.run(p.id);await f.api.tick();assert.equal(f.runtime.prepareCalls,1);f.runtime.setUnavailable(true);await f.request('POST',`/api/v1/runs/${next.id}/cancel`,{});await f.api.tick();assert.equal((await f.request('GET',`/api/v1/runs/${next.id}`)).data.status,'cancelling');assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.project.activeRunId,next.id);f.runtime.setUnavailable(false);assert.equal((await f.settle(next.id)).status,'cancelled');
+ }finally{await f.close();}
+});
+test('early Prepare failure is readable without execution/version; downloads/diff enforce owner and bound cursor',async()=>{
+ const f=await fixture();try{f.runtime.setPreparationHold(true);const p=await f.project(),r=await f.run(p.id);await f.api.tick();const prep=f.api.store.state.runs[0].delivery!.preparationId;f.runtime.failPreparation(prep);assert.equal((await f.settle(r.id)).status,'failed');const failed=(await f.request('GET',`/api/delivery/v1/runs/${r.id}`)).data;assert.equal(failed.quality,'blocked');assert.equal(failed.report.bundle,null);assert.equal(f.runtime.executeCalls,0);
+ f.runtime.setPreparationHold(false);const success=await f.run(p.id),done=await f.settle(success.id);assert.equal(done.status,'succeeded');f.api.seedCode('foreign-visitor',{projectLimit:2,runLimit:2});await f.login('foreign-visitor');for(const url of [`/api/delivery/v1/versions/${done.resultVersionId}`,`/api/delivery/v1/versions/${done.resultVersionId}/source.zip`,`/api/delivery/v1/versions/${done.resultVersionId}/export`,`/api/delivery/v1/projects/${p.id}/version-diff?headVersionId=${done.resultVersionId}`])assert.equal((await f.request('GET',url)).status,404);
+ }finally{await f.close();}
+});
+test('required failed and A-failed/invalid-passed/C-not-run remain blocked with real HTTP report bytes',async()=>{
+ const f=await fixture();try{const p=await f.project();for(const fault of ['required_failed','wash_failure','partial_gap']){f.runtime.setFault(fault);const r=await f.run(p.id,fault),done=await f.settle(r.id);assert.equal(done.status,'failed');assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion,null);if(fault!=='partial_gap'){const view=(await f.request('GET',`/api/delivery/v1/runs/${r.id}`)).data;assert.equal(view.quality,'blocked');}}
+ }finally{await f.close();}
+});
+test('diff pages bind exact versions/hashes, enforce explicit truncation, and evidence never grants foreign access',async()=>{
+ const f=await fixture();try{const p=await f.project();f.runtime.setFault('many_files');const a=await f.settle((await f.run(p.id,'first')).id),b=await f.settle((await f.run(p.id,'second')).id);assert.equal(b.status,'succeeded');
+ const url=`/api/delivery/v1/projects/${p.id}/version-diff?headVersionId=${b.resultVersionId}&limit=20`;const first=await f.request('GET',url);assert.equal(first.status,200);assert.equal(first.data.files.length,20);assert.equal(first.data.hasMore,true);const second=await f.request('GET',url+'&cursor='+first.data.nextCursor);assert.equal(second.status,200);assert.equal(second.data.hasMore,false);assert.equal(new Set([...first.data.files,...second.data.files].map(x=>x.path)).size,25);
+ const stale=await f.request('GET',`/api/delivery/v1/projects/${p.id}/version-diff?headVersionId=${a.resultVersionId}&cursor=${first.data.nextCursor}`);assert.equal(stale.status,409);
+ const other=await f.project();assert.equal((await f.request('GET',`/api/delivery/v1/projects/${other.id}/version-diff?headVersionId=${b.resultVersionId}`)).status,404);
+ f.runtime.setFault('large_diff');const c=await f.settle((await f.run(p.id,'lots')).id);const truncated=await f.request('GET',`/api/delivery/v1/projects/${p.id}/version-diff?headVersionId=${c.resultVersionId}`);assert.equal(truncated.data.truncated,true);assert.ok(truncated.data.reason);
+ const report=f.api.store.state.runs.find(r=>r.dto.resultVersionId===b.resultVersionId)!.delivery!.report!;
+ f.api.seedCode('foreign-evidence',{projectLimit:1,runLimit:1});await f.login('foreign-evidence');for(const suffix of ['/attempts','/evidence/evidence_attempt','/evidence/evidence_attempt/content'])assert.equal((await f.request('GET',`/api/delivery/v1/deliveries/${report.id}`+suffix)).status,404);
+ }finally{await f.close();}
+});
+test('delivery-aware Router freezes outer facts while preserving inner hash and consultation creates no Run',async()=>{
+ const f=await fixture();try{const p=await f.project();f.runtime.setFault('partial');const built=await f.settle((await f.run(p.id)).id);assert.equal(built.status,'succeeded');f.runtime.coordinator.loseNextResponse();
+ const accepted=(await f.request('POST',`/api/v2/projects/${p.id}/messages`,{input:{kind:'text',content:'当前交付质量如何？'},mode:'ask'})).data;
+ await f.api.tickCoordination();const frozen=structuredClone(f.api.store.state.coordination.turns[0].deliveryRequest!);assert.ok(frozen);assert.equal(frozen.deliveryFacts.versions[0].quality,'partial');assert.ok(frozen.deliveryFacts.versions[0].gaps.length);assert.equal(hash(D.deliveryHashBody(frozen)),frozen.hash);
+ const quota=(await f.request('GET','/api/v1/session')).data.quota;await f.restart();await f.api.tickCoordination();assert.deepEqual(f.api.store.state.coordination.turns[0].deliveryRequest,frozen);assert.equal(f.runtime.coordinator.calls,1);assert.equal((await f.request('GET',`/api/v2/coordination-turns/${accepted.turn.id}`)).data.status,'completed');assert.deepEqual((await f.request('GET','/api/v1/session')).data.quota,quota);assert.equal(f.api.store.state.runs.length,1);
+ const messages=(await f.request('GET',`/api/v2/projects/${p.id}/messages`)).data.items;assert.ok(messages.some((m:{content:string})=>m.content.includes('部分交付')));
+ }finally{await f.close();}
+});
+test('publication interruption resumes same execution after restart; cancellation wins while bytes are staging',async()=>{
+ const f=await fixture();try{const p=await f.project();f.runtime.setFault('artifact_unavailable');const r=await f.run(p.id);await f.api.tick();await f.api.tick();let state=(await f.request('GET',`/api/v1/runs/${r.id}`)).data;assert.equal(state.status,'running');assert.equal(state.phase,'publishing');assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.project.activeRunId,r.id);
+ await f.restart();f.runtime.setFault('');assert.equal((await f.settle(r.id)).status,'succeeded');assert.equal(f.runtime.prepareCalls,1);assert.equal(f.runtime.executeCalls,1);
+ const current=(await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion.id;
+ let reached!:()=>void,unblock!:()=>void;const blocked=new Promise<void>(resolve=>{unblock=resolve;}),atArtifact=new Promise<void>(resolve=>{reached=resolve;});f.runtime.setArtifactPause(async()=>{reached();await blocked;});const next=await f.run(p.id,'修改后取消');await f.api.tick();const polling=f.api.tick();await atArtifact;await f.request('POST',`/api/v1/runs/${next.id}/cancel`,{});unblock();await polling;assert.equal((await f.request('GET',`/api/v1/runs/${next.id}`)).data.status,'cancelled');assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion.id,current);
+ }finally{await f.close();}
+});
+test('same-version swapped input artifact is rejected before publication',async()=>{
+ const f=await fixture();try{const p=await f.project(),first=await f.settle((await f.run(p.id)).id);f.runtime.setFault('input_swap');const next=await f.run(p.id,'修改输入引用');assert.equal((await f.settle(next.id)).status,'failed');assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion.id,first.resultVersionId);
+ }finally{await f.close();}
+});
+test('upgrading legacy data preserves original Run/Version and quota without replay; legacy restore stays unverified',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'atoms-delivery-upgrade-')),rt=createFakeRuntime('legacy-upgrade-token'),address=await rt.app.listen({host:'127.0.0.1',port:0});
+ const options={dataDir:directory,agentUrl:address,serviceToken:'legacy-upgrade-token',previewSecret:'upgrade-preview',previewOrigin:'http://127.0.0.1:3002',autoSchedule:false};let api=await createApi({...options,legacyFixtureMode:true});let cookie='';
+ const req=async(method:'GET'|'POST',url:string,body?:unknown)=>api.app.inject({method,url,headers:{cookie,'idempotency-key':randomUUID(),'x-atoms-delivery-version':D.DeliveryProtocolVersion},...(body?{payload:body as object}:{})});
+ try{api.seedCode('upgrade-demo');const login=await req('POST','/api/v1/sessions',{code:'upgrade-demo'});cookie=String(login.headers['set-cookie']).split(';')[0];const p=(await req('POST','/api/v1/projects',{title:'Legacy'})).json();await req('POST',`/api/v1/projects/${p.id}/runs`,{prompt:'legacy build',mode:'build'});await api.tick();const before=JSON.stringify({runs:api.store.state.runs,versions:api.store.state.versions});const quota=(await req('GET','/api/v1/session')).json().quota;const versionId=api.store.state.versions[0].dto.id;await api.close();api=await createApi(options);await api.tick();assert.equal(JSON.stringify({runs:api.store.state.runs,versions:api.store.state.versions}),before);assert.equal(rt.startCalls,1);assert.deepEqual((await req('GET','/api/v1/session')).json().quota,quota);
+ const view=(await req('GET',`/api/delivery/v1/versions/${versionId}`)).json();assert.equal(view.state,'legacy');assert.equal(view.quality,'legacy_unverified');const project=(await req('GET',`/api/v1/projects/${p.id}/workspace`)).json().project;const restored=(await req('POST',`/api/v1/projects/${p.id}/restore`,{versionId,expectedProjectRevision:project.revision})).json();const legacy=(await req('GET',`/api/delivery/v1/versions/${restored.version.id}`)).json();assert.equal(legacy.state,'legacy');assert.equal(legacy.provenance.evidenceReuse,'legacy_unverified');assert.equal(api.store.state.runs.length,1);
+ }finally{await api.close();await rt.app.close();await rm(directory,{recursive:true,force:true});}
+});
+test('uncertain Prepare PUT with no remote record never creates another preparation to prove cancellation',async()=>{
+ const f=await fixture();try{const p=await f.project();f.runtime.setFault('uncertain_prepare');const r=await f.run(p.id);await f.api.tick();assert.ok(f.api.store.state.runs[0].delivery!.prepare);assert.equal(f.api.store.state.runs[0].delivery!.putPending,true);await f.request('POST',`/api/v1/runs/${r.id}/cancel`,{});await f.restart();for(let i=0;i<3;i++)await f.api.tick();assert.equal((await f.request('GET',`/api/v1/runs/${r.id}`)).data.status,'cancelling');assert.equal(f.runtime.prepareCalls,0);assert.equal(f.runtime.executeCalls,0);const quota=(await f.request('GET','/api/v1/session')).data.quota;assert.equal(quota.runsUsed,0);assert.equal(quota.runsReserved,1);assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.project.activeRunId,r.id);
+ }finally{await f.close();}
+});
+test('v2 auto preserves authorized proposal goal and source; exact queued proposal fails before Prepare if baseline changes',async()=>{
+ const f=await fixture();try{const p=await f.project(),goal='完整中文授权目标，保留用户明确表达';f.runtime.coordinator.setFactory(request=>fakeChange(request,goal));const key=randomUUID();const payload={input:{kind:'text',content:'请明确增加这个功能'},mode:'auto'};
+ const one=await f.request('POST',`/api/v2/projects/${p.id}/messages`,payload,key),two=await f.request('POST',`/api/v2/projects/${p.id}/messages`,payload,key);assert.equal(one.data.turn.id,two.data.turn.id);await f.api.tickCoordination();const turn=(await f.request('GET',`/api/v2/coordination-turns/${one.data.turn.id}`)).data;assert.equal(turn.result.admission,'run_queued');const runId=turn.result.runId;const done=await f.settle(runId);assert.equal(done.status,'succeeded');const seed=f.api.store.state.runs.find(r=>r.dto.id===runId)!.delivery!.prepare!.seed;assert.equal(seed.goal,goal);assert.equal(seed.source.admission,'auto_explicit_request');assert.deepEqual(seed.source.messageIds,[one.data.userMessage.id]);assert.equal(f.runtime.prepareCalls,1);
+ f.runtime.coordinator.setFactory(request=>({...fakeChange(request,'锁定版本的修改'),origin:'inferred_suggestion',basePolicy:{kind:'exact_version',expectedBaseVersionId:done.resultVersionId}}));const ask=await f.request('POST',`/api/v2/projects/${p.id}/messages`,{input:{kind:'text',content:'请给一个锁定版本的建议'},mode:'auto'});await f.api.tickCoordination();const planned=(await f.request('GET',`/api/v2/coordination-turns/${ask.data.turn.id}`)).data;const proposal=(await f.request('GET',`/api/v2/proposals/${planned.result.proposalId}`)).data;
+ const direct=await f.run(p.id,'先修改版本');const accepted=await f.request('POST',`/api/v2/proposals/${proposal.id}/accept`,{expectedRevision:proposal.revision});assert.equal(accepted.status,202);assert.equal((await f.settle(direct.id)).status,'succeeded');const exactRunId=accepted.data.run.id;assert.equal((await f.settle(exactRunId)).status,'failed');assert.equal(f.runtime.prepareCalls,2);assert.equal((await f.request('GET','/api/v1/session')).data.quota.runsUsed,2);
+ }finally{await f.close();}
+});
+test('cancel after freeze but before Worker dispatch stops only Prepare, preserves planning charge, and creates no Worker',async()=>{
+ const f=await fixture();try{const p=await f.project(),r=await f.run(p.id);await f.api.tick();assert.ok(f.api.store.state.runs[0].delivery!.wrapper);assert.equal(f.runtime.executeCalls,0);await f.request('POST',`/api/v1/runs/${r.id}/cancel`,{});assert.equal((await f.settle(r.id)).status,'cancelled');assert.equal(f.runtime.executeCalls,0);const quota=(await f.request('GET','/api/v1/session')).data.quota;assert.equal(quota.runsUsed,1);assert.equal(quota.runsReserved,0);const view=(await f.request('GET',`/api/delivery/v1/runs/${r.id}`)).data;assert.equal(view.report.lifecycle,'cancelled');assert.equal(view.report.bundle,null);assert.equal(view.quality,'blocked');
+ }finally{await f.close();}
+});
+test('late failure report is fetched after terminal event without replay; unknown final tokens cannot publish',async()=>{
+ const f=await fixture();try{const p=await f.project();f.runtime.setHold(true);f.runtime.setFault('late_report');const r=await f.run(p.id);await f.api.tick();await f.api.tick();const executionId=(await f.request('GET',`/api/v1/runs/${r.id}`)).data.executionId;f.runtime.failExecution(executionId);await f.api.tick();assert.equal((await f.request('GET',`/api/v1/runs/${r.id}`)).data.status,'failed');assert.equal(f.api.store.state.runs[0].delivery!.report,undefined);
+ f.runtime.setFault('');await f.api.tick();const view=(await f.request('GET',`/api/delivery/v1/runs/${r.id}`)).data;assert.equal(view.quality,'blocked');assert.equal(view.report.lifecycle,'failed');assert.equal(f.runtime.prepareCalls,1);assert.equal(f.runtime.executeCalls,1);
+ f.runtime.setHold(false);f.runtime.setFault('unknown_usage');const second=await f.run(p.id,'未知最终token');assert.equal((await f.settle(second.id)).status,'failed');assert.equal((await f.request('GET',`/api/v1/projects/${p.id}/workspace`)).data.currentVersion,null);
+ }finally{await f.close();}
+});
+
+test('public pnpm lock setting names are not dependency schemes; local protocols and private registry values remain rejected',()=>{
+ const publicLock="lockfileVersion: '9.0'\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\nimporters:\n  .:\n    dependencies:\n      react:\n        specifier: 19.2.0\n        version: 19.2.0\n";
+ assert.equal(isPublicDeliveryLockfile(publicLock),true);
+ for(const value of ['file:../local-package','file:/tmp/package','file:///tmp/package','link:../sibling','workspace:*','workspace:^']){
+  assert.equal(isPublicDeliveryLockfile(publicLock+`  version: ${value}\n`),false,value);
+  assert.equal(isPublicDeliveryLockfile(publicLock+`  resolution: {tarball: '${value}'}\n`),false,value);
+ }
+ assert.equal(isPublicDeliveryLockfile(publicLock+'  resolution: {tarball: https://registry.npmjs.org/react/-/react-19.2.0.tgz}\n'),true);
+ for(const url of ['https://private.example/react.tgz','https://registry.npmjs.org.evil.example/react.tgz','https://secret@registry.npmjs.org/react.tgz','https://registry.npmjs.org/react.tgz?token=credential','http://registry.npmjs.org/react.tgz'])assert.equal(isPublicDeliveryLockfile(publicLock+`  resolution: {tarball: "${url}"}\n`),false,url);
+});

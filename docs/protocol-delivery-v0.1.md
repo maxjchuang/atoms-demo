@@ -188,6 +188,8 @@ Run 生命周期不变：API 检查/staging 时仍 running/publishing，事务�
 - 受信模板独立持有 package.json、scripts、pnpm-lock.yaml、packageManager/toolchain；模型不可改这些指纹。
 - 不复制平台根 lock；仅生成应用闭包。公开 registry 固定为 `https://registry.npmjs.org`，无内部 registry、认证 URL、workspace 链接。
 - ZIP 排序和时间戳固定，内容 hash 与 archive hash 分开。导出不含凭证、DSH home、node_modules、内部日志或宿主路径。
+- `SourceExportManifest.files` 与候选 artifact 的 `source/` 清单完全同集，路径保留 `source/` 前缀；ZIP 另含根级 `contents-manifest.json`，解包后进入 `source/` 安装/构建，包内 README 明示该步骤。sourceSnapshotHash 使用同一带前缀清单，不允许一方计算时剥除前缀。
+- `contents-manifest.json` 精确字节为 canonical JSON `{protocolVersion,sourceSnapshotHash,templateId,toolchainId,files:[{path,bytes,sha256}]}` 的 UTF-8、无尾换行，files 按 path 字面序排序；它不列自身，`contentsManifestHash` 对这些精确字节计算。`scriptsHash` 对完整 `package.json.scripts` 的 canonical JSON 计算，不删除任何内容键；templateHash 由服务认证的发现 descriptor 提供、Agent 核对实际受信模板，API 不宣称独立重建远程模板的证明。默认工具链 ID 为 `toolchain_react_v1`。
 - 从实际 ZIP 解包到全新目录，不挂载/软链平台 node_modules，不继承工作台/Agent HOME、Key、Cookie、服务 token。
 - frozen-lockfile 安装、默认禁生命周期脚本，只运行指纹匹配的宿主可信 typecheck/build，再加载并使用同一声明计划验证。
 - `CleanBuildReport` 记录 source/archive/lock/toolchain、实际 Node/pnpm/OS/arch、安装/类型/构建/加载/行为结果与证据。只测 macOS 不声称 Linux 通过；可复现不是跨平台二进制逐字节一致。

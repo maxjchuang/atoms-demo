@@ -291,3 +291,17 @@ G0 tests 只校验契约/合成 fixture，不执行浏览器或模型。Schema �
 2. Prepare 失败早于 Spec/Plan 冻结时，报告中的尚不存在对象使用 null，并明确 planning blocked；禁止伪造全零 hash。
 3. coverage.method 使用 automated/manual/unsupported，not_run 统一放执行 result；这是新模块的明确选择，不更改旧 Check/事实 enum。
 4. 新增字段/端点以本文及已冻结的独立 delivery Schema/fixtures 为基线；M2 App 实现与真实验证由主管另行组织，G0 通过不替代后续执行与发布门禁。
+
+## 14. 派生 criterion 与 canonical Seed 投影（新增纯 helper 已冻结）
+
+不新增 wire 字段/enum，不更改现有 strict Schema。新 `model_proposed` proposal 可保留所有 canonical Seed criterion（同 id/逐字 description/原 required/仅引用自身 Seed），并追加 derived leaves。原 Goal 同时在 Seed、Spec.originalGoal 和 canonical criterion 保留。每 Seed 至少被一个 leaf 引用；leaf 可 n:M 引用 Seed，required 必须等于其所有 source Seed.required 的 OR，模型没有降级权。canonical+derived 合计仍受现有 50 项限制。
+
+Agent 内部模型格式使用 `criteria[{ref:r0,description,sourceSeedRefs:[s0]}]`；cases/coverage 仅引用 r* leaves，模型不发 required/opaque ID/hash。每 leaf 恰一个 coverage，自动 case 与 coverage 双向闭合；manual/unsupported 无 case。模型无效表示仍严格拒绝，不去重、不删 case、不猜改断言；JSON/模型格式错误仍共用原单次结构化 retry/累计预算。
+
+唯一政策实现为 `@atoms/contracts/delivery-projection`：`projectCanonicalSeedCoverage(seed,spec,leafPlan)` 返回待合并的 cases/coverage metadata（调用者重新计算最终 plan hash），`assertCanonicalSeedCoverage(seed,spec,plan)` 供 API 在新 proposal freeze 前独立校验。两者仅纯数据，无 Node/I/O/模型/证据真实性声明。原 strict parse、quality policy、历史已完成 model/host_profile 结果不改写或重新编译；`hasDerivedModelCriteria` 只识别新 model_proposed+有 leaf 结果，API 消费须主管统一提交后接入。
+
+每 canonical parent 的覆盖只由所有映射 leaves 保守投影：全部 automated 且 case 并集非空才 automated，caseIds 按原 plan.cases 顺序取并集；任一 manual 则 parent manual，否则任一 unsupported 则 parent unsupported。非自动 parent 无 case，reason 明示 manual/unsupported 子项未验证，并按 Spec leaf 顺序列出每个缺口子项 id、description（至多100个UTF-16单元）、method、leaf reason（至多80个UTF-16单元）；截断用省略号并避免拆开 surrogate pair，完整 leaf gap 保留，不以摘要取代。leaf 方法、case 及 steps/期望/参数完全不变。仅给自动 parent 关联的既有 cases.criterionIds 追加 parent 回链，顺序按 Seed.items；coverage 保持原 leaf 顺序后追加按 Seed 顺序的 parents。API helper 对数组顺序、所有 parent 值与回链完整互证。
+
+该汇总为显式 host-owned 元数据，不是自然语言语义覆盖证明。leaf gaps 不隐藏；required 自动 leaf 失败仍 blocked，人工叶子/父项缺口按既有政策 partial。实际核心行为与完整 Goal 的合理分解仍需后续执行/审查门禁，不能靠 host 投影把 leaf manual 改 auto。此前 HaEXjt 的 manual+自动 case 冲突和同 criterion 重复 auto/manual 表示继续拒绝，原 2 步/有效 input2993（含 cache1024）/output2455 失败证据保持不变。
+
+升级门禁：所有 nonterminal Run（包括 Preparation 已 completed 但尚未 freeze/dispatch）必须先完成或取消并确认推理/子进程实际停止，再停服复核并完整备份后升级；升级期间不重新编译旧 proposal，也不给历史结果套用新投影。当前 M2 尚未 live，三次真实尝试均 failed 且无 bundle；正式升级仍由主管再次核验该门禁，不据此自动放行未来升级。

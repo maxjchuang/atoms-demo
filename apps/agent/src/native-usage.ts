@@ -89,3 +89,19 @@ export class NativeUsageAccounting {
       unknownInputSamples: this.unknownInput, unknownOutputSamples: this.unknownOutput, ...this.totals };
   }
 }
+
+/** Per native request: a settled first step is not proof that a later interrupted step was free. */
+export class NativeRequestAccounting extends NativeUsageAccounting {
+  private entered = false;
+  private complete = false;
+  private observedSteps = 0;
+  begin() { this.entered = true; }
+  override step(identity: string | undefined) { const fresh = super.step(identity); if (fresh) this.observedSteps++; return fresh; }
+  override assertObservable() {
+    super.assertObservable();
+    if (this.metadata().samples < this.observedSteps) throw new UsageAccountingError('A model step has no settled usage');
+    this.complete = true;
+  }
+  isUnknown() { return this.entered && !this.complete; }
+  override metadata() { return { ...super.metadata(), requestEntered: this.entered, requestSettled: this.complete, observedSteps: this.observedSteps }; }
+}

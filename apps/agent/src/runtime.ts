@@ -28,6 +28,7 @@ import { DeliveryExecutionRuntime } from './delivery-execution.js';
 type RuntimeBody = ReturnType<typeof RuntimeEvent.parse>;
 type CheckValue = ReturnType<typeof Check.parse>;
 export type RecordValue = {
+  usageKnown?: boolean; pendingModelRequest?: boolean; usageObservationVersion?: 'settled-request-v1';
   delivery?: DeliveryExecutionRequestDto;
   request: StartExecutionDto; hash: string; snapshot: ExecutionSnapshotDto;
   events: AgentEventDto[]; commands: Record<string, { hash: string; snapshot: ExecutionSnapshotDto }>;
@@ -74,6 +75,7 @@ export class AgentRuntime {
         this.records.set(item.request.executionId, item);
         if (!terminal.has(item.snapshot.status) && item.snapshot.status !== 'waiting_input' && item.snapshot.status !== 'accepted') {
           // Children are owned by this process; a full restart is fenced by fresh execution directories.
+          if (item.usageObservationVersion === 'settled-request-v1' && item.pendingModelRequest) item.usageKnown = false;
           item.snapshot.status = 'interrupted'; item.snapshot.pendingAttention = null;
           this.emit(item, { type: 'execution.interrupted', payload: { reason: 'Runtime restarted; explicit retry required. External processes are not resumed.' } });
         }
@@ -132,6 +134,7 @@ export class AgentRuntime {
         status: 'accepted', phase: null, revision: 1, lastSourceSeq: 0, pendingAttention: null, artifactId: null, updatedAt: now() },
       events: [], commands: {}, started: false, plan: null, planConfirmed: request.mode === 'build',
       queueOrder: Date.now(), activeMs: 0, waitingAt: null, usage: { modelSteps: 0, inputTokens: 0, outputTokens: 0 },
+      usageKnown: true, pendingModelRequest: false, usageObservationVersion: 'settled-request-v1',
       ordinaryQuestions: 0, answers: [], repairRoundsUsed: 0, verificationErrors: null, repairClaimed: false,
       tokenAccountingVersion: TOKEN_ACCOUNTING_VERSION,
     };
@@ -228,7 +231,12 @@ export class AgentRuntime {
     const workspace = path.join(root, 'workspace'); const evidence = path.join(root, 'evidence');
     const context: AdapterContext = { request: item.request, workspace,
       home: path.join(this.options.dataDir, 'dsh', item.request.projectId), signal: controller.signal,
-      remainingOutputTokens: () => item.request.budget.maxOutputTokens - (item.usage?.outputTokens || 0),
+      remainingOutputTokens: () => item.usageKnown === false ? 0 : item.request.budget.maxOutputTokens - (item.usage?.outputTokens || 0),
+      remainingActiveMs: () => Math.max(0, item.request.budget.maxWallTimeMs - item.activeMs - (Date.now() - startedAt)),
+      usageIsKnown: () => item.usageKnown !== false, observedUsage: () => item.usage,
+      beginModelRequest: () => { item.pendingModelRequest = true; this.persist(); },
+      settleModelRequest: () => { item.pendingModelRequest = false; this.persist(); },
+      markUsageUnknown: () => { item.usageKnown = false; this.persist(); },
       report: (content) => this.emit(item, { type: 'message.completed', payload: { messageId: `message_${randomUUID().replaceAll('-', '')}`, content } }),
       fileChanged: (change) => this.emit(item, { type: 'file.changed', payload: change }),
       runAnswers: item.answers ?? [],
@@ -246,6 +254,7 @@ export class AgentRuntime {
     };
     if (item.delivery) this.deliveryEngine!.context(item, context);
     try {
+      if (item.usageKnown === false) throw new Error('Model usage is unknown; further inference is fenced.');
       this.update(item, { status: 'running', pendingAttention: null,
         phase: !item.plan || !item.planConfirmed ? 'planning' : item.verificationErrors ? 'repairing' : 'generating' });
       if (!item.delivery && !item.started) { item.started = true; this.emit(item, { type: 'execution.started', payload: {} }); }
@@ -328,6 +337,7 @@ export class AgentRuntime {
       this.emit(item, { type: 'execution.completed', payload: { artifactId } });
     } catch (error) {
       await this.adapter.close(id).catch(() => {});
+      if (item.usageObservationVersion === 'settled-request-v1' && item.pendingModelRequest) item.usageKnown = false;
       item.snapshot.pendingAttention = null; item.snapshot.revision++;
       if (item.delivery) this.deliveryEngine!.fail(item, item.snapshot.status === 'cancelling' || this.closed ? 'cancelled' : 'failed', error instanceof Error ? error.message : 'Delivery execution failed', controller.signal.reason === 'budget' || (error instanceof DeliveryError && error.code === 'BUDGET_EXCEEDED') ? 'BUDGET_EXCEEDED' : undefined);
       if (item.snapshot.status === 'cancelling' || this.closed) {

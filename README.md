@@ -2,7 +2,7 @@
 
 以 DeepSeek Harness（DSH）为 Agent 底座的 React 应用生成工作台。
 
-当前已完成 **本机最小闭环验证**：三条开发线按 v0.1.0 协议实现独立服务；实际 API + Agent Runtime + **真实 DSH/DeepSeek API** 的生成、构建、发布、修改、回滚和重启恢复已通过 G4（Agent 执行，主代理审查产物与截图）。主代理另对真实第二版产物完成只读浏览器行为验收：新增、编辑、搜索匹配/空结果/清空、刷新持久化及无页面错误均通过，不调用模型或修改源码。Fake 集成另覆盖回滚后继续修改。自动 manifest 的 behavior 仍保留原始 not_run，追加的独立样例验收与原始自动结果分别记录；公网隔离 G5 尚未通过。详见 [实施记录](docs/implementation-status.md)。
+当前已完成 **本机生成链路的最小子集验证**：三条开发线按 v0.1.0 协议实现独立服务；实际 API + Agent Runtime + **真实 DSH/DeepSeek API** 的生成、构建、发布、修改、恢复和重启持久化已验证（Agent 执行，主代理审查产物与截图）。原 G4 还要求真实回滚后继续修改，这一项目前仅 Fake 集成覆盖，因此完整 G4 尚未闭合。主代理另对真实第二版产物完成只读浏览器行为验收：新增、编辑、搜索匹配/空结果/清空、刷新持久化及无页面错误均通过，不调用模型或修改源码。自动 manifest 的 behavior 仍保留原始 not_run，追加样例证据不等于通用行为验收；公网隔离 G5 尚未通过。详见 [实施记录](docs/implementation-status.md)。
 
 ## 本地启动
 
@@ -39,6 +39,8 @@ ATOMS_DATA_ROOT=data/review-real pnpm dev
 ## 阅读顺序
 
 首版统一入口：[协议基线 v0.1.0（Markdown）](docs/protocol-baseline-v0.1.md)。
+
+下一阶段为 **M1 项目协调 → M2 可信交付 → M3 隔离公网**。[v0.2 项目消息协调协议](docs/protocol-v0.2.md)、[能力差距与路线图](docs/capability-roadmap.md)及独立 Schema/fixture 已完成 G0 冻结：主代理亲自复验 contracts check 和 40/40 测试，原 v1 index/fixture/tests 无修改。M1 服务实现待开始，尚未实现消息 Router；统一基线提交后再进入三个独立 worktree 分线开发。
 
 1. [架构与职责](docs/architecture.md)
 2. [公共 HTTP 协议](docs/public-api.md)

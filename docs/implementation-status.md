@@ -6,13 +6,15 @@
 
 最新增量：[过程反馈改进交付记录](progress-feedback.md)。主代理本轮复验全包 check/build、79 项测试、G3 集成和新 Mock 浏览器 5 passed / 1 条件 skip，并目视检查长等待与真实历史时间线；所有结果区分本轮与上一阶段证据。
 
+原设计复核后的后续范围见 [能力差距与路线图（G0 已冻结）](capability-roadmap.md) 和 [v0.2 消息协调协议（G0 已冻结）](protocol-v0.2.md)。主代理已亲自复验 contracts check 和 40/40 契约测试，原 v1 index/fixture/tests 无修改，G0 文档与 Schema 冻结；M1 服务实现待开始，Router 尚未实现，统一基线提交后再分线开发。下文真实模型成功记录保留，但应限定为 G4 最小子集；原门禁中的真实回滚后继续修改仍待补齐，不能把完整 G4 标为已完成。
+
 ## 1. 当前实现
 
 | 方向 | 已落地 | 验证边界 |
 | --- | --- | --- |
 | 前端 `apps/web` | React/Vite 工作台、公共 API client、独立 Mock、任务/问题/版本/预览及过程反馈界面 | 本轮 30 项单测、构建、Mock 浏览器 5 passed / 1 条件 skip；上一阶段真实服务浏览器主流程 1 项通过 |
 | 后端 `apps/api` | Fastify 公共 API、体验码 Cookie、配额/幂等、SQLite、任务队列/锁、事件投影、产物校验、签名预览、版本/恢复/下载 | 独立 Fake Runtime HTTP 契约与重启测试通过 |
-| Agent `apps/agent` | DSH 适配层、每任务 Planner/Worker、显式 Fake DSH、内部 HTTP、事件账本、计划回答、验证修复、候选产物 | Fake 独立测试通过；真实 DSH/DeepSeek API 的 G4 最小闭环最终通过 |
+| Agent `apps/agent` | DSH 适配层、每任务 Planner/Worker、显式 Fake DSH、内部 HTTP、事件账本、计划回答、验证修复、候选产物 | Fake 独立测试通过；真实生成/修改/恢复子集通过，完整 G4 待补 |
 | 集成 | 根真实/Fake 启动器、临时目录端到端脚本 | API + Runtime + Fake DSH HTTP 闭环通过 |
 
 ## 2. 已执行检查
@@ -39,7 +41,7 @@
 
 DSH 当前每个 Run 创建独立的 Planner 和 Worker 会话，跨 Run 使用已发布源码快照与 `projectMemory`；项目级长期存活 Router、通用工具型 Worker 尚未实现。真实模式先由模型输出受 Schema 约束的源码编辑，再由宿主校验并应用；不是无限制 shell 编码代理，也不是完整 Super-agent。
 
-## 3. G4 真实模型最终结果与历史问题
+## 3. G4 已验证的真实模型子集与历史问题
 
 最初真实整链路在计划确认后的生成阶段出现结构化 JSON 解析失败（Unexpected end of JSON input）。Agent 方向改进结构化输出处理，并固定适合该受控源码生成流程的低 reasoning 配置，最终整链路通过；任务预算没有放宽。
 
@@ -51,7 +53,7 @@ DSH 当前每个 Run 创建独立的 Planner 和 Worker 会话，跨 Run 使用�
 
 主代理审查两份 manifest：每版 15 个文件，required typecheck/build/smoke 均 passed，behavior 明确为 not_run；第二版 baseVersionId 对应第一版。实际第二版截图包含搜索框。两个 Run 的记录输出分别为 8,751 和 10,616 tokens，均 2 steps；本轮没有结构化重试或验证修复。这是一次样例，不代表任意任务的成本、性能或成功率保证。
 
-这里的 G4 通过范围是实际模型经 HTTP 产品链路完成两次交付、恢复及持久化。主代理随后使用 `apps/web/scripts/check-artifact.mjs` 对真实第二版 dist 做只读浏览器验收：新增、编辑、搜索匹配、搜索空结果、清空搜索、刷新持久化和无页面错误全部通过；该验收没有调用模型（modelCalls=0），没有修改生成文件（modifiedGeneratedFiles=false）。
+这里已验证的范围是实际模型经 HTTP 产品链路完成两次交付、恢复及持久化，不包含恢复后的第三次真实模型修改；因此只算原 G4 的最小子集，不是完整门禁通过。主代理随后使用 `apps/web/scripts/check-artifact.mjs` 对真实第二版 dist 做只读浏览器验收：新增、编辑、搜索匹配、搜索空结果、清空搜索、刷新持久化和无页面错误全部通过；该验收没有调用模型（modelCalls=0），没有修改生成文件（modifiedGeneratedFiles=false）。
 
 这是追加的独立样例行为证据，不回写或篡改原始 manifest；自动 manifest 中 behavior 仍为 not_run。拖拽等未由本次样例检查覆盖的行为不得标记通过，也不能将这个样例推广为任意应用的行为保证。
 
@@ -105,7 +107,7 @@ pnpm dev:demo
 
 ## 7. 尚未通过的门禁与限制
 
-- G4 真实模型最小整链路最终通过；最初的解析失败、修复简述与最终证据见上节。真实第二版的只读样例行为验收也由主代理完成，与自动 manifest 和模型集成分别记录，不宣称任意行为覆盖。
+- 完整 G4 尚未闭合：已有真实生成、修改、恢复和重启证据，仍缺真实回滚后继续修改；该项目前仅 Fake 验证。最初的解析失败、修复简述与成功子集证据保留，不删除历史。真实第二版的只读样例行为验收与自动 manifest 分别记录，不宣称通用行为覆盖。
 - G2 浏览器与真实 API/Runtime（显式 Fake DSH）主流程已由主代理亲自复验通过，Mock 浏览器 3 项已通过；不代表真实模型的 G4 或任意行为覆盖。
 - G5 Docker 操作系统隔离、两个 Cloudflare 临时隧道、公网 Cookie/Origin 和预览资源验收尚未完成。
 - 本机验证不等于容器沙箱已安全隔离。不得开放公网生成或向用户宣称生产就绪。

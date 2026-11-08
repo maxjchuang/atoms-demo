@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./fixtures": "./src/fixtures.ts" },
+  "exports": {
+    ".": "./src/index.ts", "./fixtures": "./src/fixtures.ts",
+    "./conversation": "./src/conversation.ts", "./conversation-fixtures": "./src/conversation-fixtures.ts"
+  },
   "scripts": {
     "check": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts"

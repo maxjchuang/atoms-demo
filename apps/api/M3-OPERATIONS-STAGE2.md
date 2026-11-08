@@ -59,3 +59,25 @@ waiting_input只记录真实绑定并失败停下，主管再判断如何在原m
 首次public启动用显式 `--fake` 测试，或 `ATOMS_ALLOW_M3_REAL=1 ... --real --provider-key-file ...` 授权初次Key ingress；成功后私有0600 runtime-mode.json 保存project/dsh/providerConfigured，**不保存Key**。后续普通up、renew之后的up都保留dsh，不再要求或读取raw key路径。`--real`不再决定每次启动mode；Fake manifest与已配置dsh冲突或显式Fake降级均拒绝，不自动fallback。模式尚未初配时up缺明确选择则失败。此修正只影响host lifecycle/private metadata，不改业务协议、额度、模型调用预算或SDK；持久模式正反回归零provider执行。
 
 主管独立复验本候选：core/mode9项与Stage2 plan/guard5项、三个操作入口及host mode helper语法检查通过。真实模式普通重启/更新域名后不重新读取Key、不回退Fake；这仍是零provider测试，不能代替后续实际operator11-gate认证、临时隧道或有限真实Code/ask。
+
+## One specific reviewed pre-model failure resume (operator only)
+
+The normal smoke still requires an empty namespace and never retries. A separate, one-use exception is bound to original ledger `real-smoke-1794178069434.json`, project `project_25e268fd8ae314bc7ba6`, failed Run `run_e122ee5f556cfd91d2c8`, Preparation `preparation_175270303037d294b176`, and its exact immutable blocked report hash. This is not a general failure classifier or retry switch. The manager-reviewed failure was native loader startup before any observed model step; input/output remain unknown (`null`), not converted to zero.
+
+Provider-free plan:
+
+```sh
+pnpm m3:smoke-real --project atoms-m3-public --resume-reviewed-pre-model-failure "$HOME/.atoms-m3/public/real-smoke-1794178069434.json"
+```
+
+Only the manager may explicitly execute the once-authorized admission after reviewing the fixed Agent image:
+
+```sh
+ATOMS_ALLOW_M3_REAL_SMOKE=1 ATOMS_ALLOW_M3_REVIEWED_RESUME=1 pnpm m3:smoke-real --project atoms-m3-public --run --resume-reviewed-pre-model-failure "$HOME/.atoms-m3/public/real-smoke-1794178069434.json"
+```
+
+Before admission it authenticates normal public reads, verifies current real-mode images/isolation, the original terminal Run and exact final verified blocked report, no frozen bundle/attempt/export/version, Preparation zero observable steps with original unknown tokens, one code/project/Run, zero generation used/reserved, zero coordination used/reserved, and no pending work. It saves an owner-private API-data tar (SQLite/WAL bytes unchanged across capture), original ledger, and a hash-bound receipt. An exclusive-create receipt is consumed **before** the one new POST; lost admission responses or any later failure do not allow a second invocation. No old Run, report, usage, quota, project, or failure ledger is changed by the operator. Login may add a session.
+
+It creates exactly one new Run in the same project with the original fixed goal and unchanged 8-step/65,536-input/24,576-output/900-second cap, then at most the originally unsubmitted sharing ask under the existing 3-step/90-second cap. Success expects two total Runs, one Version and one generation used; failure stops and retains all evidence. It never reads or reinstalls a provider key, answers Attention, automatically creates another task, or expands budgets. This exception has unit/guard validation only until the manager executes it; it is not an additional model or external-browser proof.
+
+主管独立通过该限定入口的5项resume/缺guard负例及原5项Stage2测试，共10/10，语法/diff检查通过。原live API记录、原不可变报告及nullable用量在执行前继续由脚本严格核对；本条验收不触发新增Run，后续新增模型任务必须主管双guard明确执行。

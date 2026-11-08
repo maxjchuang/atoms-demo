@@ -7,10 +7,12 @@
 | 范围 | 实施/验证 |
 | --- | --- |
 | API v2 | 独立 coordination 模块、全部冻结端点、任务/消息分离、API 权威记忆、双事件序列、历史合并与旧数据库迁移已实现 |
-| API G1 | `check`/`build` 通过；`test:contract` 最新 30/30（旧 v1 10 项 + 新协调 20 项）通过；前 27 项已由主代理复验，最新记忆授权补修待主代理复验 |
-| Agent/Web | 在各自独立 worktree 实现；其最终证据由主代理汇总，不在本表推断 |
-| M1 HTTP 集成 | 主代理已亲自运行 `pnpm test:coordination --no-web`，6 组断言通过；真实 API/Agent v2 HTTP + 显式 FakeRouter/FakeDSH + 真实 React 构建/浏览器 smoke，不包含 Web UI 验收；最新记忆授权修正合入后需按影响复验 |
-| M1 真实模型 | 本轮 API 方向未调用模型；真实模式必须显式授权后运行，不以 Fake 结果代替 |
+| API G1 | `check`/`build` 通过；`test:contract` 30/30（旧 v1 10 项 + 新协调 20 项）已由主代理复验，包含取消未决 outbox 与提案记忆授权修正 |
+| 全仓节点验证 | 主代理在隔离集成 worktree 运行 check 与 142 项节点测试通过：contracts 42 / API 30 / Agent 28 / Web 42；下述缓存计量修正后的最终回归另行补充 |
+| M1 Fake HTTP 集成 | 主代理复跑 `pnpm test:coordination --no-web` 及包含 Web HTTP 的默认入口，6 组断言通过；真实 API/Agent v2 HTTP + 显式 FakeRouter/FakeDSH + 真实 React 构建/生成应用浏览器 smoke；Web HTTP 就绪不等于 Web 浏览器交互验收 |
+| M1 真实 Router | 主代理显式启动的六轮自然中文样例全部通过：真实 DSH/DeepSeek Router + Fake Worker；不是完整真实代码 G4，不代表任意自然语言准确率 |
+| M1 Web 浏览器 | 前端正用独立 5185 和真实 HTTP 服务验收，结果待主代理确认；不提前标通过 |
+| 输入预算计量 | 真实样例发现缓存读取未纳入有效输入预算；Agent 正修 Worker/Router 计量并做独立测试，未为此重复调用模型；修复未验收前明确保留该缺口 |
 | M2/M3 | 不属于本轮实现；可信交付、完整 G4、隔离公网 G5 仍按能力路线图待完成 |
 
 ## API 独立测试覆盖
@@ -68,7 +70,17 @@ ATOMS_ALLOW_REAL_COORDINATION_INTEGRATION=1 ATOMS_KEEP_TEST_DATA=1 pnpm test:coo
 
 每轮沿用冻结预算：最多 3 个可观察模型步骤、有效推理 90 秒、输入 32,768 / 总输出 8,192 tokens、最多 1 次结构化重试且计入总预算；六轮配置总额为最多 18 个可观察步骤和 49,152 输出 token 预算。SDK/提供商在途请求和实际用量观察存在边界，不能称绝对货币硬限或保证精确 HTTP 调用次数。Worker 模型调用为 0；真实 Run question、异常竞态、精确提案和选项固定样例继续由默认 Fake/独立测试覆盖。
 
-当前真实分支仅通过语法检查，尚未付费执行；实际自然语言分类和纠正效果须等待主代理统一授权的一次有界运行，不用 Fake 回退掩盖失败。
+主代理已显式启动并验收上述六轮真实 Router 样例，证据保留在本机临时目录：
+
+```text
+/var/folders/xk/61y0rx650b1b6pf9wyc5p_tr0000gn/T/atoms-m1-integration-Ty23Ah
+```
+
+六轮各 1 个可观察 modelStep，总计 6；SDK 非缓存输入 9,094 tokens，缓存读取 16,640 tokens，**有效输入 25,734**，输出 1,401，总用量 27,135。不能把 9,094 当作本次全部输入或完整成本依据。
+
+本次 review 同时发现原 Worker/Router 输入预算计量漏掉缓存读取，Agent 正修正归一化与预算测试。已有六轮功能证据保留，但不把它扩张为“计量已正确”；修复结果与最终回归待主代理补充，不为了修统计再执行同一批付费样例。
+
+本轮真实只验证消息 Router，Worker 明确为 Fake；普通 Run question、异常竞态和完整真实代码 G4 不能据此补标通过。没有 Fake 回退掩盖真实 Router 结果。
 
 ## 本地独立启动
 

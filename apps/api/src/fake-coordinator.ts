@@ -9,8 +9,8 @@ const clone=<T>(value:T):T=>structuredClone(value);
 export const contextUsedFor=(request:StartCoordinationRequestDto)=>({contextId:request.context.id,contextRevision:request.context.contextRevision,
   memoryRevision:request.context.projectMemory.revision,conversationRevision:request.context.conversationRevision,
   contextVersionId:request.context.contextVersionId,asOf:request.context.asOf,hash:request.context.hash});
-export const fakeConsult=(request:StartCoordinationRequestDto):RouterResultDto=>({kind:'consult',answer:'合成协调测试答复；没有调用模型。',contextUsed:contextUsedFor(request),references:[],memoryUpdates:[]});
-export const fakeChange=(request:StartCoordinationRequestDto,goal=request.content):RouterResultDto=>({kind:'change_proposal',summary:goal,goal,
+export const fakeConsult=(request:StartCoordinationRequestDto):Extract<RouterResultDto,{kind:'consult'}>=>({kind:'consult',answer:'合成协调测试答复；没有调用模型。',contextUsed:contextUsedFor(request),references:[],memoryUpdates:[]});
+export const fakeChange=(request:StartCoordinationRequestDto,goal=request.content):Extract<RouterResultDto,{kind:'change_proposal'}>=>({kind:'change_proposal',summary:goal,goal,
   acceptance:[{id:'acceptance_fixture',description:'合成协议样例验收项'}],origin:request.operation.kind==='clarification_answer'?'confirmed_clarification':'explicit_request',
   basePolicy:{kind:'latest_on_dispatch'},evidence:[{messageId:request.inputMessageId,quote:request.content}],contextUsed:contextUsedFor(request),references:[],memoryUpdates:[]});
 

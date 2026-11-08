@@ -115,6 +115,7 @@ try{
     for(const event of page.items)assert.equal(event.seq,++after);assert.equal(page.nextCursor,after);if(!page.hasMore)break;}
   assert.equal(after,snapshot.conversationEventCursor);
   console.log('PASS: API + Router restart preserves decisions, original dialogue and independent ordered coordination replay.');
-  console.log(real?'M1 REAL coordination sample passed; no claim of arbitrary intent accuracy or M2/M3 completion.':'M1 Fake integration passed with actual Web/API/Runtime HTTP and real React compiler/browser smoke; no model inference.');
+  console.log(real?'M1 REAL coordination sample passed; no claim of arbitrary intent accuracy or M2/M3 completion.':
+    `M1 Fake integration passed with actual ${withWeb?'Web/API/Runtime':'API/Runtime (Web skipped)'} HTTP and real React compiler/browser smoke; no model inference.`);
 }catch(error){failed=true;for(const child of children)console.error(`${child.name} output:\n${redact(child.output)}`);throw error;}
 finally{await Promise.all(children.map(stop));if(failed||process.env.ATOMS_KEEP_TEST_DATA==='1')console.log(`M1 diagnostic data retained: ${directory}`);else await rm(directory,{recursive:true,force:true});}

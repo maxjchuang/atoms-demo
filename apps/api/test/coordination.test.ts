@@ -143,6 +143,45 @@ test('persisted project decisions and corrections precede following queued conte
   }finally{await f.close();}
 });
 
+test('inferred/dismissed/cancelled proposal memory is unconfirmed; explicit accept records real scope once',async()=>{
+  const f=await fixture();try{
+    await f.login();const project=await f.project();
+    const suggested=(request:StartCoordinationRequestDto):RouterResultDto=>({...fakeChange(request,'给应用增加分享入口'),origin:'inferred_suggestion',
+      memoryUpdates:[{kind:'goal',text:'模型建议：用户已同意全部分享功能',sourceMessageIds:[request.inputMessageId],supersedesDecisionId:null}]});
+    f.coordinator.setFactory(suggested);
+    const first=await f.submit(project.id,'如何分享这个应用？');await f.service.tickCoordination();const firstResult=(await f.turn(first.turn.id)).result;
+    if(firstResult?.kind!=='change_proposal')throw new Error('Expected suggestion');assert.equal(firstResult.runId,null);
+    assert.equal((await f.request('GET',`/api/v2/projects/${project.id}/memory`)).data.decisions.length,0);
+    const dismissed=(await f.request('GET',`/api/v2/proposals/${firstResult.proposalId}`)).data;
+    await f.request('POST',`/api/v2/proposals/${dismissed.id}/dismiss`,{expectedRevision:dismissed.revision});
+    assert.equal((await f.request('GET',`/api/v2/projects/${project.id}/memory`)).data.decisions.length,0);
+    const second=await f.submit(project.id,'有哪些分享的建议？');await f.service.tickCoordination();const result=(await f.turn(second.turn.id)).result;
+    if(result?.kind!=='change_proposal')throw new Error('Expected proposal');const proposal=(await f.request('GET',`/api/v2/proposals/${result.proposalId}`)).data;
+    f.service.store.transaction(()=>{f.service.store.state.codes[0].runLimit=0;});
+    const blocked=await f.request('POST',`/api/v2/proposals/${proposal.id}/accept`,{expectedRevision:proposal.revision,runMode:'build'});assert.equal(blocked.status,403);
+    assert.equal((await f.request('GET',`/api/v2/projects/${project.id}/memory`)).data.decisions.length,0);
+    f.service.store.transaction(()=>{f.service.store.state.codes[0].runLimit=10;});
+    const accepted=await f.request('POST',`/api/v2/proposals/${proposal.id}/accept`,{expectedRevision:proposal.revision,runMode:'build'});assert.equal(accepted.status,202);
+    const duplicate=await f.request('POST',`/api/v2/proposals/${proposal.id}/accept`,{expectedRevision:proposal.revision,runMode:'build'});assert.equal(duplicate.data.run.id,accepted.data.run.id);
+    const mem=ProjectMemoryView.parse((await f.request('GET',`/api/v2/projects/${project.id}/memory`)).data);assert.equal(mem.decisions.length,1);
+    assert.equal(mem.decisions[0].text,proposal.goal);assert.equal(mem.decisions[0].sourceProposalId,proposal.id);
+    assert.equal(mem.decisions[0].sourceTurnId,second.turn.id);assert.deepEqual(mem.decisions[0].sourceMessageIds,[second.userMessage.id]);
+    const receipt=f.service.store.state.coordination.proposalConfirmations.find(item=>item.proposalId===proposal.id)!;
+    assert.equal(receipt.kind,'explicit_accept');assert.ok(receipt.actorSessionId);assert.equal(receipt.runId,accepted.data.run.id);
+    assert.equal(f.service.store.state.coordination.proposalConfirmations.filter(item=>item.proposalId===proposal.id).length,1);
+    f.coordinator.setFactory(()=>null);const cancelled=await f.submit(project.id,'还可以怎样分享？');await f.service.tickCoordination();const running=await f.turn(cancelled.turn.id);
+    await f.request('POST',`/api/v2/coordination-turns/${running.id}/cancel`,{expectedRevision:running.revision});
+    f.coordinator.complete(running.id,suggested(f.coordinator.entries.get(running.id)!.request));await f.service.tickCoordination();
+    assert.equal((await f.turn(running.id)).status,'cancelled');assert.equal((await f.request('GET',`/api/v2/projects/${project.id}/memory`)).data.decisions.length,1);
+    f.coordinator.setFactory(request=>({...fakeChange(request,'增加搜索框'),memoryUpdates:[{kind:'goal',text:'未被用户授权的额外目标',sourceMessageIds:[request.inputMessageId],supersedesDecisionId:null}]}));
+    const clear=await f.submit(project.id,'增加搜索框');await f.service.tickCoordination();const clearResult=(await f.turn(clear.turn.id)).result;
+    if(clearResult?.kind!=='change_proposal')throw new Error('Expected admitted change');assert.equal(clearResult.admission,'run_queued');
+    const finalMemory=ProjectMemoryView.parse((await f.request('GET',`/api/v2/projects/${project.id}/memory`)).data);
+    assert.equal(finalMemory.decisions.length,2);assert.ok(!finalMemory.decisions.some(decision=>decision.text.includes('额外目标')));
+    assert.equal(finalMemory.decisions.find(decision=>decision.sourceProposalId===clearResult.proposalId)?.text,'增加搜索框');
+  }finally{await f.close();}
+});
+
 test('response loss freezes context/hash across API restart instead of redispatching changed facts',async()=>{
   const f=await fixture();try{
     await f.login();const project=await f.project();f.coordinator.loseNextResponse();

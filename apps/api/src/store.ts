@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { AgentEventDto, ArtifactManifestDto, ProjectDto, ProjectEventDto, RunDto, StartExecutionDto, VersionDto } from '@atoms/contracts';
 import type { ConversationMessageDto, CoordinationTurnDto, StartCoordinationRequestDto, ConversationEventDto,
-  ChangeProposalDto, ClarificationDto, ProjectMemoryViewDto } from '@atoms/contracts/conversation';
+  ChangeProposalDto, ClarificationDto, ProjectMemoryViewDto, RouterResultDto } from '@atoms/contracts/conversation';
 
 export interface Code { id: string; hash: string; expiresAt: string; projectLimit: number; runLimit: number; revoked: boolean }
 export interface SessionRecord { id: string; codeId: string; tokenHash: string; expiresAt: string }
@@ -18,8 +18,9 @@ export interface CoordinationRecord { dto: CoordinationTurnDto; codeId: string; 
   requestedContextVersionId?:string|null; putPending?:boolean; cancelUncertainNotified?:boolean }
 export interface CoordinationState { turns: CoordinationRecord[]; messages: ConversationMessageDto[]; events: ConversationEventDto[];
   proposals: ChangeProposalDto[]; clarifications: ClarificationDto[]; memories: ProjectMemoryViewDto[];
-  revisions: Record<string, number> }
-const emptyCoordination = (): CoordinationState => ({ turns: [], messages: [], events: [], proposals: [], clarifications: [], memories: [], revisions: {} });
+  revisions: Record<string, number>; proposalMemorySuggestions:Record<string,RouterResultDto['memoryUpdates']>;
+  proposalConfirmations:{proposalId:string;runId:string;actorSessionId:string|null;kind:'explicit_accept'|'auto_clear';confirmedAt:string;proposalRevision:number}[] }
+const emptyCoordination = (): CoordinationState => ({ turns: [], messages: [], events: [], proposals: [], clarifications: [], memories: [], revisions: {},proposalMemorySuggestions:{},proposalConfirmations:[] });
 export interface VersionRecord { dto: VersionDto; artifactId: string; manifest: ArtifactManifestDto; manifestRaw: string; directory: string }
 export interface MessageRecord { id: string; projectId: string; runId: string | null; role: 'user'|'assistant';
   status: 'streaming'|'complete'; content: string; createdAt: string }
@@ -41,6 +42,7 @@ export class Store {
     this.state = row ? JSON.parse(row.document) : empty();
     // Additive migration only. Original identity, quotas, messages, events and versions remain intact.
     this.state.coordination ??= emptyCoordination();
+    this.state.coordination.proposalMemorySuggestions??={};this.state.coordination.proposalConfirmations??=[];
   }
   transaction<T>(fn: () => T): T {
     const before = JSON.stringify(this.state);

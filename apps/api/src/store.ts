@@ -11,7 +11,7 @@ export interface SessionRecord { id: string; codeId: string; tokenHash: string; 
 export interface ProjectRecord { dto: ProjectDto; codeId: string }
 export interface RunRecord { dto: RunDto; prompt: string; codeId: string; started: boolean; sourceSeq: number;
   request?: StartExecutionDto; manifestHash?: string; answerCommand?: object; cancelCommand?: object;
-  runtimeDisconnected?: boolean; originTurnId?: string; sourceMessageId?: string; proposalId?: string;
+  isolationWaiting?:boolean; runtimeDisconnected?: boolean; originTurnId?: string; sourceMessageId?: string; proposalId?: string;
   exactBaseVersionId?: string | null; delivery?: DeliveryRecord }
 export interface DeliveryRecord {
   stage:'preparing'|'executing'; preparationId:string; planningSeq:number;

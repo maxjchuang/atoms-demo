@@ -1,0 +1,379 @@
+{
+  "id": "profile_notes_v1",
+  "goal": "创建可新增、编辑、删除、搜索、拖拽并刷新保存的便签墙。",
+  "cases": [
+    {
+      "id": "case_add",
+      "name": "便签 add",
+      "description": "新增便签",
+      "steps": [
+        {
+          "id": "step_1",
+          "timeoutMs": 5000,
+          "op": "open_current_app"
+        },
+        {
+          "id": "step_2",
+          "timeoutMs": 5000,
+          "op": "save_count",
+          "target": {
+            "by": "test_id",
+            "value": "note_card"
+          },
+          "variable": "before_count"
+        },
+        {
+          "id": "step_3",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "新建便签",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_4",
+          "timeoutMs": 5000,
+          "op": "expect_count",
+          "target": {
+            "by": "test_id",
+            "value": "note_card"
+          },
+          "expected": {
+            "kind": "offset",
+            "variable": "before_count",
+            "offset": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "case_edit",
+      "name": "便签 edit",
+      "description": "编辑便签内容",
+      "steps": [
+        {
+          "id": "step_5",
+          "timeoutMs": 5000,
+          "op": "open_current_app"
+        },
+        {
+          "id": "step_6",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "新建便签",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_7",
+          "timeoutMs": 5000,
+          "op": "fill",
+          "target": {
+            "by": "label",
+            "name": "便签内容",
+            "exact": true,
+            "nth": 1
+          },
+          "value": "验收便签 A"
+        },
+        {
+          "id": "step_8",
+          "timeoutMs": 5000,
+          "op": "expect_value",
+          "target": {
+            "by": "label",
+            "name": "便签内容",
+            "exact": true,
+            "nth": 1
+          },
+          "comparison": "exact",
+          "value": "验收便签 A"
+        }
+      ]
+    },
+    {
+      "id": "case_delete",
+      "name": "便签 delete",
+      "description": "删除便签",
+      "steps": [
+        {
+          "id": "step_9",
+          "timeoutMs": 5000,
+          "op": "open_current_app"
+        },
+        {
+          "id": "step_10",
+          "timeoutMs": 5000,
+          "op": "save_count",
+          "target": {
+            "by": "test_id",
+            "value": "note_card"
+          },
+          "variable": "before_count"
+        },
+        {
+          "id": "step_11",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "label",
+            "name": "删除便签",
+            "exact": true,
+            "nth": 0
+          }
+        },
+        {
+          "id": "step_12",
+          "timeoutMs": 5000,
+          "op": "expect_count",
+          "target": {
+            "by": "test_id",
+            "value": "note_card"
+          },
+          "expected": {
+            "kind": "offset",
+            "variable": "before_count",
+            "offset": -1
+          }
+        }
+      ]
+    },
+    {
+      "id": "case_search",
+      "name": "便签 search",
+      "description": "按内容搜索便签",
+      "steps": [
+        {
+          "id": "step_13",
+          "timeoutMs": 5000,
+          "op": "open_current_app"
+        },
+        {
+          "id": "step_14",
+          "timeoutMs": 5000,
+          "op": "fill",
+          "target": {
+            "by": "label",
+            "name": "便签内容",
+            "exact": true,
+            "nth": 0
+          },
+          "value": "苹果验收"
+        },
+        {
+          "id": "step_15",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "新建便签",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_16",
+          "timeoutMs": 5000,
+          "op": "fill",
+          "target": {
+            "by": "label",
+            "name": "便签内容",
+            "exact": true,
+            "nth": 1
+          },
+          "value": "香蕉验收"
+        },
+        {
+          "id": "step_17",
+          "timeoutMs": 5000,
+          "op": "fill",
+          "target": {
+            "by": "label",
+            "name": "搜索便签",
+            "exact": true
+          },
+          "value": "苹果"
+        },
+        {
+          "id": "step_18",
+          "timeoutMs": 5000,
+          "op": "expect_count",
+          "target": {
+            "by": "test_id",
+            "value": "note_card"
+          },
+          "expected": {
+            "kind": "literal",
+            "value": 1
+          }
+        },
+        {
+          "id": "step_19",
+          "timeoutMs": 5000,
+          "op": "fill",
+          "target": {
+            "by": "label",
+            "name": "搜索便签",
+            "exact": true
+          },
+          "value": ""
+        },
+        {
+          "id": "step_20",
+          "timeoutMs": 5000,
+          "op": "expect_count",
+          "target": {
+            "by": "test_id",
+            "value": "note_card"
+          },
+          "expected": {
+            "kind": "literal",
+            "value": 2
+          }
+        }
+      ]
+    },
+    {
+      "id": "case_drag",
+      "name": "便签 drag",
+      "description": "拖拽移动便签",
+      "steps": [
+        {
+          "id": "step_21",
+          "timeoutMs": 5000,
+          "op": "open_current_app"
+        },
+        {
+          "id": "step_22",
+          "timeoutMs": 5000,
+          "op": "save_box",
+          "target": {
+            "by": "test_id",
+            "value": "note_card",
+            "nth": 0
+          },
+          "relativeTo": {
+            "by": "test_id",
+            "value": "note_board"
+          },
+          "variable": "before_box"
+        },
+        {
+          "id": "step_23",
+          "timeoutMs": 5000,
+          "op": "drag_by",
+          "target": {
+            "by": "label",
+            "name": "拖动便签",
+            "exact": true,
+            "nth": 0
+          },
+          "dx": 80,
+          "dy": 40
+        },
+        {
+          "id": "step_24",
+          "timeoutMs": 5000,
+          "op": "expect_box_moved",
+          "target": {
+            "by": "test_id",
+            "value": "note_card",
+            "nth": 0
+          },
+          "baseline": "before_box",
+          "dx": 80,
+          "dy": 40,
+          "tolerancePx": 8
+        }
+      ]
+    },
+    {
+      "id": "case_persist",
+      "name": "便签 persist",
+      "description": "刷新后保留内容和位置",
+      "steps": [
+        {
+          "id": "step_25",
+          "timeoutMs": 5000,
+          "op": "open_current_app"
+        },
+        {
+          "id": "step_26",
+          "timeoutMs": 5000,
+          "op": "fill",
+          "target": {
+            "by": "label",
+            "name": "便签内容",
+            "exact": true,
+            "nth": 0
+          },
+          "value": "刷新验收"
+        },
+        {
+          "id": "step_27",
+          "timeoutMs": 5000,
+          "op": "drag_by",
+          "target": {
+            "by": "label",
+            "name": "拖动便签",
+            "exact": true,
+            "nth": 0
+          },
+          "dx": 60,
+          "dy": 30
+        },
+        {
+          "id": "step_28",
+          "timeoutMs": 5000,
+          "op": "save_box",
+          "target": {
+            "by": "test_id",
+            "value": "note_card",
+            "nth": 0
+          },
+          "relativeTo": {
+            "by": "test_id",
+            "value": "note_board"
+          },
+          "variable": "saved_box"
+        },
+        {
+          "id": "step_29",
+          "timeoutMs": 5000,
+          "op": "reload"
+        },
+        {
+          "id": "step_30",
+          "timeoutMs": 5000,
+          "op": "expect_value",
+          "target": {
+            "by": "label",
+            "name": "便签内容",
+            "exact": true,
+            "nth": 0
+          },
+          "comparison": "exact",
+          "value": "刷新验收"
+        },
+        {
+          "id": "step_31",
+          "timeoutMs": 5000,
+          "op": "expect_box_same",
+          "target": {
+            "by": "test_id",
+            "value": "note_card",
+            "nth": 0
+          },
+          "baseline": "saved_box",
+          "tolerancePx": 8
+        }
+      ]
+    }
+  ]
+}

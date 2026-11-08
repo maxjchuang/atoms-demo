@@ -1,0 +1,173 @@
+{
+  "id": "profile_calculator_v1",
+  "goal": "创建支持加法、乘法和清空的计算器。",
+  "cases": [
+    {
+      "id": "case_addition",
+      "name": "计算器加法",
+      "description": "计算器算术与清空",
+      "steps": [
+        {
+          "id": "step_32",
+          "timeoutMs": 5000,
+          "op": "open_current_app"
+        },
+        {
+          "id": "step_33",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "7",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_34",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "+",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_35",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "5",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_36",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "=",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_37",
+          "timeoutMs": 5000,
+          "op": "expect_text",
+          "target": {
+            "by": "test_id",
+            "value": "result"
+          },
+          "comparison": "exact",
+          "value": "12"
+        }
+      ]
+    },
+    {
+      "id": "case_multiply",
+      "name": "计算器乘法与清空",
+      "description": "计算器算术与清空",
+      "steps": [
+        {
+          "id": "step_38",
+          "timeoutMs": 5000,
+          "op": "open_current_app"
+        },
+        {
+          "id": "step_39",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "C",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_40",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "9",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_41",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "×",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_42",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "3",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_43",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "=",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_44",
+          "timeoutMs": 5000,
+          "op": "expect_text",
+          "target": {
+            "by": "test_id",
+            "value": "result"
+          },
+          "comparison": "exact",
+          "value": "27"
+        },
+        {
+          "id": "step_45",
+          "timeoutMs": 5000,
+          "op": "click",
+          "target": {
+            "by": "role",
+            "role": "button",
+            "name": "C",
+            "exact": true
+          }
+        },
+        {
+          "id": "step_46",
+          "timeoutMs": 5000,
+          "op": "expect_text",
+          "target": {
+            "by": "test_id",
+            "value": "result"
+          },
+          "comparison": "exact",
+          "value": "0"
+        }
+      ]
+    }
+  ]
+}

@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/pr
 import path from 'node:path';
 import { RelativePath } from '@atoms/contracts';
 
-export const sha256 = (bytes: string | Buffer) => createHash('sha256').update(bytes).digest('hex');
+export const sha256 = (bytes: string | Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 export async function safeFile(root: string, name: string) {
   RelativePath.parse(name);
   const resolvedRoot = await realpath(root);
@@ -17,7 +17,7 @@ export async function safeFile(root: string, name: string) {
   }
   return target;
 }
-export async function putFile(root: string, name: string, text: string | Buffer) {
+export async function putFile(root: string, name: string, text: string | Uint8Array) {
   const target = await safeFile(root, name);
   await mkdir(path.dirname(target), { recursive: true });
   await writeFile(target, text);

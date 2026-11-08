@@ -20,3 +20,8 @@ export function assertActualJobPolicy(info:any,phase:JobPhase,imageId:string,exp
  if(phase==='browser'&&!c.SecurityOpt.some((s:string)=>s.startsWith('seccomp=')))throw new Error('Browser seccomp missing');
  return{deadlineAt:deadline,watchdogSourceHash:JOB_POLICY.watchdogSourceHash,imageDigest:imageId,policyHash:POLICY_HASH,network:c.NetworkMode,logDriver:c.LogConfig.Type,uid:'10001:10001',watchdogUid:info.Config.User,readOnly:c.ReadonlyRootfs,cpuNano:c.NanoCpus,memory:c.Memory,swap:c.MemorySwap,pids:c.PidsLimit,tmpfs:c.Tmpfs,ipc:c.IpcMode,capDrop:c.CapDrop,noNewPrivileges:true,browserSeccompHash:phase==='browser'?JOB_POLICY.browserSeccompHash:null};
 }
+
+export function assertActualRunnerIdentity(value:{uid:number;gid:number;watchdogUid:number}){
+ if(value.uid!==JOB_POLICY.uid||value.gid!==JOB_POLICY.gid||value.watchdogUid!==JOB_POLICY.watchdogUid)throw new Error('Actual fixed runner/watchdog identity mismatch');
+ return{runnerUid:value.uid,runnerGid:value.gid,watchdogUid:value.watchdogUid};
+}

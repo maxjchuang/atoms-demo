@@ -11,7 +11,7 @@
 | 前端 | frontend_boundary_review | apps/web | 固定版本分享、邀请构建、复制/过期/拒绝/断网反馈；Mock 与实际服务独立验证；外部浏览器验收工具 |
 | 主管 | root | 协议/管理 Markdown、Git、验收与审查 | 冻结接口与范围；派活；独立验证；合并/推送及实际部署，不编写业务或基础设施实现 |
 
-共享 Schema 由后端线临时独占 `packages/contracts` 的新增 sharing 子入口，先单独提交 Schema/fixtures/正反例与协议 MD，经主管批准后消费者才实现。旧 execution v1、conversation v0.2、delivery v0.1 strict DTO 不扩大、不重新解释。
+共享 Schema 分文件独占：后端线负责新增 sharing Schema/fixtures/tests/协议 MD，并唯一编辑 contracts/package.json 的 sharing/isolation exports；Agent 线负责新增 isolation Schema/fixtures/tests/协议 MD。二者不编辑旧模块，先单独提交 G0，经主管批准后消费者才实现。旧 execution v1、conversation v0.2、delivery v0.1 strict DTO 不扩大、不重新解释。
 
 各线使用原独立 worktree 同步 M2 的 main 基线后继续，不在 live main 编写实现。跨目录变更先报主管明确归属；另一线只读 review，不直接修补对方代码。Agent 与后端需在 G0 冻结任务镜像、可信控制器、挂载/卷及调用接口，不能各自猜 Docker 参数。
 
@@ -36,6 +36,8 @@
 ## 执行与部署边界
 
 可信模型调用者与不可信任务执行环境分开；Key 只给前者。任务不可挂 Docker socket、宿主 home、控制凭证、DSH native home、其他任务或平台数据根。必须防止通过 `/proc`、文件挂载、浏览器网络或父进程读取凭证。受控 Docker 能力仅归可信控制器，不把任意镜像/挂载/命令/网络参数交给模型或公开 HTTP。
+
+执行任务全部 network=none，含实际 clean install；固定公共依赖由可信镜像构建预取且校验 integrity，任务复制为私有离线 store，在新目录真实 offline frozen 安装，不使用平台 node_modules。Linux 工具链与 cache/image/policy hash 必须另行记录，不能冒称每次任务进行了在线下载；缺缓存即失败。
 
 Docker 资产必须由当前源码可追溯构建。现有 `atoms-runner:local` / `atoms-gateway:local` 及其他任务容器不是本阶段验收证据，不覆盖、清理或借用其卷。使用独立 `atoms-m3-public` Compose project、端口和镜像标识；现有 live 的 5173/3001/3002/4100 保留。
 

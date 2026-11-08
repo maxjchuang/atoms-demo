@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {unzipSync} from 'fflate';
 import {AgentEventPage,ArtifactManifest,RelativePath,type ArtifactManifestDto,type RunDto,type AgentEventDto} from '@atoms/contracts';
 import * as D from '@atoms/contracts/delivery';
+import {hasDerivedModelCriteria,assertCanonicalSeedCoverage} from '@atoms/contracts/delivery-projection';
 import type {Store,RunRecord,SessionRecord,VersionRecord,ProjectRecord} from './store.js';
 
 type Host={app:FastifyInstance;store:Store;dataDir:string;agentUrl:string;serviceToken:string;toolchainId:string;
@@ -61,10 +62,12 @@ export function registerDelivery(h:Host){
   const d=r.delivery!,req=d.prepare!,proposed=snapshot.result!;
   assertHash(proposed.spec);assertHash(proposed.plan);
   if(snapshot.requestHash!==d.prepareHash||snapshot.id!==d.preparationId||snapshot.runId!==r.dto.id||snapshot.executionId!==r.dto.executionId||snapshot.projectId!==r.dto.projectId)throw new Error('Preparation subject mismatch');
+  if(req.planningMode==='model_proposed'&&hasDerivedModelCriteria(req.seed,proposed.spec))assertCanonicalSeedCoverage(req.seed,proposed.spec,proposed.plan);
   const binding=D.FrozenDeliveryBinding.parse(signed({protocolVersion:D.DeliveryProtocolVersion,id:id('binding'),projectId:r.dto.projectId,runId:r.dto.id,executionId:r.dto.executionId,preparationId:d.preparationId,
    seed:{id:req.seed.id,hash:req.seed.hash},spec:{id:proposed.spec.id,hash:proposed.spec.hash},plan:{id:proposed.plan.id,hash:proposed.plan.hash},baseVersionId:req.baseVersionId,input:req.input,planningMode:req.planningMode,toolchain:req.toolchain,
    policyRevision:D.DeliveryPolicyRevision,exportPolicyRevision:D.ExportPolicyRevision,totalBudget:req.totalBudget,planningUsage:proposed.usage,frozenAt:now()}));
   const bundle=D.FrozenDeliveryBundle.parse({seed:req.seed,spec:proposed.spec,plan:proposed.plan,binding});
+  D.FreezeDeliveryPlanRequest.parse({preparationRequest:req,preparation:snapshot,bundle});
   const budget={...req.totalBudget,maxWallTimeMs:req.totalBudget.maxWallTimeMs-proposed.usage.activeMs,maxModelSteps:req.totalBudget.maxModelSteps-proposed.usage.modelSteps,maxInputTokens:req.totalBudget.maxInputTokens-proposed.usage.inputTokens,maxOutputTokens:req.totalBudget.maxOutputTokens-proposed.usage.outputTokens};
   const wrapper=D.DeliveryExecutionRequest.parse({protocolVersion:D.DeliveryProtocolVersion,execution:{...r.request!,budget},bundle});
   persist(()=>{const record=current(r.dto.id);if(record.dto.status==='cancelling')return;if(record.delivery!.wrapper){if(D.canonicalDeliveryJson(record.delivery!.wrapper)!==D.canonicalDeliveryJson(wrapper))throw new Error('Already frozen');return;}record.delivery!.wrapper=wrapper;record.delivery!.stage='executing';record.delivery!.executionPutPending=false;record.delivery!.runtimeStopped=false;});

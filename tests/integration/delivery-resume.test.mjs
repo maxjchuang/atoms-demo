@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,lstat,rm,cp,utimes,symlink,readdir} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,lstat,rm,cp,copyFile,utimes,symlink,readdir} from 'node:fs/promises';
 import {DatabaseSync} from 'node:sqlite';
 import {spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {RESUME_TARGET as t,QUALITY_ASK,reviewReceipt,receiptHash,assertExecutionGuards,assertResumeState,assertNoActiveState,
- privateJson,resumeSecrets,childEnvironment,verifyBackup,immutableEvidence,submitWithReconciliation,logRedactor,canonical,treeMetadata} from './delivery-resume-helpers.mjs';
+ privateJson,resumeSecrets,childEnvironment,verifyBackup,immutableEvidence,submitWithReconciliation,logRedactor,readApiStateForReview,sha,canonical,treeMetadata} from './delivery-resume-helpers.mjs';
 
 function synthetic(directory){
  const first='version_1e80ef9242bc941ab31e',second='version_e494864c4b20e3dbcca9';
@@ -110,15 +110,42 @@ test('full backup checks metadata and opaque bytes without following links; orig
  }finally{await f.close();await rm(backup,{recursive:true,force:true});}
 });
 
+test('private review replica reads latest uncheckpointed WAL state and leaves original metadata/bytes intact, then cleans up',async()=>{
+ const f=await fixture(),writer=new DatabaseSync(path.join(f.directory,'api/api.sqlite'));let replica;
+ try{
+  writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0');
+  const latest={...f.state,latestUncheckpointed:'synthetic current WAL value'};writer.prepare('UPDATE app_state SET document=? WHERE id=1').run(JSON.stringify(latest));
+  const snapshot=async()=>({metadata:await treeMetadata(f.directory),bytes:await Promise.all(['','-wal','-shm'].map(async suffix=>sha(await readFile(path.join(f.directory,'api/api.sqlite'+suffix)))))});
+  const before=await snapshot();
+  const actual=await readApiStateForReview(f.directory,{copy:async(source,target)=>{replica=path.dirname(path.dirname(target));assert.equal((await lstat(replica)).mode&0o777,0o700);await copyFile(source,target);}});
+  assert.equal(actual.latestUncheckpointed,latest.latestUncheckpointed);assert.deepEqual(await snapshot(),before);
+  await assert.rejects(lstat(replica),{code:'ENOENT'});
+ }finally{writer.close();await f.close();}
+});
+
+test('review replica rejects source changes or copy failure and removes its temporary directory on both paths',async()=>{
+ const f=await fixture(),writer=new DatabaseSync(path.join(f.directory,'api/api.sqlite'));let replica;
+ try{
+  writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0');writer.prepare('UPDATE app_state SET document=? WHERE id=1').run(JSON.stringify({...f.state,marker:'before'}));
+  await assert.rejects(readApiStateForReview(f.directory,{copy:async(source,target)=>{replica=path.dirname(path.dirname(target));await copyFile(source,target);if(source.endsWith('-shm'))writer.prepare('UPDATE app_state SET document=? WHERE id=1').run(JSON.stringify({...f.state,marker:'after'}));}}),/unstable|changed while copying/);
+  await assert.rejects(lstat(replica),{code:'ENOENT'});
+  await assert.rejects(readApiStateForReview(f.directory,{copy:async(_source,target)=>{replica=path.dirname(path.dirname(target));throw new Error('Synthetic copy failure');}}),/Synthetic copy failure/);
+  await assert.rejects(lstat(replica),{code:'ENOENT'});
+ }finally{writer.close();await f.close();}
+});
+
 test('actual CLI dry-run is read-only and missing execute guards fail before secrets, services or .env loading',async()=>{
- const f=await fixture();try{
+ const f=await fixture(),writer=new DatabaseSync(path.join(f.directory,'api/api.sqlite'));try{
+  writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0');
+  f.state.coordination.proposals[0].goal+=' Latest synthetic WAL receipt.';f.receipt=reviewReceipt(f.state,f.directory);
+  writer.prepare('UPDATE app_state SET document=? WHERE id=1').run(JSON.stringify(f.state));
   const cwd=fileURLToPath(new URL('../../packages/contracts/',import.meta.url)),runner=fileURLToPath(new URL('./delivery-resume.mjs',import.meta.url));
   const env={PATH:process.env.PATH,HOME:process.env.HOME,TMPDIR:process.env.TMPDIR,DEEPSEEK_API_KEY:'fake-must-not-be-used'};
   const before=canonical(await treeMetadata(f.directory));
   const dry=spawnSync(process.execPath,['--import','tsx',runner,'--directory',f.directory],{cwd,env,encoding:'utf8',timeout:10000});
-  assert.equal(dry.status,0,dry.stderr);const output=JSON.parse(dry.stdout);assert.equal(output.receipt.base.actualVersionNumber,3);assert.equal(output.receiptHash,receiptHash(f.receipt));assert.match(output.mode,/no services/);
+  assert.equal(dry.status,0,dry.stderr);const output=JSON.parse(dry.stdout);assert.equal(output.receipt.base.actualVersionNumber,3);assert.equal(output.receiptHash,receiptHash(f.receipt));assert.match(output.mode,/no source\/control writes/);
   assert.equal(canonical(await treeMetadata(f.directory)),before);assert.ok(!(await readdir(f.directory)).includes('resume-control'));assert.ok(!dry.stdout.includes(env.DEEPSEEK_API_KEY));
   const blocked=spawnSync(process.execPath,['--import','tsx',runner,'--directory',f.directory,'--execute','--real','--receipt-hash',output.receiptHash],{cwd,env,encoding:'utf8',timeout:10000});
   assert.equal(blocked.status,1);assert.match(blocked.stderr,/ATOMS_ALLOW_REAL_DELIVERY_INTEGRATION/);assert.equal(canonical(await treeMetadata(f.directory)),before);
- }finally{await f.close();}
+ }finally{writer.close();await f.close();}
 });

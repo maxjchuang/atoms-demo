@@ -53,11 +53,13 @@ async function run(t: any, scenario: 'clean_repair' | 'no_change' = 'clean_repai
     }
     if (extra === 'install') {
         const finish = app.delivery.finish.bind(app.delivery);
-        app.delivery.finish = async (...args) => { const oldPath = process.env.PATH; process.env.PATH = path.join(dataDir, 'no-tools'); try {
+        // Clean install launches the prepared pnpm CLI through process.execPath, not PATH.
+        // Break only its Node launcher after workspace verification has completed.
+        app.delivery.finish = async (...args) => { const oldExecPath = process.execPath; process.execPath = path.join(dataDir, 'not-a-clean-node'); try {
             return await finish(...args);
         }
         finally {
-            process.env.PATH = oldPath;
+            process.execPath = oldExecPath;
         } };
     }
     await app.delivery.start(wrapper, wrapper.execution.executionId);

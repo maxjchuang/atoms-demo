@@ -6,3 +6,5 @@ export const isolationReady = IsolationCapabilities.parse({ protocolVersion: Iso
 export const isolationHostLocal = IsolationCapabilities.parse({ protocolVersion: IsolationProtocolVersion, backend: 'host_local', ready: false,
   reasonCodes: ['HOST_BACKEND_UNSAFE'], toolchainId: null, imageDigest: null, policyHash: null, cacheHash: null, probeRevision: null, platform: null });
 export const isolationDockerNotReady = IsolationCapabilities.parse({ ...isolationHostLocal, backend: 'docker_linux', reasonCodes: ['DOCKER_UNAVAILABLE','PROBE_NOT_PASSED'] });
+
+export const isolationReadyAmd64 = IsolationCapabilities.parse({ ...isolationReady, toolchainId: 'toolchain_react_linux_amd64_v1', platform: 'linux/amd64' });

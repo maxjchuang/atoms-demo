@@ -37,3 +37,30 @@ test('v2 errors keep their independent quota code and do not become a build retr
   try { await assert.rejects(coordinationApi.submit('project_demo', { input: { kind: 'text', content: '你好' }, mode: 'ask', runMode: 'build' }), error => error instanceof HttpError && error.code === 'COORDINATION_QUOTA_EXCEEDED'); }
   finally { globalThis.fetch = original; }
 });
+
+test('retry accepts the actual shared userMessage+turn response with exactly one POST', async () => {
+  const original = fetch; const requests: { path: string; options: RequestInit | undefined }[] = [];
+  globalThis.fetch = async (input, options) => { requests.push({ path: String(input), options }); return Response.json({ userMessage: consultUser, turn: consultTurn }, { status: 202 }); };
+  try {
+    const response = await coordinationApi.retry(consultTurn.id, consultTurn.revision, 'retry_request_001');
+    assert.deepEqual(response, { userMessage: consultUser, turn: consultTurn }); assert.equal(requests.length, 1);
+    assert.equal(requests[0].path, `/api/v2/coordination-turns/${consultTurn.id}/retry`); assert.equal(requests[0].options?.method, 'POST');
+    assert.deepEqual(JSON.parse(String(requests[0].options?.body)), { expectedRevision: consultTurn.revision });
+    assert.equal(new Headers(requests[0].options?.headers).get('Idempotency-Key'), 'retry_request_001');
+    assert.equal(new Headers(requests[0].options?.headers).get('X-Atoms-Coordination-Version'), '0.2.0');
+  } finally { globalThis.fetch = original; }
+});
+test('explicit retry after a lost retry receipt retains its idempotency key without automatic extra POSTs', async () => {
+  const original = fetch; const keys: string[] = []; const accepted = new Set<string>();
+  globalThis.fetch = async (_input, options) => {
+    const key = new Headers(options?.headers).get('Idempotency-Key')!; keys.push(key); accepted.add(key);
+    if (keys.length === 1) throw new TypeError('receipt lost after server accepted turn');
+    return Response.json({ userMessage: consultUser, turn: consultTurn }, { status: 202 });
+  };
+  try {
+    await assert.rejects(coordinationApi.retry(consultTurn.id, consultTurn.revision + 1), error => error instanceof HttpError && error.code === 'NETWORK_ERROR');
+    assert.equal(keys.length, 1, 'No silent automatic retry after an uncertain response');
+    const response = await coordinationApi.retry(consultTurn.id, consultTurn.revision + 1);
+    assert.equal(response.turn.id, consultTurn.id); assert.equal(keys.length, 2); assert.equal(keys[0], keys[1]); assert.equal(accepted.size, 1);
+  } finally { globalThis.fetch = original; }
+});

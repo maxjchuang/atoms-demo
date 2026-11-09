@@ -46,7 +46,7 @@ export const coordinationApi = {
   events: (id: string, after: number) => request(`/projects/${id}/conversation-events?after=${after}&limit=100`, ConversationEventPage),
   turn: (id: string) => request(`/coordination-turns/${id}`, CoordinationTurn),
   cancel: (id: string, expectedRevision: number, key?: string) => post(`/coordination-turns/${id}/cancel`, { expectedRevision }, CancelCoordinationResponse, key),
-  retry: (id: string, expectedRevision: number, key?: string) => post(`/coordination-turns/${id}/retry`, { expectedRevision }, z.object({ turn: CoordinationTurn }).strict(), key),
+  retry: (id: string, expectedRevision: number, key?: string) => post(`/coordination-turns/${id}/retry`, { expectedRevision }, SubmitMessageResponse, key),
   proposal: (id: string) => request(`/proposals/${id}`, ChangeProposal),
   accept: (id: string, expectedRevision: number, runMode: 'build' | 'plan', key?: string) => post(`/proposals/${id}/accept`, { expectedRevision, runMode }, AcceptProposalResponse, key),
   refreshProposal: (id: string, expectedRevision: number, key?: string) => post(`/proposals/${id}/refresh`, { expectedRevision }, SubmitMessageResponse, key),

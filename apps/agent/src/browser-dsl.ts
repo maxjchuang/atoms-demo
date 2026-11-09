@@ -35,9 +35,14 @@ async function until(test: () => Promise<boolean>, timeoutMs: number, signal: Ab
   throw new Error('Bounded browser assertion did not match the declared expectation');
 }
 
+export const GEOMETRY_STABLE_MS=120;
+export class GeometryObservationBudgetError extends Error {readonly controllerCategory='replan_required';constructor(){super('冻结几何步骤的观测时间不足以验证连续稳态，需要重新审阅计划；源码修复不能改变该时间预算。');}}
+export function assertGeometryObservationBudget(plan:BrowserTestPlanDto){if(plan.cases.some(c=>c.steps.some(s=>['save_box','expect_box_moved','expect_box_same'].includes(s.op)&&s.timeoutMs<GEOMETRY_STABLE_MS+40)))throw new GeometryObservationBudgetError();}
+
+function geometryWindow(){let anchor:Box|null=null;let since=0;return(actual:Box,matched=true)=>{const now=Date.now();if(!matched){anchor=null;since=now;return 0;}if(!anchor||(['x','y','width','height']as const).some(k=>Math.abs(actual[k]-anchor![k])>0.5)){anchor=actual;since=now;}return now-since;};}
 /** Fixed interpreter: never evals strings or accepts model URLs/JS/commands. */
-export async function runBrowserPlan(options: { dist: string; plan: BrowserTestPlanDto; evidenceDir: string; signal: AbortSignal; chromiumSandbox?: boolean }) {
-  const plan = BrowserTestPlan.parse(options.plan); await mkdir(options.evidenceDir, { recursive: true });
+export async function runBrowserPlan(options: { dist: string; plan: BrowserTestPlanDto; evidenceDir: string; signal: AbortSignal; chromiumSandbox?: boolean;trustedBrowserLocale?:string }) {
+  const plan = BrowserTestPlan.parse(options.plan);assertGeometryObservationBudget(plan); await mkdir(options.evidenceDir, { recursive: true });
   const server = createServer(async (req, res) => {
     try {
       const name = decodeURIComponent(new URL(req.url || '/', 'http://app').pathname).slice(1) || 'index.html';
@@ -65,7 +70,7 @@ export async function runBrowserPlan(options: { dist: string; plan: BrowserTestP
       const log: string[] = []; const evidenceIds = [`evidence_${planned.id}_log`];
       if (controller.signal.aborted) { results.push(CaseResult.parse({ caseId: planned.id, criterionIds: planned.criterionIds,
         status: 'not_run', steps: states, failure: null, reason: 'Browser or Run budget/cancellation interrupted remaining cases.', evidenceIds: [] })); continue; }
-      const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block' });
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, serviceWorkers: 'block',...(options.trustedBrowserLocale?{locale:options.trustedBrowserLocale}:{}) });
       const page = await context.newPage(); const errors: string[] = []; const variables = new Map<string, Variable>();
       page.on('pageerror', (error) => errors.push(error.message));
       page.on('frameattached', () => errors.push('Unexpected child frame is forbidden'));
@@ -92,7 +97,7 @@ export async function runBrowserPlan(options: { dist: string; plan: BrowserTestP
             case 'check': await target!.setChecked(entry.checked); break;
             case 'press': await target!.press(entry.key); break;
             case 'save_count': {const count=await target!.count();observed.count=count;variables.set(entry.variable,{kind:'count',value:count});break;}
-            case 'save_box': {const value=await box(page,entry.target,entry.relativeTo);observed.box=value;variables.set(entry.variable,{kind:'box',value,...(entry.relativeTo?{relativeTo:entry.relativeTo}:{})});break;}
+            case 'save_box': {const stable=geometryWindow();let value:Box|undefined;await until(async()=>{value=await box(page,entry.target,entry.relativeTo);observed.box=value;observed.stableForMs=stable(value);observed.requiredStableMs=GEOMETRY_STABLE_MS;return Number(observed.stableForMs)>=GEOMETRY_STABLE_MS;},entry.timeoutMs,controller.signal);variables.set(entry.variable,{kind:'box',value:value!,...(entry.relativeTo?{relativeTo:entry.relativeTo}:{})});break;}
             case 'drag_by': {
               const position = await target!.boundingBox(); if (!position) throw new Error('Drag target missing');
               const x = position.x + position.width / 2, y = position.y + position.height / 2;
@@ -111,16 +116,16 @@ export async function runBrowserPlan(options: { dist: string; plan: BrowserTestP
               observed.expectedCount=expected;await until(async()=>{const count=await target!.count();observed.count=count;return count===expected;},entry.timeoutMs,controller.signal);break;
             }
             case 'expect_box_moved': case 'expect_box_same': {
-              const baseline = variables.get(entry.baseline); if (baseline?.kind !== 'box') throw new Error('Invalid box baseline');
+              const baseline = variables.get(entry.baseline); if (baseline?.kind !== 'box') throw new Error('Invalid box baseline');const stable=geometryWindow();
               await until(async () => {
                 const actual = await box(page, entry.target, baseline.relativeTo);
                 const dx = entry.op === 'expect_box_moved' ? entry.dx : 0, dy = entry.op === 'expect_box_moved' ? entry.dy : 0;observed.baseline=baseline.value;observed.box=actual;observed.delta={dx:actual.x-baseline.value.x,dy:actual.y-baseline.value.y};observed.expectedDelta={dx,dy};observed.expectedPosition={x:baseline.value.x+dx,y:baseline.value.y+dy};observed.lastDrag=lastDrag;
-                return Math.abs(actual.x - baseline.value.x - dx) <= entry.tolerancePx && Math.abs(actual.y - baseline.value.y - dy) <= entry.tolerancePx;
+                const matched=Math.abs(actual.x - baseline.value.x - dx) <= entry.tolerancePx && Math.abs(actual.y - baseline.value.y - dy) <= entry.tolerancePx;observed.stableForMs=stable(actual,matched);observed.requiredStableMs=GEOMETRY_STABLE_MS;return matched&&Number(observed.stableForMs)>=GEOMETRY_STABLE_MS;
               }, entry.timeoutMs, controller.signal); break;
             }
           }
           if (errors.length) throw new Error('Application runtime/frame boundary error: ' + errors[0].slice(0, 500));
-          states[ordinal].status = 'passed'; log.push(JSON.stringify({ stepId: entry.id, op: entry.op, status: 'passed' }));
+          states[ordinal].status = 'passed'; log.push(JSON.stringify({ stepId: entry.id, op: entry.op, status: 'passed',...(['save_box','expect_box_moved','expect_box_same'].includes(entry.op)?{actual:boundBrowserObservation(observed)}:{}) }));
         }
       } catch (error) {
         const index = Math.min(ordinal, planned.steps.length - 1); states[index].status = 'failed';

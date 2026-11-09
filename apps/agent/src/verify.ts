@@ -19,7 +19,7 @@ export const mediaType = (name: string) => name.endsWith('.html') ? 'text/html; 
       : name.endsWith('.png') ? 'image/png' : name.endsWith('.json') ? 'application/json' : 'text/plain; charset=utf-8';
 
 export async function verificationCommand(args: string[], workspace: string, signal: AbortSignal) {
-  return await new Promise<{ success: boolean; log: string }>((resolve, reject) => {
+  return await new Promise<{ success: boolean; log: string;exitCode:number|null;terminationSignal:NodeJS.Signals|null }>((resolve, reject) => {
     if (signal.aborted) return reject(new Error('Execution aborted'));
     const child = spawn(process.execPath, args, { cwd: workspace, detached: process.platform !== 'win32',
       env: { PATH: process.env.PATH, HOME: workspace, NODE_ENV: 'production' }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -31,10 +31,10 @@ export async function verificationCommand(args: string[], workspace: string, sig
     };
     signal.addEventListener('abort', stop, { once: true });
     child.on('error', (error) => { signal.removeEventListener('abort', stop); reject(error); });
-    child.on('close', (code) => {
+    child.on('close', (code,terminationSignal) => {
       signal.removeEventListener('abort', stop);
       if (signal.aborted) reject(new Error('Execution aborted'));
-      else resolve({ success: code === 0, log: log || `Exited ${code}` });
+      else resolve({ success: code === 0, log: log || `Exited ${code}`,exitCode:code,terminationSignal });
     });
   });
 }
@@ -62,9 +62,9 @@ export async function verifyApplication(workspace: string, evidenceRoot: string,
   };
   const dependency = options.installedDependencies ? createRequire(path.join(workspace, 'package.json')) : require;
   const typed = await checkCommand('typecheck', [dependency.resolve('typescript/bin/tsc'), '--noEmit']);
-  if (!typed.success) return { checks, errors: typed.log };
+  if (!typed.success) return { checks, errors: typed.log,failureCategory: !typed.terminationSignal&&/error TS[0-9]+:/.test(typed.log)?'code_check' as const:'infrastructure' as const };
   const built = await checkCommand('build', [path.join(path.dirname(dependency.resolve('vite/package.json')), 'bin/vite.js'), 'build']);
-  if (!built.success) return { checks, errors: built.log };
+  if (!built.success) return { checks, errors: built.log,failureCategory: !built.terminationSignal&&/\[vite:|RollupError|Transform failed|Could not resolve/.test(built.log)?'code_check' as const:'infrastructure' as const };
   activity('开始浏览器加载检查：验证页面可加载且无运行时异常。');
   const smoke = await smokeBrowser(path.join(workspace, 'dist'), evidenceRoot, signal, options.chromiumSandbox);
   const check: CheckValue = { id: 'check_smoke', kind: 'smoke', name: '浏览器加载检查', required: true,
@@ -72,7 +72,7 @@ export async function verifyApplication(workspace: string, evidenceRoot: string,
     evidenceIds: ['evidence_smoke', ...(smoke.screenshot ? ['evidence_screenshot'] : [])] };
   checks.push(check); report(check);
   activity(smoke.success ? '浏览器加载检查通过；具体功能行为仍需验收。' : '浏览器加载检查未通过，已保存检查日志。');
-  return { checks, errors: smoke.success ? null : smoke.log };
+  return { checks, errors: smoke.success ? null : smoke.log,failureCategory:smoke.success?undefined:smoke.failureCategory };
 }
 
 export async function smokeBrowser(dist: string, evidenceRoot: string, signal: AbortSignal, chromiumSandbox = false) {
@@ -87,7 +87,7 @@ export async function smokeBrowser(dist: string, evidenceRoot: string, signal: A
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Smoke server failed');
   const origin = `http://127.0.0.1:${address.port}`;
-  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;let failureCategory:'code_check'|'infrastructure'='infrastructure';
   let log = ''; let screenshot = false;
   const stop = () => { void browser?.close(); };
   signal.addEventListener('abort', stop, { once: true });
@@ -101,6 +101,7 @@ export async function smokeBrowser(dist: string, evidenceRoot: string, signal: A
     await page.route('**/*', (route) => route.request().url().startsWith(origin + '/') ? route.continue() : route.abort());
     const response = await page.goto(origin, { waitUntil: 'networkidle', timeout: 15000 });
     const text = await page.locator('#root').innerText({ timeout: 10000 });
+    if(response?.ok()&&(!text.trim()||errors.length))failureCategory='code_check';
     if (!response?.ok() || !text.trim() || errors.length) throw new Error(`Browser smoke failed: ${errors.join('; ') || 'empty app or HTTP error'}`);
     await page.screenshot({ path: path.join(evidenceRoot, 'screenshot.png'), fullPage: true }); screenshot = true;
     log = `Browser loaded HTTP ${response.status()}; #root contains ${text.trim().length} characters; no pageerror. Behavior acceptance is not implied.`;
@@ -112,5 +113,5 @@ export async function smokeBrowser(dist: string, evidenceRoot: string, signal: A
   }
   if (signal.aborted) throw new Error('Execution aborted');
   await writeFile(path.join(evidenceRoot, 'smoke.log'), log);
-  return { success: screenshot, log, screenshot };
+  return { success: screenshot, log, screenshot,failureCategory };
 }

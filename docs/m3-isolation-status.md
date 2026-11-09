@@ -29,7 +29,7 @@
 
 - 公共Docker拓扑仅loopback18080/18081；API/Agent/Broker无hostports，Broker唯一socket；模型凭据独立卷只给trusted Agent及一次性network-none Agent ingress。主管实际5角色uid1000/readonly/caps0与mount检查通过。
 - Homebrew和官方Developer ID签名Darwin cloudflared tunnel都被本机SIGKILL，原软件和安全设置未修改。显式官方Linux arm64 Docker transport已校验SHA、隔离live sentinel网络探针通过；连接器只接GW专用edge，无token/data/provider/socket挂载。双QuickTunnel域名已分配、实际外部工作台HTTP200、真实浏览器登录Secure/HttpOnly/host-only/SameSite=Lax通过。这不等于完整应用分享G5。
-- 实际Key未进argv/ENV/image/API/GW/Broker/admin/job；临时host输入已删。主管对六类当前镜像config/history/raw+gzip层扫描真实配置Key字节（4.81GB/98文件/59gzip），0命中，未输出Key值，临时needle/tar已删。
+- 实际Key未进构建参数、镜像或容器配置ENV，也未提供给API/GW/Broker/admin/job；只在受信模型Agent与其native请求进程的私有内存/env中使用；临时host输入已删。主管对六类当前镜像config/history/raw+gzip层扫描真实配置Key字节（4.81GB/98文件/59gzip），0命中，未输出Key值，临时needle/tar已删。
 - 真实model凭据仍只保存在trusted Agent专属卷；为稳定环境，主管已停止本项目Docker API/Agent/Broker，未中断其他项目。Host原M2服务继续保留。
 
 ## 当前环境阻断与权限边界

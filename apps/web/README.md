@@ -229,3 +229,14 @@ pnpm --filter @atoms/web exec node --import tsx scripts/check-sharing-external.m
 typed review绑定当前项目与视图代次；发送后离开，已授权后台整理继续，但迟到回执不会拉回旧项目、清掉新草稿或改新请求busy。不匹配的整理context直接拒绝，不偷偷降为普通消息；同项目编辑出的新草稿/purpose同样保留。
 
 独立命令：`pnpm --filter @atoms/web exec tsx --test test/requirements.test.ts`、`ATOMS_MOCK_PORT=5193 pnpm --filter @atoms/web exec playwright test e2e/requirements.spec.ts`。完整122 contracts/78 Web unit、36聚合浏览器与最后定向复验、StrictMode首次失败和修正、截图及真实API/Agent待联调边界见 [Requirements Web 第二批记录](REQUIREMENTS-STATUS.md)。没有真实模型调用、用户旧3D执行/改写或公网启动。
+
+
+## 输入与预览体验修正（2026-11-09）
+
+- 首页和项目消息输入框使用 Enter 发送、Shift+Enter 换行；保留 Ctrl/Cmd+Enter。中文输入法组合输入、229 确认事件、按键自动重复、空白内容和忙碌状态不会触发额外发送。
+- 预览页交付提示只显示版本/任务状态、待验数量和报告入口；完整缺口、失败证据及来源继续在交付报告中查看。失败不切换成功版本，部分交付不改为全部通过。
+- 默认界面使用 Atoms 和项目负责人/程序员等职责名称，移除模型底座徽标、技术栈页脚及首页的框架术语。展示层整理助手进展和版本摘要；用户原文、原始证据与源码不改写。
+- 右上“已完成 N 次构建”统计当前项目成功任务，结合版本绑定去重；失败、取消、进行中任务及恢复副本不算新增完成。账户剩余额度仍由左下服务端配额展示，历史未读完整时不伪造完成数。首页不根据消费额度推测全账户完成数。
+- 定向浏览器回归在独立 Mock 端口运行，不触发真实服务或模型。`e2e/usability.spec.ts` 覆盖输入法/键盘、失败+部分交付双摘要、完成数与 1440/1366/390px 布局；截图及几何记录在 `review-artifacts/usability/`。
+
+本轮验证：contracts 类型检查与 122 项契约测试、Web 类型检查与 94 项单元测试及生产构建通过；交付页 29 项、协调/分享 28 项浏览器场景通过，输入与三尺寸布局 4 项定向复验通过。早期输入法测试的合成按键默认行为假设已修正；390px 检查发现并补齐折叠账户入口的可访问名称，失败后定向复验，不把 Mock 结果称为公网部署验收。

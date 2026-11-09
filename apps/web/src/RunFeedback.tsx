@@ -47,7 +47,7 @@ export function RunFeedback({ run, events, sync, historyLoading, historyError, b
       <p>{clean ? `独立源码 ZIP 自动用例 ${clean.passed}/${clean.expected} 通过，${clean.failed} 项失败${clean.missing ? `，${clean.missing} 项结果未返回` : ''}。` : '独立源码 ZIP 复验结果尚未提供，不由候选通过推断。'}</p>
       {cleanFailure && <p className="run-error">{cleanFailure}</p>}
       <small>最新报告已记录修复轮次：{recordedAttempt ? `${recordedAttempt.repairRound}（0为初始生成）` : '未提供'}。剩余预算暂未提供，不从阶段次数推算。</small>
-      {explanation ? <div className="reported-next-step"><strong>执行器最近说明（不替代验收结论）</strong><p>{explanation.detail ?? explanation.title}</p><small>记录时间：{new Date(explanation.occurredAt).toLocaleTimeString('zh-CN')}</small></div> : <p>执行器尚未提供后续决定说明；界面不会自行触发或承诺自动修复。</p>}
+      {explanation ? <div className="reported-next-step"><strong>项目团队最近说明（不替代验收结论）</strong><p>{explanation.detail ?? explanation.title}</p><small>记录时间：{new Date(explanation.occurredAt).toLocaleTimeString('zh-CN')}</small></div> : <p>项目团队尚未提供后续安排；界面不会自行触发或承诺自动修复。</p>}
       {terminal && run.status !== 'succeeded' && <p>本任务已停止：{run.error?.message ?? report?.failure?.message ?? '未提供细分停止原因'}。历史报告保留。</p>}
       <small>候选生成通过、独立复验通过与实际发布是不同门禁。{read?.publication.status === 'published' ? '宿主已记录发布；质量及未覆盖项仍以交付报告为准。' : '当前读取的报告尚未记录发布。'}</small>
     </section>

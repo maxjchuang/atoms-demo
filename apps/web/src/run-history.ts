@@ -1,4 +1,12 @@
-import type { RunDto, WorkspaceSnapshotDto, ProjectEventDto } from '@atoms/contracts';
+import type { RunDto, WorkspaceSnapshotDto, ProjectEventDto, VersionDto } from '@atoms/contracts';
+
+/** Successful builds only; restored versions and quota consumption are not new builds. */
+export function completedBuildCount(projectId: string, runs: RunDto[], versions: VersionDto[]): number {
+  return new Set([
+    ...runs.filter(run => run.projectId === projectId && run.status === 'succeeded').map(run => run.id),
+    ...versions.filter(version => version.projectId === projectId && !version.restoredFromVersionId && version.runId).map(version => version.runId!),
+  ]).size;
+}
 
 /** Display-only history: never apply old events to the current workspace/preview. */
 export function collectRunHistory(workspace: WorkspaceSnapshotDto, events: ProjectEventDto[]): RunDto[] {

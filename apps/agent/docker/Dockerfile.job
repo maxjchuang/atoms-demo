@@ -1,9 +1,11 @@
-FROM public.ecr.aws/docker/library/node@sha256:9e5d714311940c098479ec352029af6df1d9a2dc4269b29373c616f51640dd67 AS pinned-node
+ARG PLAYWRIGHT_BASE=mcr.microsoft.com/playwright@sha256:f1e7e01021efd65dd1a2c56064be399f3e4de00fd021ac561325f2bfbb2b837a
+ARG NODE_BASE=docker.io/library/node@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb
+FROM ${NODE_BASE} AS pinned-node
 FROM pinned-node AS watchdog-build
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 COPY watchdog.c watchdog-probe.c /build/
 RUN gcc -O2 -Wall -Wextra -Werror /build/watchdog.c -o /watchdog && gcc -O2 -Wall -Wextra -Werror /build/watchdog-probe.c -o /watchdog-probe && chmod 0555 /watchdog /watchdog-probe
-FROM mcr.microsoft.com/playwright@sha256:0dbd754198e27995355163ddb7e4e0d727eb841eade98df3432cd4daea772e91
+FROM ${PLAYWRIGHT_BASE}
 COPY --from=pinned-node /usr/local/bin/node /usr/local/bin/node
 COPY --from=pinned-node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx

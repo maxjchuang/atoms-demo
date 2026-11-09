@@ -1,11 +1,14 @@
 import{mkdtemp,cp,writeFile,readdir,readFile,rename}from'node:fs/promises';import path from'node:path';import os from'node:os';import{fileURLToPath}from'node:url';import{spawn}from'node:child_process';
 import{docker,checked}from'./docker-command.js';import{sha256,listFiles}from'../files.js';
 import{trustedTemplate}from'../trusted-template.js';
+import{nativeImageInputs}from'./platform.js';
+const selected=nativeImageInputs(JSON.parse(checked(await docker(['info','--format','{{json .}}']))));
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');const context=await mkdtemp(path.join(os.tmpdir(),'atoms-v03-image-'));
 for(const file of ['Dockerfile.job','job-package.json','watchdog.c','watchdog-probe.c','job.ts'])await cp(path.join(root,'docker',file),path.join(context,file));
 await (await import('node:fs/promises')).mkdir(path.join(context,'template'));for(const [file,text]of Object.entries((await trustedTemplate()).files)){await (await import('node:fs/promises')).mkdir(path.dirname(path.join(context,'template',file)),{recursive:true});await writeFile(path.join(context,'template',file),text);}await cp(path.join(root,'../../packages/contracts'),path.join(context,'contracts'),{recursive:true,filter:src=>!src.includes('/node_modules')&&!src.includes('/test')});
 await (await import('node:fs/promises')).mkdir(path.join(context,'verifier')); for(const file of ['browser-dsl.ts','verify.ts','files.ts','source-policy.ts','delivery-files.ts'])await cp(path.join(root,'src',file),path.join(context,'verifier',file));
 await writeFile(path.join(context,'verifier/package.json'),JSON.stringify({type:'module'}));
 await cp(path.join(root,'docker/job-lock.yaml'),path.join(context,'job-lock.yaml'));
+await writeFile(path.join(context,'build-platform.json'),JSON.stringify(selected));
 const sourceHash=sha256(JSON.stringify(await Promise.all((await listFiles(context)).map(async file=>({path:file,sha256:sha256(await readFile(path.join(context,file)))})))));
-const image='atoms-v03-job:linux-v1';console.log(JSON.stringify({image,context,sourceHash}));const result=await docker(['build','--build-arg',`SOURCE_HASH=${sourceHash}`,'-f',path.join(context,'Dockerfile.job'),'-t',image,context],{timeoutMs:900000,maxBytes:8000000,logFile:'/tmp/atoms-v03-job-build-progress.log'});process.stdout.write(result.stdout);process.stderr.write(result.stderr);checked(result);console.log(JSON.stringify({built:true,image,context,sourceHash}));
+const image='atoms-v03-job:linux-v1';console.log(JSON.stringify({image,context,sourceHash}));const result=await docker(['build','--platform',selected.platform,'--build-arg',`NODE_BASE=${selected.nodeBase}`,'--build-arg',`PLAYWRIGHT_BASE=${selected.playwrightBase}`,'--build-arg',`SOURCE_HASH=${sourceHash}`,'-f',path.join(context,'Dockerfile.job'),'-t',image,context],{timeoutMs:900000,maxBytes:8000000,logFile:'/tmp/atoms-v03-job-build-progress.log'});process.stdout.write(result.stdout);process.stderr.write(result.stderr);checked(result);console.log(JSON.stringify({built:true,image,context,sourceHash}));

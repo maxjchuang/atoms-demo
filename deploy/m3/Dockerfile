@@ -1,5 +1,5 @@
-# Official Docker Node linux/arm64 manifest independently verified by manager.
-ARG NODE_BASE=public.ecr.aws/docker/library/node:26.5.0-bookworm-slim@sha256:9e5d714311940c098479ec352029af6df1d9a2dc4269b29373c616f51640dd67
+# Official per-platform Node manifest selected by native daemon-checked build wrapper.
+ARG NODE_BASE=docker.io/library/node:26.5.0-bookworm-slim@sha256:9e5d714311940c098479ec352029af6df1d9a2dc4269b29373c616f51640dd67
 FROM ${NODE_BASE} AS deps
 WORKDIR /opt/atoms
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0

@@ -23,7 +23,7 @@ pnpm --filter @atoms/api exec tsx ../../scripts/m3-runtime-audit.mjs
 pnpm --filter @atoms/api exec tsx ../../scripts/m3-image-audit.mjs
 ```
 
-The exact official Node base is the verified Linux/arm64 manifest `public.ecr.aws/docker/library/node:26.5.0-bookworm-slim@sha256:9e5d714311940c098479ec352029af6df1d9a2dc4269b29373c616f51640dd67`. pnpm is pinned10.33.0; Node26 slim did not provide corepack, so the trusted image installs pinned pnpm via public registry with lifecycle scripts disabled. No host dependency or lockfile is rewritten.
+The exact official Node base is the verified Linux/arm64 manifest `docker.io/library/node:26.5.0-bookworm-slim@sha256:9e5d714311940c098479ec352029af6df1d9a2dc4269b29373c616f51640dd67`. pnpm is pinned10.33.0; Node26 slim did not provide corepack, so the trusted image installs pinned pnpm via public registry with lifecycle scripts disabled. No host dependency or lockfile is rewritten.
 
 `.dockerignore` is a source allowlist plus nested exclusions; API/gateway have stricter Dockerfile-specific ignore files excluding Agent implementation/cache. The actual scratch-COPY context export checks seven test-canary categories: `.env`, data/backups, native, review-artifacts, node_modules and .git. The saved-image audit decompresses layer blobs and checks history/config using only the check profile's test-only reviewer-code canary; **it does not read a real configured model key**. Manager performs a later real-key scan without printing it.
 
@@ -102,3 +102,21 @@ node scripts/m3-broker-metadata-probe.mjs
 ```
 
 The isolated actual Docker probe passed repeated existing-Broker reads plus the no-Broker fallback (same socket GID), with zero provider calls, tunnel starts, or public-container recreation. It tests metadata lookup, not a public deployment or tunnel lifecycle.
+
+## Native Intel/AMD64 build support
+
+The deployment wrappers now select the actual Docker daemon platform (`linux/amd64` or `linux/arm64`) and reject an explicitly requested platform that differs from it. They pass the frozen official Node child manifest into API/gateway and connector builds, record native platform/base in private image manifests, and inspect resulting image architecture. Old platform-less manifests require a fresh reviewed build; ARM64 evidence is never copied or relabeled as AMD64 proof.
+
+```sh
+# Dedicated daemon and namespace; does not change the default context.
+DOCKER_CONTEXT=colima-atoms-isolated M3_PRIVATE_DIR="$HOME/.atoms-m3/intel-public" \
+  node scripts/m3-build.mjs --dsh --platform linux/amd64
+DOCKER_CONTEXT=colima-atoms-isolated M3_PRIVATE_DIR="$HOME/.atoms-m3/intel-public" \
+  node scripts/m3-build-connector.mjs --project atoms-m3-public --platform linux/amd64
+```
+
+AMD64 Node26.5.0-bookworm-slim official child manifest is `sha256:607728e8751f69809c871e2cfa65d645f51ffacb5a0e9fc60f4cb7404ee5c16a`; existing ARM64 child `9e5d7143…` remains unchanged. Source: [official DockerHub tag metadata](https://hub.docker.com/v2/repositories/library/node/tags/26.5.0-bookworm-slim).
+
+The official Cloudflare2026.10.7 AMD64 executable is 40,274,445 bytes, SHA256 `1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872`, ELF machine62; ARM64 retains 37,667,293 bytes, SHA256 `3df43aed…`, ELF machine183. Source: [official release checksums](https://github.com/cloudflare/cloudflared/releases/tag/2026.10.7). Fresh connector builds fetch release metadata themselves. If GitHub API is rate-limited/unreachable, the official release HTML must match the frozen platform checksum; this fallback is recorded explicitly. Actual bytes must still pass frozen size, SHA256 and ELF checks. Missing network/metadata or invalid cached metadata fails closed; no arbitrary URL/hash override exists.
+
+Isolation readiness uses the coordinated `0.2.0` header/schema and its platform enum. New native image builds do not establish readiness: the actual eleven-gate certification, Runtime checks, real functional delivery, exact ZIP checks and independent external browser acceptance remain required before public generation is described as delivered. For mixed-provider operation see [NGROK.md](NGROK.md).

@@ -1,11 +1,11 @@
 import{randomUUID}from'node:crypto';
 import{sha256}from'../files.js';
 import type{JobPhase}from'./job-policy.js';
-import{IsolationCapabilities,type IsolationCapabilitiesDto}from'@atoms/contracts/isolation';
-export const hostLocalCapabilities=():IsolationCapabilitiesDto=>IsolationCapabilities.parse({protocolVersion:'0.1.0',backend:'host_local',ready:false,reasonCodes:['HOST_BACKEND_UNSAFE'],toolchainId:null,imageDigest:null,policyHash:null,cacheHash:null,probeRevision:null,platform:null});
+import{IsolationCapabilities,IsolationProtocolVersion,type IsolationCapabilitiesDto}from'@atoms/contracts/isolation';
+export const hostLocalCapabilities=():IsolationCapabilitiesDto=>IsolationCapabilities.parse({protocolVersion:IsolationProtocolVersion,backend:'host_local',ready:false,reasonCodes:['HOST_BACKEND_UNSAFE'],toolchainId:null,imageDigest:null,policyHash:null,cacheHash:null,probeRevision:null,platform:null});
 export class BrokerClient{
  constructor(readonly url:string,private token:string){const u=new URL(url);if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash)throw new Error('Invalid trusted broker URL');if(token.length<16)throw new Error('Broker token missing');}
- async request(route:string,method='GET',body?:unknown,lease?:string){const response=await fetch(this.url+route,{method,headers:{authorization:'Bearer '+this.token,'x-atoms-isolation-version':'0.1.0','content-type':'application/json',...(lease?{'x-atoms-job-lease':lease}:{})},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(10000)});if(!response.ok)throw new Error('Broker request failed HTTP'+response.status);return await response.json();}
+ async request(route:string,method='GET',body?:unknown,lease?:string){const response=await fetch(this.url+route,{method,headers:{authorization:'Bearer '+this.token,'x-atoms-isolation-version':IsolationProtocolVersion,'content-type':'application/json',...(lease?{'x-atoms-job-lease':lease}:{})},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(10000)});if(!response.ok)throw new Error('Broker request failed HTTP'+response.status);return await response.json();}
  async run(input:{phase:JobPhase;files:unknown[];plan?:unknown},context:{executionId:string;bindingHash:string;attemptId:string;generation:string;remainingMs:number;imageDigest:string;onLease?:(value:unknown)=>void},signal?:AbortSignal){
   const id='job_'+randomUUID().replaceAll('-','');const route='/internal/jobs/'+id;const body={executionId:context.executionId,expectedImageDigest:context.imageDigest,phase:input.phase,inputHash:sha256(JSON.stringify(input)),deadlineMs:Math.max(1,Math.min(context.remainingMs,input.phase==='browser'?90000:180000)),bindingHash:context.bindingHash,attemptId:context.attemptId,generation:context.generation};
   let job:any;context.onLease?.({id,body,stage:'create_pending'});
@@ -23,7 +23,7 @@ export class BrokerClient{
    catch(stopError){if(stopError===error)throw error;if(stopError instanceof StopUnconfirmedError)throw stopError;throw new StopUnconfirmedError();}throw error;
   }finally{signal?.removeEventListener('abort',stop);await cancelPromise?.catch(()=>{});if(job?.stopConfirmed)await this.request(route+'/dispose','POST',{},lease).catch(()=>{});}
  }
- async capabilities(){try{return IsolationCapabilities.parse(await this.request('/internal/isolation/v1/capabilities'));}catch{return IsolationCapabilities.parse({protocolVersion:'0.1.0',backend:'docker_linux',ready:false,reasonCodes:['DOCKER_UNAVAILABLE'],toolchainId:null,imageDigest:null,policyHash:null,cacheHash:null,probeRevision:null,platform:null});}}
+ async capabilities(){try{return IsolationCapabilities.parse(await this.request('/internal/isolation/v1/capabilities'));}catch{return IsolationCapabilities.parse({protocolVersion:IsolationProtocolVersion,backend:'docker_linux',ready:false,reasonCodes:['DOCKER_UNAVAILABLE'],toolchainId:null,imageDigest:null,policyHash:null,cacheHash:null,probeRevision:null,platform:null});}}
 }
 
 export class StopUnconfirmedError extends Error{constructor(){super('Isolation job stopping is not confirmed; retain cancelling and the execution fence');}}

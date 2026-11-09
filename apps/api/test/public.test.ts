@@ -1,3 +1,4 @@
+import{IsolationProtocolVersion}from'@atoms/contracts/isolation';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm,readFile,stat} from 'node:fs/promises';
@@ -10,11 +11,11 @@ import {createFakeDeliveryRuntime} from '../src/fake-delivery-runtime.js';
 import {fakeConsult,fakeChange} from '../src/fake-coordinator.js';
 import {parsePublicDeployment,type PublicDeployment} from '../src/public-profile.js';
 import type {IsolationCapabilitiesDto} from '@atoms/contracts/isolation';
-import {isolationReady,isolationHostLocal} from '@atoms/contracts/isolation-fixtures';
+import {isolationReady,isolationReadyAmd64,isolationHostLocal} from '@atoms/contracts/isolation-fixtures';
 import {SharingDescriptor,ResolvedSharing} from '@atoms/contracts/sharing';
-async function fixture(ttl=86400){
- const directory=await mkdtemp(join(tmpdir(),'atoms-public-api-')),dataDir=join(directory,'api'),codeFile=join(directory,'private','code'),token=randomBytes(32).toString('base64url'),secret=randomBytes(32).toString('base64url');const runtime=createFakeDeliveryRuntime(token);let caps:IsolationCapabilitiesDto={...isolationReady,toolchainId:runtime.toolchain.id};
- runtime.app.get('/internal/isolation/v1/capabilities',(_r,reply)=>reply.header('X-Atoms-Isolation-Version','0.1.0').send(caps));const address=await runtime.app.listen({host:'127.0.0.1',port:0});
+async function fixture(ttl=86400,platform:'linux/arm64'|'linux/amd64'='linux/arm64'){
+ const directory=await mkdtemp(join(tmpdir(),'atoms-public-api-')),dataDir=join(directory,'api'),codeFile=join(directory,'private','code'),token=randomBytes(32).toString('base64url'),secret=randomBytes(32).toString('base64url');const runtime=createFakeDeliveryRuntime(token);let caps:IsolationCapabilitiesDto={...(platform==='linux/amd64'?isolationReadyAmd64:isolationReady),toolchainId:runtime.toolchain.id};
+ runtime.app.get('/internal/isolation/v1/capabilities',(_r,reply)=>reply.header('X-Atoms-Isolation-Version',IsolationProtocolVersion).send(caps));const address=await runtime.app.listen({host:'127.0.0.1',port:0});
  let deployment:PublicDeployment=parsePublicDeployment({deploymentInstanceId:'deployment_public_first',dataNamespaceId:'namespace_public_test',ready:true,workbenchOrigin:'https://workbench.example.test',previewOrigin:'https://preview.example.test',expectedIsolation:{toolchainId:caps.toolchainId,imageDigest:caps.imageDigest,policyHash:caps.policyHash,cacheHash:caps.cacheHash,probeRevision:caps.probeRevision,platform:caps.platform},verification:null});
  initializePublicNamespace(dataDir,deployment);offlinePublicCode(dataDir,deployment,'issue',codeFile,ttl);const code=(await readFile(codeFile,'utf8')).trim();
  let api=await createApi({dataDir,agentUrl:address,serviceToken:token,previewSecret:secret,previewOrigin:'http://127.0.0.1:3002',autoSchedule:false,deliveryToolchain:runtime.toolchain,deliveryToolchainId:runtime.toolchain.id,publicProfile:{deployment:()=>deployment}}),cookie='';
@@ -78,3 +79,5 @@ test('auto change can queue bounded intent without OS proof; recovery dispatches
  f.setCaps({...isolationReady,toolchainId:f.runtime.toolchain.id});for(let i=0;i<4;i++)await f.api.tick();assert.equal((await f.request('GET',`/api/v1/runs/${runId}`)).data.status,'succeeded');assert.equal(f.runtime.coordinator.calls,1);assert.equal(f.runtime.prepareCalls,1);assert.equal(f.runtime.executeCalls,1);assert.equal((await f.request('GET','/api/v2/session')).data.session.quota.runsUsed,1);
  }finally{await f.close();}
 });
+
+test('AMD64 public deployment admits matching authenticated tuple and rejects ARM64 substitution before dispatch',async()=>{const f=await fixture(86400,'linux/amd64');try{assert.equal(f.deployment.expectedIsolation!.platform,'linux/amd64');const p=await f.project();f.setCaps({...isolationReady,toolchainId:f.runtime.toolchain.id});const denied=await f.request('POST',`/api/v1/projects/${p.id}/runs`,{prompt:'创建便签墙',mode:'build'});assert.equal(denied.status,503);assert.equal(f.runtime.prepareCalls,0);assert.equal(f.api.store.state.runs.length,0);f.setCaps({...isolationReadyAmd64,toolchainId:f.runtime.toolchain.id});const done=await f.build(p.id);assert.equal(done.status,'succeeded');}finally{await f.close();}});

@@ -1,3 +1,4 @@
+import {geometryBoundaryIssues} from './geometry-contract.js';
 import ts from 'typescript';
 import { canonicalDeliveryJson, type BrowserTestPlanDto } from '@atoms/contracts/delivery';
 import { sha256 } from './files.js';
@@ -39,7 +40,7 @@ export type SemanticIssue = {
     detail: string;
 };
 export type PlanSemanticReceipt = {
-    policyRevision: 'bounded-observation-v3';
+    policyRevision: 'bounded-observation-v4';
     planHash: string;
     receiptHash: string;
     status: 'policy_pass' | 'known_invalid';
@@ -234,6 +235,7 @@ export function reviewPlanSemantics(plan: BrowserTestPlanDto, sources: SemanticS
         for(const {s,i} of actions)if(!effects.some(at=>at>i))issue('ACTION_WITHOUT_POSTCONDITION',test.id,s.id,'Action dispatch/passive visibility alone cannot prove its effect; use a real text/value/collection/geometry assertion or a source-proven control transition.');
         for(const p of passive)if(!effects.some(at=>actions.some(a=>at>a.i)))issue('STATE_TRIGGER_UNPROVEN',test.id,p.stepId,'This visibility observation has no proven state trigger and is not accompanied by a measured effect. Keep a static invariant before actions, or retain unknown state coverage as required manual/unsupported.');
     }
-    const body = { policyRevision: 'bounded-observation-v3' as const, planHash: plan.hash, status: issues.length ? 'known_invalid' as const : 'policy_pass' as const, checkedSteps, issues, sourceHashes: sources.map(s => ({ path: s.path, sha256: s.sha256 })), scope: ['DOM cardinality versus scalar values', 'indexed collection misuse', 'finite initial/direct-control conditional visibility', 'action dispatch versus observable postcondition'], limitations: ['Not arbitrary natural-language semantic proof', 'A postcondition is required but arbitrary goal-to-assertion causality is not universally proved', 'Numeric HUD comparison/increase has no supported numeric DSL operation', 'Natural-time terminal reachability is not proved', 'Unknown visibility may be a passive invariant only, not a causal/terminal-state proof','Source evidence is bounded; unknown conditional transitions remain unsupported'] };
+    for(const boundary of geometryBoundaryIssues(plan))issue('ACTION_WITHOUT_POSTCONDITION',boundary.caseId,boundary.stepId,boundary.detail);
+    const body = { policyRevision: 'bounded-observation-v4' as const, planHash: plan.hash, status: issues.length ? 'known_invalid' as const : 'policy_pass' as const, checkedSteps, issues, sourceHashes: sources.map(s => ({ path: s.path, sha256: s.sha256 })), scope: ['DOM cardinality versus scalar values', 'indexed collection misuse', 'finite initial/direct-control conditional visibility', 'action dispatch versus observable postcondition'], limitations: ['Not arbitrary natural-language semantic proof', 'A postcondition is required but arbitrary goal-to-assertion causality is not universally proved', 'Numeric HUD comparison/increase has no supported numeric DSL operation', 'Natural-time terminal reachability is not proved', 'Unknown visibility may be a passive invariant only, not a causal/terminal-state proof','Source evidence is bounded; unknown conditional transitions remain unsupported'] };
     return { ...body, receiptHash: sha256(canonicalDeliveryJson(body)) };
 }

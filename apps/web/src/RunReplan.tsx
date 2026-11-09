@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { AnswerRequestDto, RunDto, WorkspaceSnapshotDto } from '@atoms/contracts';
 import { SubmitMessageRequest, type SubmitMessageRequestDto } from '@atoms/contracts/conversation';
 import type { DeliveryReadViewDto } from '@atoms/contracts/delivery';
@@ -34,13 +35,17 @@ export function stoppedForReplan(run: RunDto, projectId: string, runId: string, 
 }
 function retainedWriter(workspace: WorkspaceSnapshotDto, runId: string) { return workspace.activeRun?.id === runId || workspace.project.activeRunId === runId ? runId : null; }
 function restore(projectId: string): Saved | null { try { const value = JSON.parse(sessionStorage.getItem(sessionStorage.getItem(storageKey(projectId)) ?? '') ?? 'null') as Saved | null; return value?.projectId === projectId && value.body.mode === 'ask' && value.body.runMode === 'plan' && SubmitMessageRequest.safeParse(value.body).success ? value : null; } catch { return null; } }
-export function RunReplan({ projectId, request }: { projectId: string; request: ReplanRequest | null }) {
+export function RunReplan({ projectId, request, onClose }: { projectId: string; request: ReplanRequest | null; onClose: () => void }) {
   const [saved, setSaved] = useState<Saved | null>(() => restore(projectId)), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [open, setOpen] = useState(false);
+  const dialog = useRef<HTMLElement>(null);
+  useEffect(() => { if (!open) return; const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null; dialog.current?.querySelector<HTMLElement>('button')?.focus(); return () => { if (previous?.isConnected) previous.focus(); }; }, [open]);
   const epoch = useRef(0), alive = useRef(true), gate = useRef(false);
   useEffect(() => { alive.current = true; return () => { alive.current = false; ++epoch.current; }; }, []);
   const persist = (value: Saved) => { sessionStorage.setItem(recordKey(value), JSON.stringify(value)); sessionStorage.setItem(storageKey(projectId), recordKey(value)); setSaved(value); };
   useEffect(() => {
     if (!request || request.run.projectId !== projectId) return;
+    setOpen(true);
     if (saved && saved.runId === request.run.id && saved.phase !== 'ready') return;
     if (saved && ['stopping', 'unknown_stop', 'unknown_send'].includes(saved.phase)) { setError('已有停止或发送结果待核对，先处理保留的原请求，不创建新请求。'); return; }
     const own = ++epoch.current; setBusy(true); setError('');
@@ -89,10 +94,26 @@ export function RunReplan({ projectId, request }: { projectId: string; request: 
       persist({ ...value, phase: 'unknown_send' });
       const receipt = await coordinationApi.submit(projectId, body, value.messageKey);
       if (!owns()) return;
-      persist({ ...value, phase: 'sent', turnId: receipt.turn.id }); dispatchEvent(new Event('atoms-coordination-wake'));
+      persist({ ...value, phase: 'sent', turnId: receipt.turn.id }); setOpen(false); onClose(); dispatchEvent(new Event('atoms-coordination-wake'));
     } catch (failure) { if (owns()) setError(failure instanceof Error ? failure.message : '提交结果尚未确认；保留同一请求。'); }
     finally { gate.current = false; if (owns()) setBusy(false); }
   }
-  if (!request && !saved) return null;
-  return <div className="attention-card run-replan" data-testid="run-replan"><strong>带回答重新规划 · 先不构建</strong><p>先确认原任务停止且不再写入，再由你明确发送只做规划的项目消息。完整提案仍需确认，不自动创建构建或追加额度。</p>{busy && <p role="status">正在核对原任务与完整约定，请勿重复操作…</p>}{error && <p role="alert">{error}</p>}{saved && <><p>原任务：{saved.runId}；问题：{saved.attentionId}</p><p>你的回答：{saved.answer}</p><details><summary>核对原问题、完整目标与实际发送内容</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{saved.body.input.kind === 'text' ? saved.body.input.content : ''}</pre></details>{saved.phase === 'sent' ? <p>重新规划消息已发送，等待完整提案；尚未授权构建。{saved.turnId}</p> : ['stopped', 'unknown_send'].includes(saved.phase) ? <><p>原任务当前为 {saved.stoppedStatus ? statusLabels[saved.stoppedStatus] : '状态待核对'}，原失败/成功事实保持不变。请核对内容后明确发送。</p><textarea aria-label="重新规划消息" disabled={busy || saved.phase === 'unknown_send'} value={saved.body.input.kind === 'text' ? saved.body.input.content : ''} onChange={event => persist({ ...saved, body: { ...saved.body, input: { kind: 'text', content: event.target.value } } })}/><button className="primary-button" disabled={busy} onClick={() => void send()}>{saved.phase === 'unknown_send' ? '使用同一请求核对并重试发送' : '发送重新规划（先不构建）'}</button></> : <button className="primary-button" disabled={busy} onClick={() => void stop()}>{saved.phase === 'ready' ? '停止并按回答重新规划' : '核对并重试原停止请求'}</button>}</>}</div>;
+  if (!open) return saved && saved.phase !== 'sent' ? <button className="resume-replan" onClick={() => setOpen(true)}>继续重新规划</button> : null;
+  const close = () => { setOpen(false); onClose(); };
+  const trap = (event: React.KeyboardEvent) => {
+    if (event.key === 'Escape') { event.preventDefault(); close(); return; }
+    if (event.key !== 'Tab') return;
+    const items = [...(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled),textarea:not(:disabled),summary,[tabindex="0"]') ?? [])].filter(item => item.getClientRects().length);
+    if (!items.length) return;
+    if (event.shiftKey && document.activeElement === items[0]) { event.preventDefault(); items.at(-1)?.focus(); }
+    else if (!event.shiftKey && document.activeElement === items.at(-1)) { event.preventDefault(); items[0].focus(); }
+  };
+  return createPortal(<div className="modal-backdrop replan-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}><section ref={dialog} className="replan-dialog" role="dialog" aria-modal="true" aria-labelledby="replan-title" onKeyDown={trap} data-testid="run-replan">
+    <button className="replan-close" aria-label="关闭重新规划" onClick={close}>×</button><h2 id="replan-title">重新规划</h2>
+    <p>先整理新的完整方案，你确认后才开始构建。当前任务需先停止；关闭窗口不会发送新请求。</p>
+    {busy && <p role="status">正在核对，请稍候…</p>}{error && <p role="alert">{error}</p>}
+    {saved && <><p>你的补充：{saved.answer}</p><details><summary>查看原问题与完整目标</summary><pre>{saved.question}{'\n'}{saved.body.input.kind === 'text' ? saved.body.input.content : ''}</pre><small>任务：{saved.runId}；问题：{saved.attentionId}</small></details>
+      {saved.phase === 'sent' ? <p>请求已发送，请在对话查看方案。</p> : ['stopped', 'unknown_send'].includes(saved.phase) ? <><p>{saved.phase === 'unknown_send' ? '上次发送结果尚未确认。可以核对原请求，避免重复发送。' : '原任务已停止。确认下面内容后，再发送规划请求。'}</p><details><summary>查看或编辑发送内容</summary><textarea aria-label="重新规划消息" disabled={busy || saved.phase === 'unknown_send'} value={saved.body.input.kind === 'text' ? saved.body.input.content : ''} onChange={event => persist({ ...saved, body: { ...saved.body, input: { kind: 'text', content: event.target.value } } })}/></details><button className="primary-button" disabled={busy} onClick={() => void send()}>{saved.phase === 'unknown_send' ? '核对上次发送' : '发送规划请求'}</button></> : <button className="primary-button" disabled={busy} onClick={() => void stop()}>{saved.phase === 'ready' ? '停止当前尝试' : '核对任务状态'}</button>}
+    </>}
+  </section></div>, document.body);
 }

@@ -1,3 +1,4 @@
+import {assertProvisionedPublicState} from './public-provisioning.js';
 import {readPublicHandoff} from './public-handoff.js';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -56,7 +57,7 @@ export async function createApi(options: ApiOptions) {
   const releasePublicWriter=options.publicProfile?acquirePublicWriter(dataDir):()=>{};
   await mkdir(join(dataDir, 'versions'), { recursive: true });
   const store = new Store(join(dataDir, 'api.sqlite'));
-  if(options.publicProfile&&(store.state.projects.length>1||store.state.codes.length>1||store.state.codes.some(c=>!c.publicIssuedAt||!Number.isFinite(Date.parse(c.publicIssuedAt))||!Number.isFinite(Date.parse(c.expiresAt))||c.projectLimit!==1||c.runLimit!==3||Date.parse(c.expiresAt)-Date.parse(c.publicIssuedAt)>86400000))){store.close();releasePublicWriter();throw new Error('Public data must contain only the provisioned single reviewer/project profile');}
+  if(options.publicProfile){try{assertProvisionedPublicState(store.state,parsePublicDeployment(options.publicProfile.deployment()));}catch(error){store.close();releasePublicWriter();throw error;}}
   const publicEffectiveLimits=new Map<string,number>();
   if(options.publicProfile){try{const deployment=parsePublicDeployment(options.publicProfile.deployment());for(const code of store.state.codes){const grant=readPublicHandoff(dataDir,deployment,code);publicEffectiveLimits.set(code.id,grant?.effectiveRunLimit??code.runLimit);}}catch(error){store.close();releasePublicWriter();throw error;}}
   const effectiveRunLimit=(code:Code)=>options.publicProfile?(publicEffectiveLimits.get(code.id)??code.runLimit):code.runLimit;
@@ -238,7 +239,6 @@ export async function createApi(options: ApiOptions) {
   app.post('/api/v1/projects', (request, reply) => {
     const session = authorize(request); const body = CreateProjectRequest.parse(request.body);
     return mutation(request, reply, session.id, () => {
-      if(options.publicProfile&&store.state.projects.length>=1)fail(403,'QUOTA_EXCEEDED','公开演示仅允许一个项目');
       if (sessionDto(session).quota.projectsUsed >= codeFor(session).projectLimit) fail(403, 'QUOTA_EXCEEDED', '项目额度已用完');
       const project = { id: id('project'), title: body.title, revision: 1, currentVersionId: null, activeRunId: null, createdAt: now(), updatedAt: now() };
       store.state.projects.push({ dto: project, codeId: session.codeId }); return { status: 201, body: project };

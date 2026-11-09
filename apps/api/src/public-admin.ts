@@ -29,7 +29,7 @@ export function offlinePublicCode(dataDir:string,deployment:PublicDeployment,act
    store.transaction(()=>store!.state.codes.push({id:'code_'+randomBytes(10).toString('hex'),hash:createHash('sha256').update(code).digest('hex'),expiresAt:new Date(Date.parse(stamp)+ttlSeconds*1000).toISOString(),projectLimit:1,runLimit:3,revoked:false,publicIssuedAt:stamp}));
    return {action,expiresAt:store.state.codes[0].expiresAt};
   }
-  if(store.state.codes.length!==1)throw new Error('Expected exactly one public reviewer identity');store.transaction(()=>{store!.state.codes[0].revoked=true;});return {action,revoked:true};
+  const entry=lstatSync(codeFile);if(!entry.isFile()||entry.isSymbolicLink()||(entry.mode&0o777)!==0o600||process.getuid&&entry.uid!==process.getuid())throw new Error('Revoke requires a current-owner regular0600 code file');const raw=readFileSync(codeFile,'utf8').trim();if(!/^[A-Za-z0-9_-]{43}$/.test(raw))throw new Error('Revoke code file format invalid');const target=store.state.codes.find(c=>c.hash===createHash('sha256').update(raw).digest('hex'));if(!target)throw new Error('Code does not belong to this public namespace');store.transaction(()=>{target.revoked=true;});return {action,revoked:true,codeId:target.id};
  }finally{store?.close();release();}
 }
 

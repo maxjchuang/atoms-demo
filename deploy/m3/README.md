@@ -120,3 +120,28 @@ AMD64 Node26.5.0-bookworm-slim official child manifest is `sha256:607728e8751f69
 The official Cloudflare2026.10.7 AMD64 executable is 40,274,445 bytes, SHA256 `1f99fb518b83dec2ba8d870a7cc991d82a77e6196295a3d2754ba17ab9f91872`, ELF machine62; ARM64 retains 37,667,293 bytes, SHA256 `3df43aed…`, ELF machine183. Source: [official release checksums](https://github.com/cloudflare/cloudflared/releases/tag/2026.10.7). Fresh connector builds fetch release metadata themselves. If GitHub API is rate-limited/unreachable, the official release HTML must match the frozen platform checksum; this fallback is recorded explicitly. Actual bytes must still pass frozen size, SHA256 and ELF checks. Missing network/metadata or invalid cached metadata fails closed; no arbitrary URL/hash override exists.
 
 Isolation readiness uses the coordinated `0.2.0` header/schema and its platform enum. New native image builds do not establish readiness: the actual eleven-gate certification, Runtime checks, real functional delivery, exact ZIP checks and independent external browser acceptance remain required before public generation is described as delivered. For mixed-provider operation see [NGROK.md](NGROK.md).
+
+## Explicit additional experience-code provisioning
+
+The original fresh-namespace issue flow remains single-code/one-project. A separately authorized offline operation can raise **every existing code's project limit to10** and issue one new owner with **10 projects, 3 baseline builds, 0 initial used**. Existing code run limits, used/history, expiry and projects remain unchanged. The new code does not see old-code projects. Limits are per code; there is no hidden namespace ten-project cap. At most ten lifetime issued identities (including expired/revoked) are allowed, hence at most100 owned projects across the namespace. This operation does not trigger the reviewer handoff grant or revive a terminal Run.
+
+After source/image review, explicit drain/backup and API stop, the operator may run:
+
+```sh
+ATOMS_ALLOW_M3_PROVISION_CODE=1 node scripts/m3-provision-code.mjs --provision \
+  --project atoms-m3-public --operation-id operator_new_identity_001 \
+  --new-code-file /absolute/private/new-experience-code --ttl-seconds 86400
+```
+
+The output directory must be owned0700; the new file is regular0600 outside the repository. No plaintext code appears in argv/env/stdout. No existing code file is overwritten. One SQLite transaction inserts the new identity and its private audit receipt, updates only existing project limits and leaves Run/Version/message/usage/old TTL untouched. The DB startup guard requires valid issuance provenance, ownership and bounded limits; arbitrary public `seedCode` remains forbidden. Existing legacy handoff receipts apply only to their recorded owner, never to a newly issued identity.
+
+The host writes a private operation journal. Same-operation completed replay verifies the protected host file against the committed identity through stdin, without reissuing a code or resetting usage; output distinguishes issuance baseline from current usage. If plaintext creation succeeds but SQLite commit fails, that file is an **invalid orphan**, not an issued code. Pending/failed operations require explicit DB receipt/file review; the wrapper marks `failed_needs_review` and does not automatically delete/overwrite the file or create another identity. Private admin-code volume output is retained for audit/recovery, not exposed by either gateway.
+
+To revoke exactly one selected identity, while the API is stopped/drained:
+
+```sh
+ATOMS_ALLOW_M3_REVOKE_CODE=1 node scripts/m3-revoke-code.mjs --revoke \
+  --project atoms-m3-public --code-file /absolute/private/selected-experience-code
+```
+
+The code travels only via stdin into an owned temporary0600 admin file, deleted afterwards. Only its exact hash-matched identity is revoked; other owners, sessions and quotas are not reset. The legacy revoke wrapper continues to target its configured original code; it no longer assumes the first/only DB identity. Provision/revoke do not restart the API or invoke models; the operator verifies DB receipts, starts the reviewed services and performs only login/session/project-list/foreign-owner denial checks in production.

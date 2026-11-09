@@ -32,9 +32,15 @@ export interface VersionRecord { dto: VersionDto; artifactId: string; manifest: 
 export interface MessageRecord { id: string; projectId: string; runId: string | null; role: 'user'|'assistant';
   status: 'streaming'|'complete'; content: string; createdAt: string }
 export interface IdempotentResult { hash: string; status: number; body?: unknown; cookie?: string }
+export interface PublicProvisionReceipt {
+ kind:'new-public-identity';operationId:string;dataNamespaceId:string;codeId:string;
+ projectLimit:10;runLimit:3;maxIdentities:10;issuedAt:string;expiresAt:string;
+ previousCodeIds:string[];projectLimitChanges:{codeId:string;from:number;to:10}[];
+ preserved:{projects:number;runs:number;versions:number;messages:number;events:number;started:number};historySha256:string;
+}
 export interface State { codes: Code[]; sessions: SessionRecord[]; projects: ProjectRecord[]; runs: RunRecord[];
   versions: VersionRecord[]; messages: MessageRecord[]; events: ProjectEventDto[]; sourceEvents: AgentEventDto[];
-  idempotency: Record<string, IdempotentResult>; coordination: CoordinationState }
+  idempotency: Record<string, IdempotentResult>; coordination: CoordinationState;publicProvisions?:PublicProvisionReceipt[] }
 const empty = (): State => ({ codes: [], sessions: [], projects: [], runs: [], versions: [], messages: [], events: [], sourceEvents: [], idempotency: {}, coordination: emptyCoordination() });
 
 /** Single API process owns this SQLite database. State changes are atomic snapshots. */

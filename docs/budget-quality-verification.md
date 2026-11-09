@@ -31,4 +31,5 @@
 - budget G0：check、完整110/110。
 - requirements G0：check、完整122/122。
 - Web预算第一批：check、完整72/72、build；budget/coordination/feedback浏览器26/26（5194，2.1m），1440/390目视。
+- API预算第一批：check/build；新增11个真实HTTP替身用例通过。主管默认首轮79/80暴露已有sharing毫秒时序错误；单用例及第二轮80/80不能替代因果修复。独立修复issuedAt在mint之后采样、加入确定性7ms回归后，主管focused1/1、默认完整81/81和build通过；原失败记录保留。
 - 其余消费者、联调、真实代表任务和本机升级：待完成后追加实际结果。

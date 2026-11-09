@@ -52,8 +52,9 @@ async function install(workspace: string, home: string, signal: AbortSignal) {
 }
 /** ZIP bytes, then external export manifest, then clean report: no self-referential archive. */
 export type IsolatedClean = (options:{workspace:string;evidenceDir:string;bundle:FrozenDeliveryBundleDto;exported:ReturnType<typeof SourceExportManifest.parse>;startedAt:string;signal:AbortSignal})=>Promise<{clean:ReturnType<typeof CleanBuildReport.parse>;evidence:Evidence[]}>;
-export async function exportAndVerify(options: { trustedBrowserLocale?:string;isolatedClean?:IsolatedClean; workspace: string; root: string; bundle: FrozenDeliveryBundleDto; signal: AbortSignal; activity: (text: string) => void }) {
+export async function exportAndVerify(options: { round?:number;trustedBrowserLocale?:string;isolatedClean?:IsolatedClean; workspace: string; root: string; bundle: FrozenDeliveryBundleDto; signal: AbortSignal; activity: (text: string) => void }) {
   const { workspace, root, bundle, signal } = options; const toolchain = bundle.binding.toolchain;
+  if(options.round!==undefined&&(!Number.isSafeInteger(options.round)||options.round<0||options.round>bundle.binding.totalBudget.maxRepairRounds))throw new Error('Invalid bounded export round');const suffix=options.round===undefined?'':'_round_'+options.round;
   const files = await fingerprints(workspace, 'source/'); const sourceHash = inventoryHash(files);
   if (files.find((entry) => entry.path === 'source/package.json')?.sha256 !== toolchain.packageJsonHash
     || files.find((entry) => entry.path === 'source/pnpm-lock.yaml')?.sha256 !== toolchain.lockfileHash) throw new Error('Export trusted package or lock fingerprint mismatch');
@@ -65,11 +66,11 @@ export async function exportAndVerify(options: { trustedBrowserLocale?:string;is
   for (const file of files) entries[file.path] = [new Uint8Array(await readFile(await safeFile(workspace, file.path.slice(7)))), { mtime }];
   entries['contents-manifest.json'] = [new TextEncoder().encode(contents), { mtime }];
   const archive = zipSync(entries, { level: 6 }); await mkdir(root, { recursive: true }); await writeFile(path.join(root, 'source.zip'), archive);
-  const exported = SourceExportManifest.parse(seal({ protocolVersion: '0.1.0' as const, id: `export_${bundle.binding.executionId}`, hash: '0'.repeat(64),
+  const exported = SourceExportManifest.parse(seal({ protocolVersion: '0.1.0' as const, id: `export_${bundle.binding.executionId}${suffix}`, hash: '0'.repeat(64),
     projectId: bundle.binding.projectId, runId: bundle.binding.runId, executionId: bundle.binding.executionId, bindingHash: bundle.binding.hash,
     sourceSnapshotHash: sourceHash, templateId: toolchain.templateId, templateHash: toolchain.templateHash, packageJsonHash: toolchain.packageJsonHash,
     scriptsHash: toolchain.scriptsHash, lockfileHash: toolchain.lockfileHash, toolchainId: toolchain.id, files, contentsManifestHash: sha256(contents),
-    archive: { id: `archive_${bundle.binding.executionId}`, sha256: sha256(archive), bytes: archive.length }, createdAt: new Date().toISOString() }));
+    archive: { id: `archive_${bundle.binding.executionId}${suffix}`, sha256: sha256(archive), bytes: archive.length }, createdAt: new Date().toISOString() }));
   return { exported, archive: Buffer.from(archive), ...await verifyArchive({ ...options, exported, archive }) };
 }
 export async function verifyArchive(options: { trustedBrowserLocale?:string;isolatedClean?:IsolatedClean; root: string; bundle: FrozenDeliveryBundleDto; exported: ReturnType<typeof SourceExportManifest.parse>; archive: Uint8Array; signal: AbortSignal; activity: (text: string) => void }) {

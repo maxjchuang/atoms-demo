@@ -81,7 +81,7 @@ test('real host workspace passes, exact clean fails in a controlled locale, unif
     assert.equal(first.cleanBuild.caseResults[0].status, 'failed');
     assert.match(first.cleanBuild.caseResults[0].failure.actual, /1,5/);
     assert.equal(first.controlledEnvironment.kind, 'trusted_test_locale');
-    assert.equal(first.planHash, plan.hash);
+    assert.equal(first.planHash, plan.hash);assert.notEqual(first.exportManifest.id,report.exportManifest!.id);assert.notEqual(first.exportManifest.archive.id,report.exportManifest!.archive.id);assert.notEqual(first.cleanBuild.id,report.cleanBuild!.id);
     assert.notEqual(first.cleanBuild.sourceBeforeHash, report.cleanBuild!.sourceBeforeHash);
     for (const e of report.evidence) {
         assert.equal(sha256(await readFile(path.join(dataDir, 'executions', record.request.executionId, e.path))), e.sha256);

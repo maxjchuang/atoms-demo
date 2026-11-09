@@ -1,30 +1,52 @@
 # M3 隔离公网实施状态
 
-更新日期：2026-11-09。M2 已安全升级本机；M3 三条应用线已独立验收并合入集成分支，本地 OS/Runtime 实际门禁由主管复验通过。最终部署内认证、网关/凭证拓扑与外网 G5 待完成，未开放公网构建。职责与顺序见 [并行计划](m3-parallel-plan.md)。
+更新日期：2026-11-09。M1/M2 已安全升级本机。M3 三条实现线均由不同 subagent 执行，主管只管理协议、审查、验证、Git 和部署。**当前没有通过验收的已发布公网应用，M3/G5 未完成。**实现与证据在 `feat/trusted-delivery`；main 仍为 M2 App 与共享协议基线。
 
-| 范围 | 当前事实 | 后续门禁 |
+## 已接受的实现与验证
+
+| 方向 | 已验证事实 | 边界 |
 | --- | --- | --- |
-| Sharing G0 | `4eb886b` 独立共享协议；规范化 URL 收紧 `1dcc735`；主管最初 check 与97/97、合并 isolation 后 check 与101/101通过 | 后续规范收紧须单独提交复验，不静默漂移 |
-| Isolation G0 | `88d8643` capabilities/readiness 契约冻结，`f3c3d5b`独立exports；broker命令属于Agent私有实现 | 主管独立90/90（Agent WT原86+isolation4），集成101/101通过；实际Docker证明待实施 |
-| 前端 | 独立门禁验收、提交`1bbb3f3`并合入集成分支；主管64单测/build+19 Mock浏览器，限定补修后check/9定向单测/新1浏览器 | 桌面/390视觉已审；真实API/外部双域浏览器待联调，不称G5 |
-| 后端 | API App提交`7f98fc9`并合入集成分支，主管check/63全包/build通过；网关/Compose/隧道脚本实施中 | API测试隔离就绪为显式synthetic；镜像/网关与实际Agent联调待验收，禁止提前开隧道构建 |
-| Agent | network-none/离线依赖、可信 broker、独立 builder/browser 设计收敛；`f0dbd6b`已验收合入集成：主管check/78全量/build；实际Linux/精确ZIP/资源/跨plane与peer canary/HTTP取消/双进程强杀恢复/绝对deadline/trusted service TERM逐片通过 | 最终部署broker内certifier固定10实际门禁并核绑定image/policy/cache后才ready；最终跨服务发布与公网另验 |
-| 公网 G5 | 未开始，没有可交付公网地址 | G3 通过后由主管启动双隧道，再实际外部浏览器验收 |
+| 共享协议 | 独立 sharing/isolation G0，主管 check/101项通过；旧 strict v1/v0.2/delivery 不扩枚举 | 配置 ready 与外部实测分开，模型不接收 URL/凭证 |
+| 前端 | 固定版本分享/邀请构建、真实剪贴板与拒绝态、过期/换代/晚到响应、14px/12px；主管分段单测/Mock浏览器/桌面及390px目视通过 | 真实 HTTPS 登录 Cookie 已实际通过；尚无 published app 的完整外部 G5 |
+| API | 主管最新 check、串行69/69、build、运营guard4项通过；v1/v2统一 effective quota；typed host帮助与真实Router分开 | 私有交接授权代码已验收但没有执行；旧用量和 baseline3 不重写 |
+| Agent | 既有主管完整90项与SDK零网络serializer；新增有界失败观察、future私有源码快照/manifest、同hash Spec/Plan输入及通用hook约定，作者串行98/98，主管新增11项/类型/构建通过 | 最终 Dockerfile 缓存分层优化后的镜像、权限、tuple 和完整认证仍待恢复 VM 验证 |
+| 部署基础 | 主管实际 synthetic Docker API/GW/auth/撤销/跨PID离线CLI/崩溃恢复/WAL/精确ZIP通过；used/Run/Version1/1/1保留；镜像层34blob与构建context7类canary通过 | 这是独立check空间，不是实际模型或G5 |
+| OS/Runtime | 主管逐片复验非root/readonly/caps0/禁网/CPU内存PID磁盘日志、live跨plane/peer canary、Broker与Agent强杀/取消/迟到候选、独立原生PID1 watchdog/两UID；旧942镜像部署内11项certifier实际通过 | 新诊断镜像与最终分层recipe改变后不能借用旧proof；必须新tuple认证 |
 
-三条线分别由不同 subagent 执行。主管只统一协议、派活、审查、独立测试、Git 和部署验收，不编写 App 或部署基础设施实现。共享模块与旧 strict execution/conversation/delivery 分离；既有业务状态与额度不重置。
+职责与顺序见 [并行计划](m3-parallel-plan.md)，接口见 [sharing](protocol-sharing-v0.1.md)、[isolation](protocol-isolation-v0.1.md)，部署命令与每项限定续跑见 [第二阶段操作](../apps/api/M3-OPERATIONS-STAGE2.md)。
 
-当前环境只读确认 Docker Engine29.5.2、Linux/aarch64、4CPU、约5.77GiB内存、AppArmor/seccomp/cgroupns；cloudflared2026.10.7。它们是环境信息，不是隔离证明。其他任务的 `atoms-review` 镜像/容器不复用为本阶段证据，不清理其资源。
+## 真实验证：失败保留，不降验收
 
-公共空间使用全新卷、随机体验码和一个项目；不挂载/导入私有 `data/review-real`、其备份或实际模型验收临时目录。预览同源浏览器存储没有租户隔离，首版明确披露。可信服务才可读取各自凭证；Key 不作为镜像构建输入、生成源码、验证任务输入或浏览器内容。
+公共空间独立于 `data/review-real`，未导入私有真实应用或其 native home。当前一个身份/一个项目、3个终态失败Run、0 Version、generation used2，唯一一次真实分享咨询 completed/consult，未新增Run。
 
-所有不可信任务禁网，包括独立源码 ZIP 安装；可信镜像构建预取并校验固定公共依赖，任务使用私有离线 store，在新目录实际安装。缺缓存、工具链错配、未完成 probe 或旧代际结果均不得回退宿主运行或声明 ready。普通本机 M2 模式仍保留其原范围，不作为 M3 证据。
+1. R1 `run_e122ee5f556cfd91d2c8`：SDK在 noexec `/tmp` 缓存原生模块后加载失败，0可观察native步骤、输入输出保持null未知、未发布。修复固定 `NARB_DISABLE_NATIVE_CACHE=1` 从受信只读镜像加载；主管实际network-none、无真实Key卷的握手通过，prompt0。旧失败未复活。
+2. R2 `run_4d1b3a5d59d7589accff`：已结算3步/input15647/output24576，两个Worker请求max-tokens且正文0；预算正确停下。发现可变usage引用令重试差值误算0，已修标量快照；Worker结构化生成/修复改off，预算、模型、SDK不变。旧用量完整保留，不声称全部output均是thinking。唯一ask1步/input1768/output471，consult且零Run。
+3. R3 `run_179a74e39cf8c9213a81`：真实生成及两轮修复，TSC/build/smoke均过，行为3/9→6/9→6/9；最终required case5/7/9仍fail，正确blocked/noVersion/noClean。已结算5步/input49491（含cache28160）/output13287/active130039ms，未耗token/time而是达到原repair2上限。冻结Plan9case/66step/11required未改变。问题包括fixture-specific hook约定不清、卡片中心拖拽与代码排除p冲突，以及generic反馈不够具体。没有旧A0/A1源码内容可重建，不补造；新增快照只适用于未来attempt。
 
-基础容器策略：主管实际复跑`smoke-policy.ts` exit0，证据`atoms-v03-policy-sC7z4Y`，uid/gid10001、CapEff0、NoNewPrivs1、root EROFS、network none、CPU1.5/内存2GiB/swap0/PID128及无持久job日志均观测通过。探测的是未挂载路径，不冒充真实跨平面canary/浏览器/取消/崩溃门禁。原浏览器安装器100%后停顿已按15分钟硬超时保留；改用固定官方matching Playwright镜像与Node26.5后构建成功，未改隔离要求。
+原首轮有界续跑还曾在gateway pause前被拦截，未产生新Run：原session/key/body限定传输续跑后才创建R2。所有账本、不可变报告、unknown与known用量、失败日志保留。没有清零或退回已用次数，没有删step/降required/追加旧Run repair。
 
-当前main为协议澄清 `1aa26d7` 与M2 App；M3 App仅在集成分支，未升级本机live或公网。
+## 已实际部署、尚未交付验收
 
-Chromium差异验证：默认seccomp失败`atoms-v03-browser-3xLSUV`；官方Playwright userns配置仍缺sandbox内部chroot，失败`njP5GA`；仅允许chroot syscall而不授任何cap后，作者与主管独立实际通过（主管`aUmNjY`）：chromiumSandbox=true、Node26.5/Linuxarm64、Chromium141、uid10001/CapEff0/NoNewPriv1；外层chroot仍EPERM(125)、mount拒绝(32)。不使用privileged/unconfined/hostIPC/no-sandbox或VM全局修改。这是当时镜像的browser smoke，不是最终完整OS readiness。后续离线runner装配/原DSL、资源、跨平面canary、取消/崩溃/重启与实际Runtime联调仍未完成，ready保持false。
+- 公共Docker拓扑仅loopback18080/18081；API/Agent/Broker无hostports，Broker唯一socket；模型凭据独立卷只给trusted Agent及一次性network-none Agent ingress。主管实际5角色uid1000/readonly/caps0与mount检查通过。
+- Homebrew和官方Developer ID签名Darwin cloudflared tunnel都被本机SIGKILL，原软件和安全设置未修改。显式官方Linux arm64 Docker transport已校验SHA、隔离live sentinel网络探针通过；连接器只接GW专用edge，无token/data/provider/socket挂载。双QuickTunnel域名已分配、实际外部工作台HTTP200、真实浏览器登录Secure/HttpOnly/host-only/SameSite=Lax通过。这不等于完整应用分享G5。
+- 实际Key未进argv/ENV/image/API/GW/Broker/admin/job；临时host输入已删。主管对六类当前镜像config/history/raw+gzip层扫描真实配置Key字节（4.81GB/98文件/59gzip），0命中，未输出Key值，临时needle/tar已删。
+- 真实model凭据仍只保存在trusted Agent专属卷；为稳定环境，主管已停止本项目Docker API/Agent/Broker，未中断其他项目。Host原M2服务继续保留。
 
-API补修`59f81f5`已由主管check/public10定向验证：Docker不可用不阻断可信只读Router，auto意图可按原授权排队/预占；无匹配证明不派Prepare/Worker、不计生成used，恢复不重跑Router。MD-only澄清已推main`1aa26d7`；M3 App仍仅集成分支。
+## 当前环境阻断与权限边界
 
-最终独立Agent回归：78/78（120.9s）、check/build通过。绝对deadline pending/running超时`Gk8MYc`、真实control/broker容器与文件凭证/active job TERM清理`82K5TR`通过。Root复验路径均为独立临时证据，不包括用户私有data/review-real。Agent job image固定`sha256:c62d88a3b4062b8ffb2b16b0db53d0f939765e223af5cbb8e989cca0d5c77be6`，当前policy `ab64f8441b4639a87987aa77ea21dbd693fdf6ee85f3f21b274c9b237180a8e1`；最终certifier仍未执行，因此不能据本节把部署ready设true。
+宿主磁盘曾ENOSPC：Data仅292MiB。主管只回收本任务18条精确private/reclaimable旧browser chmod缓存链14.46GB；全部image ID/tag列表逐项保持，未做system/image/volume全局prune。只删除保留Fake M2测试的可重建node_modules副本，683+3832个非缓存source/report/证据文件SHA保持，real `ryZwrG`/`8tSEg2`数据不动。源缓存回收记录在私有 `.atoms-m3/cache-recovery`。
+
+Host恢复约1.5–1.7GiB，但共享 `colima-link-bot` VM持续出现Guest shell `/bin/bash: Input/output error` 和新container临时mount目录I/O error，不能构建或启动新的验证容器。VM另有5个非本项目容器（atoms-review、link-bot）在运行。主管已记录12个原running容器的ID/image/restart策略，并请求用户允许重启该共享VM；**许可仍待回复，未执行重启/中断其他服务**。没有通过等待时长推定同意。
+
+ENOSPC期间Agent全回归首轮4项host clean失败保留为环境失败；释放空间后四项串行4/4与完整98/98、check/build通过。API串行69/69也已重新通过。最后source/测试已提交，实际大镜像/cache/权限与G5动作仍阻断。
+
+## 恢复后的剩余顺序
+
+1. 仅获许可后修复/重启共享VM，恢复非本项目原running状态，核对可用磁盘；不删除用户数据或其他项目资源。
+2. 验证优化后的静态依赖cache层与新harness最终job/control/broker镜像、两UID/权限；新tuple实际11-gate认证，不沿用旧image proof。
+3. 主管审查后才决定剩余一次有界真实Code；当前剩余generation额度1，原ask已完成，不重复问，不自动新建任务/扩模型预算。
+4. 只有required自动验收与精确ZIP通过并发布后，才执行真实外部浏览器分享、模块资源、本地持久化/刷新、匿名和internal拒绝、下载、签名过期/轮换、普通重启不回退Fake/不replay/不重扣额。
+5. 交接运营授权只能在published+实际G5通过后按唯一审计ledger补足访客remaining3，旧used/history/baseline不改；当前未执行。
+6. 最终验收完成后，停服前排空、完整备份用户本机数据，再安全升级main并推送；不能把当前集成候选称M3已完成。
+
+私有兼容性已先通过：完整停服备份的安全副本在5187/5601/5602/5700无模型模式实际启动/停止/重启，十类API状态集合逐项hash相同，2项目/5Run/5Version/55消息保留，2个旧v2工作区认证读取/schema通过。只新增clone登录和预览cache，副本已停止，原live未停止或修改；证据 `atoms-m3-private-compat-tx2hefnr/compatibility-result.json`。

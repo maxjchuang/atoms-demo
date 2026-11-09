@@ -42,6 +42,7 @@ services:
       COORDINATOR_MODE: ${M3_RUNTIME_MODE:-fake}
       AGENT_EXECUTION_BACKEND: docker_linux
       AGENT_DATA_DIR: /var/lib/atoms-v03-agent
+      API_INTERNAL_URL: http://api:3001
       BROKER_URL: http://broker:4310
       ATOMS_SERVICE_TOKEN_FILE: /run/agent-secrets/service-token
       AGENT_BROKER_TOKEN_FILE: /run/agent-secrets/broker-token

@@ -1,3 +1,4 @@
+import {registerRequirements,hasPendingRequirementIntent} from './requirements.js';
 import {registerBudgetRecovery} from './budget-recovery.js';
 import {readPublicHandoff} from './public-handoff.js';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
@@ -22,7 +23,7 @@ import { registerCoordination } from './coordination.js';
 export interface ApiOptions {
   dataDir: string; agentUrl: string; serviceToken: string; previewSecret: string; previewOrigin: string;
   publicProfile?:PublicProfile;trustedProxy?:string[];allowedOrigins?: string[]; secureCookies?: boolean; demoCode?: string; pollMs?: number; autoSchedule?: boolean;
-  deliveryBudget?:Partial<ReturnType<typeof Budget.parse>>;legacyFixtureMode?:boolean; deliveryToolchainId?:string;deliveryToolchain?:ReturnType<typeof ToolchainDescriptor.parse>;deliveryPlanningMode?:'host_profile'|'model_proposed';deliveryProfileHint?:{id:string;hash:string};
+  legacyRequirementsFixture?:boolean;deliveryBudget?:Partial<ReturnType<typeof Budget.parse>>;legacyFixtureMode?:boolean; deliveryToolchainId?:string;deliveryToolchain?:ReturnType<typeof ToolchainDescriptor.parse>;deliveryPlanningMode?:'host_profile'|'model_proposed';deliveryProfileHint?:{id:string;hash:string};
   coordinationMessageLimit?:number;coordinationMessagesPerMinute?:number;
 }
 type Result = { status: number; body?: unknown; cookie?: string };
@@ -53,7 +54,7 @@ const safeSecretEqual = (a: string, b: string) => {
 export async function createApi(options: ApiOptions) {
   const deliveryBudget=Budget.parse({maxWallTimeMs:900000,maxWaitingInputMs:86400000,maxRepairRounds:2,maxModelSteps:8,maxInputTokens:65536,maxOutputTokens:24576,maxArtifactBytes:20971520,...options.deliveryBudget});
   const dataDir = resolve(options.dataDir);
-  if(options.publicProfile){const profile=options.publicProfile;assertPublicDataNamespace(dataDir,parsePublicDeployment(profile.deployment()));if(options.demoCode||options.legacyFixtureMode||options.serviceToken.length<43||options.previewSecret.length<43)throw new Error('Public profile rejects demo seeding, legacy fallback or weak internal secrets');if((profile.sessionTtlSeconds??3600)<1||(profile.sessionTtlSeconds??3600)>3600||(profile.previewTtlSeconds??900)<1||(profile.previewTtlSeconds??900)>900)throw new Error('Public session/capability TTL out of bounds');}
+  if(options.publicProfile){const profile=options.publicProfile;assertPublicDataNamespace(dataDir,parsePublicDeployment(profile.deployment()));if(options.demoCode||options.legacyFixtureMode||options.legacyRequirementsFixture||options.serviceToken.length<43||options.previewSecret.length<43)throw new Error('Public profile rejects demo seeding, legacy fallback or weak internal secrets');if((profile.sessionTtlSeconds??3600)<1||(profile.sessionTtlSeconds??3600)>3600||(profile.previewTtlSeconds??900)<1||(profile.previewTtlSeconds??900)>900)throw new Error('Public session/capability TTL out of bounds');}
   const releasePublicWriter=options.publicProfile?acquirePublicWriter(dataDir):()=>{};
   await mkdir(join(dataDir, 'versions'), { recursive: true });
   const store = new Store(join(dataDir, 'api.sqlite'));
@@ -70,6 +71,7 @@ export async function createApi(options: ApiOptions) {
   let delivery:ReturnType<typeof registerDelivery>;
   let coordination:ReturnType<typeof registerCoordination>|undefined;
   let budgetRecovery:ReturnType<typeof registerBudgetRecovery>|undefined;
+  let requirements:ReturnType<typeof registerRequirements>|undefined;
   const loginAttempts = new Map<string, { since: number; count: number }>();
   const authHeaders = { authorization: `Bearer ${options.serviceToken}`, 'X-Atoms-Protocol-Version': PROTOCOL_VERSION, 'content-type': 'application/json' };
   const cookie = (token: string, clear = false, maxAge=604800) => `atoms_session=${clear ? '' : token}; Path=/; HttpOnly; SameSite=Lax${options.secureCookies||options.publicProfile ? '; Secure' : ''}; Max-Age=${clear ? 0 : maxAge}`;
@@ -291,11 +293,12 @@ export async function createApi(options: ApiOptions) {
         {id:id('message'),projectId,runId:run.id,role:metadata?.budgetContinuation?'assistant' as const:'user' as const,status:'complete' as const,content:metadata?.budgetContinuation?'已明确授权使用一次构建额度，从已保存源码继续同一冻结目标；旧失败记录保持不变。':prompt,createdAt:now()};
       if(!message)fail(409,'CONFLICT','来源消息不可用');
       message!.runId=run.id;if(!metadata?.sourceMessageId)store.state.messages.push(message!);
-      emit(projectId,run.id,{type:'message.updated',payload:message!});emit(projectId,run.id,{type:'run.updated',payload:run});return record;
+      emit(projectId,run.id,{type:'message.updated',payload:message!});emit(projectId,run.id,{type:'run.updated',payload:run});requirements?.direct(record);return record;
   };
   app.post('/api/v1/projects/:projectId/runs', (request, reply) => {
     const session = authorize(request); const project = ownProject(param(request, 'projectId'), session); const body = CreateRunRequest.parse(request.body);
     return mutation(request, reply, session.id, () => {
+      if(requirements?.legacyBlocked(project.dto.id))fail(409,'CONFLICT','当前有未确认的累计要求，请先审阅完整方案');
       const record=createRunCore(project.dto.id,body.prompt,body.mode,session.codeId);return {status:202,body:{run:record.dto}};
     });
   });
@@ -588,11 +591,12 @@ export async function createApi(options: ApiOptions) {
     store.state.codes.push(record); return record.id;
   });
   if (options.demoCode) seedCode(options.demoCode);
-  delivery=registerDelivery({app,store,dataDir,agentUrl:options.agentUrl,serviceToken:options.serviceToken,toolchainId:options.deliveryToolchainId??'toolchain_react_v1',toolchain:options.deliveryToolchain,planningMode:options.deliveryPlanningMode,profileHint:options.deliveryProfileHint,id,now,hash,fail,authorize,ownRun,ownProject,ownVersion,updateRun,finish,
+  delivery=registerDelivery({app,store,dataDir,agentUrl:options.agentUrl,serviceToken:options.serviceToken,toolchainId:options.deliveryToolchainId??'toolchain_react_v1',toolchain:options.deliveryToolchain,planningMode:options.deliveryPlanningMode,profileHint:options.deliveryProfileHint,requirementScope:record=>requirements?.acceptedScope(record)??null,id,now,hash,fail,authorize,ownRun,ownProject,ownVersion,updateRun,finish,
     message(record,content,time=now()){const message={id:id('message'),projectId:record.dto.projectId,runId:record.dto.id,role:'assistant' as const,status:'complete' as const,content,createdAt:time};store.state.messages.push(message);emit(message.projectId,message.runId,{type:'message.updated',payload:message},time);}});
-  budgetRecovery=registerBudgetRecovery({scopeCompatible:run=>{const base=store.state.versions.find(v=>v.dto.id===run.dto.baseVersionId);return run.request?.mandate.projectMemory===[coordination?.projectMemory(run.dto.projectId),base?.dto.summary].filter(Boolean).join('\n').slice(0,20000);},closing:()=>closed,app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,hash,id,now,fail,authorize,ownRun,ownProject,sessionDto,createRun:createRunCore,updateRun});
+  budgetRecovery=registerBudgetRecovery({scopeBusy:projectId=>hasPendingRequirementIntent(store,projectId),scopeCompatible:run=>{const base=store.state.versions.find(v=>v.dto.id===run.dto.baseVersionId);return (!requirements||requirements.scopeCompatible(run))&&run.request?.mandate.projectMemory===[coordination?.projectMemory(run.dto.projectId),base?.dto.summary].filter(Boolean).join('\n').slice(0,20000);},closing:()=>closed,app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,hash,id,now,fail,authorize,ownRun,ownProject,sessionDto,createRun:createRunCore,updateRun});
   sharing=registerSharing({app,store,profile:options.publicProfile,authorize,ownProject,ownVersion,fail,freshVersion,now});
-  coordination=registerCoordination({app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,id,now,hash,canonical,fail,
+  if(!options.legacyFixtureMode&&!options.legacyRequirementsFixture)requirements=registerRequirements({app,store,id,now,hash,fail,authorize,ownProject,sessionDto,control:()=>coordination!});
+  coordination=registerCoordination({requirements,app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,id,now,hash,canonical,fail,
     delivery:options.legacyFixtureMode?undefined:delivery,
     codeActive:options.publicProfile?codeActive:undefined,deploymentFacts:()=>sharing.hostFacts(),
     messageLimit:options.coordinationMessageLimit??(options.publicProfile?15:undefined),messagesPerMinute:options.coordinationMessagesPerMinute??(options.publicProfile?6:undefined),

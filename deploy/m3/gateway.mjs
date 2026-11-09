@@ -17,7 +17,7 @@ export function createGateway({role,manifestFile,upstream,webDir,pausedFile}){
    if(path==='/health'&&['GET','HEAD'].includes(req.method)){res.writeHead(200,{'Content-Type':'application/json'});return res.end('{"ready":true}');}
    const deployment=JSON.parse(await readFile(manifestFile,'utf8')),origin=role==='workbench'?deployment.workbenchOrigin:deployment.previewOrigin;
    if(!origin)return deny(503,'Deployment bootstrap pending');const expected=new URL(origin);if(expected.protocol!=='https:'||expected.origin!==origin||req.headers.host!==expected.host)return deny(403,'Unexpected gateway host');
-   const api=role==='workbench'&&/^\/api\/(?:v1|v2|delivery\/v1|sharing\/v1)(?:\/|$)/.test(path);
+   const api=role==='workbench'&&/^\/api\/(?:v1|v2|delivery\/v1|sharing\/v1|budget-recovery\/v1|requirements\/v1)(?:\/|$)/.test(path);
    if(path==='/internal'||path.startsWith('/internal/')||path.startsWith('/metrics')||path.startsWith('/broker')||path.startsWith('/docker')||path.startsWith('/.'))return deny(404,'Not found');
    if(role==='preview'&&(!['GET','HEAD'].includes(req.method)||!/^\/p\/[^/]+\/.+/.test(path)))return deny(404,'Not found');
    if(api||role==='preview'){

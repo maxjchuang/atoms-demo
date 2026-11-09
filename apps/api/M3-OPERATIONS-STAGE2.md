@@ -127,3 +127,23 @@ Before the one POST it creates an owner-private API-data tar with SQLite/WAL byt
 Success requires three total Runs, one Version, generation used-two/reserved-zero, original ask unchanged, coordination quota unchanged, both old report hashes unchanged, actual DSH source provenance, and known cumulative Code usage within the fixed cap. A failure stops and retains evidence. This implementation has only provider-free plan/guard/positive/negative tests until the manager explicitly executes it; it is not a claimed real generation or external-browser pass.
 
 主管独立通过本候选与旧host/gateway/mode/guard合计37/37、两个语法入口与diff检查。Worker独立修复已由主管完整90项/check/build及实际零网络serializer验证；该operator仍不会自动执行，新增一次Code须独立guard明确授权。
+
+### Visitor handoff authorization (implemented, NOT executed)
+
+The public profile's original single code retains baseline `runLimit=3`, the same code ID/hash/expiry, project, Runs, Versions, true used count and all prior evidence. After verification, a separately reviewed host operation may add only enough authorization to leave **three remaining Runs**, at most three added. For example, verification used-two gets added-two/effective-limit-five; used-three gets added-three/effective-limit-six. The session truthfully reports that effective lifetime limit and the unchanged lifetime used count. Every v1/v2 admission and reservation uses the same API core limit. Per-Run model budgets and independent coordination quota do not change. Private local development ignores this public-only ledger.
+
+The append-only private `review-handoff-v1.json` in the API data volume records namespace/code/epoch/current-version, prior used/remaining, added/effective limit, reviewed external evidence hash, backup hash, exact state hash, request hash and timestamps. It is owner0600, hash-bound and bounded at load; malformed or over-three public authorization fails startup closed. The operation does not modify SQLite business history. A repeated identical request returns the original receipt without adding again; changed state, request, epoch or subject refuses another grant.
+
+The host command stays a plan unless independently authorized:
+
+```sh
+pnpm m3:handoff --plan
+# Only after all actual external gates, accepted API image rebuild, and stopped/drained API:
+ATOMS_ALLOW_M3_HANDOFF_GRANT=1 pnpm m3:handoff --project atoms-m3-public --grant --external-evidence "$HOME/.atoms-m3/public/reviewed-external-result.json"
+```
+
+The evidence must be a protected current-owner0600 copy of the existing Web external audit's actual `result.json`. It must attest actual external browser readonly mode, current published version/project/epoch and both current origins, no new model/Run/message, stable business state, successful external preview document/scripts, clipboard copy, fresh-guest app persistence and internal/anonymous path denials. A configured URL or a `verified=true` flag alone is insufficient. The host operator is the authority reviewing the actual browser evidence; the API validates that attestation and its subject/binding, not a cryptographic proof that a browser ran. Unpublished, stale, active/pending, revoked/expired code, or missing evidence refuses authorization.
+
+The wrapper first checks the actual Compose API is stopped, requires drained state, recovers only its stopped writer lease, captures and hashes a full private API backup and saves the exact request before the offline CLI call. It requires at least 1GiB free host space before backup. No public admin endpoint exists; only the dedicated oneoff admin gets the handoff authorization flag. An unchanged saved request can reconcile a lost response; state drift cannot mint a new increment. No plaintext rotation, expiry extension, new identity/project, model request, automatic restart or quota reset occurs. The implementation lane has not executed this operation in the public namespace; only isolated synthetic tests may grant their temporary fixtures.
+
+主管独立通过API check、串行完整69/69（14.0s）、build与host handoff4项guard/脱敏测试。私有ledger加载只检查不可变身份/授权数值/hash，不以日后正常used增加、发布新版本或域名epoch变化否定已授予容量；重复运营grant在状态漂移后仍拒绝。当前没有已发布版本/外网应用证据，所以本功能未在public执行，未增加任何实际额度。

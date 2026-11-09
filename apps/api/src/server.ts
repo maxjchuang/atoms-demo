@@ -1,3 +1,4 @@
+import {readPublicHandoff} from './public-handoff.js';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
@@ -56,6 +57,9 @@ export async function createApi(options: ApiOptions) {
   await mkdir(join(dataDir, 'versions'), { recursive: true });
   const store = new Store(join(dataDir, 'api.sqlite'));
   if(options.publicProfile&&(store.state.projects.length>1||store.state.codes.length>1||store.state.codes.some(c=>!c.publicIssuedAt||!Number.isFinite(Date.parse(c.publicIssuedAt))||!Number.isFinite(Date.parse(c.expiresAt))||c.projectLimit!==1||c.runLimit!==3||Date.parse(c.expiresAt)-Date.parse(c.publicIssuedAt)>86400000))){store.close();releasePublicWriter();throw new Error('Public data must contain only the provisioned single reviewer/project profile');}
+  const publicEffectiveLimits=new Map<string,number>();
+  if(options.publicProfile){try{const deployment=parsePublicDeployment(options.publicProfile.deployment());for(const code of store.state.codes){const grant=readPublicHandoff(dataDir,deployment,code);publicEffectiveLimits.set(code.id,grant?.effectiveRunLimit??code.runLimit);}}catch(error){store.close();releasePublicWriter();throw error;}}
+  const effectiveRunLimit=(code:Code)=>options.publicProfile?(publicEffectiveLimits.get(code.id)??code.runLimit):code.runLimit;
   const app = Fastify({ logger: false, bodyLimit: 65536,trustProxy:options.publicProfile?(options.trustedProxy??[]):false });
   const preview = Fastify({ logger: false, routerOptions: { maxParamLength: 4096 } });
   let busy = false; let closed = false;
@@ -98,7 +102,7 @@ export async function createApi(options: ApiOptions) {
   const codeFor = (session: SessionRecord) => store.state.codes.find((entry) => entry.id === session.codeId)!;
   const sessionDto = (session: SessionRecord) => {
     const code = codeFor(session); const records = store.state.runs.filter((entry) => entry.codeId === code.id);
-    return { id: session.id, expiresAt: session.expiresAt, quota: { projectLimit: code.projectLimit, runLimit: code.runLimit,
+    return { id: session.id, expiresAt: session.expiresAt, quota: { projectLimit: code.projectLimit, runLimit: effectiveRunLimit(code),
       projectsUsed: store.state.projects.filter((entry) => entry.codeId === code.id).length,
       runsReserved: records.filter((entry) => !entry.started && !terminal(entry.dto.status)).length,
       runsUsed: records.filter((entry) => entry.started).length } };
@@ -276,7 +280,7 @@ export async function createApi(options: ApiOptions) {
     CreateRunRequest.parse({prompt,mode});
       const code=store.state.codes.find(c=>c.id===codeId)!;if(options.publicProfile&&!codeActive(codeId))fail(403,'FORBIDDEN','体验码已失效，未创建新任务');
       const records=store.state.runs.filter(r=>r.codeId===codeId);
-      if(records.filter(r=>r.started||!terminal(r.dto.status)).length>=code.runLimit)fail(403,'QUOTA_EXCEEDED','生成额度已用完');
+      if(records.filter(r=>r.started||!terminal(r.dto.status)).length>=effectiveRunLimit(code))fail(403,'QUOTA_EXCEEDED','生成额度已用完');
       const run = Run.parse({ id: id('run'), projectId, revision: 1, status: 'queued', phase: null,
         mode, baseVersionId: null, resultVersionId: null, executionId: null, pendingAttention: null,
         pendingAnswer: null, checks: [], createdAt: now(), updatedAt: now(), error: null });

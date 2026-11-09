@@ -38,6 +38,7 @@
     "m3:test-stage2": "node --test scripts/m3-stage2.test.mjs",
     "m3:build-connector": "node scripts/m3-build-connector.mjs",
     "m3:test-connector": "node --test scripts/m3-docker-transport.test.mjs",
-    "m3:probe-connector-network": "node scripts/m3-connector-probe.mjs"
+    "m3:probe-connector-network": "node scripts/m3-connector-probe.mjs",
+    "m3:handoff": "node --import tsx scripts/m3-handoff.mjs"
   }
 }

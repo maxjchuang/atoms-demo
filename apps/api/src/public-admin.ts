@@ -1,3 +1,4 @@
+import {inspectPublicHandoff,createHandoffReceipt,readPublicHandoff,handoffFile,handoffHash,type HandoffGrantRequest} from './public-handoff.js';
 import {mkdirSync,writeFileSync,readFileSync,existsSync,rmSync,readdirSync,lstatSync} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {hostname} from 'node:os';
@@ -29,5 +30,12 @@ export function offlinePublicCode(dataDir:string,deployment:PublicDeployment,act
    return {action,expiresAt:store.state.codes[0].expiresAt};
   }
   if(store.state.codes.length!==1)throw new Error('Expected exactly one public reviewer identity');store.transaction(()=>{store!.state.codes[0].revoked=true;});return {action,revoked:true};
+ }finally{store?.close();release();}
+}
+
+/** Separately guarded host-only grant; never rewrites SQLite business history or baseline limits. */
+export function offlinePublicHandoff(dataDir:string,deployment:PublicDeployment,input?:HandoffGrantRequest,authorized=false){
+ assertPublicDataNamespace(dataDir,deployment);const release=acquirePublicWriter(dataDir);let store:Store|undefined;
+ try{store=new Store(join(dataDir,'api.sqlite'));const view=inspectPublicHandoff(store.state,deployment);if(!input)return view;if(!authorized)throw Error('Independent handoff authorization guard required');const existing=readPublicHandoff(dataDir,deployment,store.state.codes[0]);if(existing){if(existing.requestHash!==handoffHash(input)||existing.stateHash!==view.stateHash||existing.deploymentInstanceId!==view.deploymentInstanceId||existing.subjectVersionId!==view.subjectVersionId)throw Error('Handoff already exists with changed state/request/epoch/subject; no added authorization');return existing;}const receipt=createHandoffReceipt(store.state,deployment,input);writeFileSync(handoffFile(dataDir),JSON.stringify(receipt,null,2),{mode:0o600,flag:'wx'});return receipt;
  }finally{store?.close();release();}
 }

@@ -144,3 +144,5 @@ API消费冻结 sharing 0.1，与旧 DTO 不混用。共享descriptor URL-free�
 M1 Router 独立通道保留：自然语言 ask/咨询/进度不依赖 job OS proof，仍受身份、体验码TTL、协调预算与限流约束。auto 变更可保存有界排队意图，但无当前匹配 proof 不派 Prepare/Worker、不计生成 used；恢复继续原队列，不重跑 Router。普通 healthy job busy 不应撤销隔离证明，实际 busy/ask/queued 的 Docker 联调另由主管验收。
 
 上述独立Router补修由主管另行通过API check与public10/10定向回归；前一完整63项与本次10项不相加声称完整65项重跑。
+
+Public visitor handoff is a host-only, separately guarded post-acceptance operation (`pnpm m3:handoff --plan`). It preserves baseline-three and real lifetime usage, adds at most three to leave three remaining, and loads an immutable private audit ledger into the one common Run quota. It requires stopped/drained ownership, backup, a current published subject and actual external browser evidence. There is no public admin route, rotation, automatic grant or model call. See [M3 operations](M3-OPERATIONS-STAGE2.md) for the exact evidence and operator gate; implementation does not mean the public grant has been executed.

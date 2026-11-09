@@ -1,3 +1,4 @@
+import{policyAdmissibleCorrection}from'./fixtures/policy-admissible-correction.js';
 import assert from 'node:assert/strict';import test from 'node:test';
 import {prepareRequest} from '@atoms/contracts/delivery-fixtures';
 import {RequirementSeed} from '@atoms/contracts/delivery';
@@ -42,7 +43,7 @@ test('both captured conflicts stay strict and one budgeted mock correction retur
     let failure!:ModelPlanSchemaError;try{mapModelPlan(raw,request);}catch(error){failure=error as ModelPlanSchemaError;}assert.ok(failure instanceof ModelPlanSchemaError);assert.ok(failure.issues.every(issue=>issue.code===code&&issue.path.length>0));
   }
   assert.equal(forms.first.coverage[0].method,'manual');assert.equal(forms.first.cases.length,4);assert.equal(forms.second.coverage.length,2,'no host dedup or conversion');
-  const root=await mkdtemp(path.join(os.tmpdir(),'atoms-derived-mock-correction-'));const good=await mixedGoalDerivedProposal();let calls=0;const caps:(number|undefined)[]=[];const prompts:string[]=[];
+  const root=await mkdtemp(path.join(os.tmpdir(),'atoms-derived-mock-correction-'));const good=policyAdmissibleCorrection(await mixedGoalDerivedProposal());let calls=0;const caps:(number|undefined)[]=[];const prompts:string[]=[];
   const adapter=new DshPlanningAdapter({apiKey:'unit-test-only-unusable',harnessFactory:options=>{caps.push(options.maxTokens);return{async run(prompt:string,callbacks:{onNotification?:(n:HarnessNotification)=>void}){
     prompts.push(prompt);const index=calls++;const usage=index===0?{inputTokens:1403,cacheReadTokens:0,cacheWriteTokens:0,outputTokens:1130,totalTokens:2533}:{inputTokens:566,cacheReadTokens:1024,cacheWriteTokens:0,outputTokens:1325,totalTokens:2915};
     const emit=(type:string,seq:number,data:object)=>callbacks.onNotification?.({method:'session.event',params:{sessionId:'session_explicit_derived_mock',event:{type,seq,data:{turn:1,step:0,...data}}}});emit('step/start',1,{});emit('assistant/message',2,{usage});

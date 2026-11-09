@@ -102,10 +102,20 @@ export function registerDelivery(h:Host){
   if(previous){
    if(report.attempts.length<previous.attempts.length||previous.attempts.some((attempt,index)=>D.canonicalDeliveryJson(attempt)!==D.canonicalDeliveryJson(report.attempts[index])))throw new Error('Sealed attempt history changed');
    if(previous.evidence.some(evidence=>!report.evidence.some(next=>next.id===evidence.id&&D.canonicalDeliveryJson(next)===D.canonicalDeliveryJson(evidence))))throw new Error('Published evidence history changed');
-   if(previous.cleanBuild&&report.cleanBuild?.id===previous.cleanBuild.id&&D.canonicalDeliveryJson(report.cleanBuild)!==D.canonicalDeliveryJson(previous.cleanBuild))throw new Error('Sealed clean observation changed');
-   if(previous.exportManifest&&report.exportManifest?.id===previous.exportManifest.id&&D.canonicalDeliveryJson(report.exportManifest)!==D.canonicalDeliveryJson(previous.exportManifest))throw new Error('Sealed export observation changed');
   }
   for(const object of [...report.attempts,...(report.exportManifest?[report.exportManifest]:[]),...(report.cleanBuild?[report.cleanBuild]:[])])assertHash(object);
+  // Current pointers may be null while another round runs. Retain every accepted
+  // sealed identity independently of those pointers, including across restart.
+  // Lazily seed from the prior report for pre-index records; never migrate old Runs.
+  const identities=new Map((r.delivery!.sealedIdentities??[]).map(item=>[item.kind+':'+item.id,item]));
+  const remember=(observed:D.DeliveryReportDto|undefined)=>{
+   for(const [kind,object] of [['clean',observed?.cleanBuild],['export',observed?.exportManifest],['archive',observed?.exportManifest?.archive]] as const){
+    if(!object)continue;const key=kind+':'+object.id,bodyHash=hash(D.canonicalDeliveryJson(object)),old=identities.get(key);
+    if(old&&old.bodyHash!==bodyHash)throw new Error(kind==='clean'?'Sealed clean observation changed':kind==='export'?'Sealed export observation changed':'Sealed archive observation changed');
+    identities.set(key,{kind,id:object.id,bodyHash});
+   }
+  };remember(previous);remember(report);
+
   const dir=join(h.dataDir,'deliveries',r.delivery!.preparationId,`${report.revision}-${report.hash}`);await mkdir(dir,{recursive:true});
   pathSet(report.evidence.map(e=>e.path));let total=0;
   for(const evidence of report.evidence){total+=evidence.bytes;if(total>r.request!.budget.maxArtifactBytes)throw new Error('Evidence exceeds budget');const bytes=await bounded(await request(prefix+`/evidence/${encodeURIComponent(evidence.id)}`),evidence.bytes);if(bytes.length!==evidence.bytes||hash(bytes)!==evidence.sha256)throw new Error('Evidence checksum mismatch');
@@ -114,7 +124,7 @@ export function registerDelivery(h:Host){
    const target=join(dir,evidence.path);await mkdir(join(target,'..'),{recursive:true});await writeFile(target,bytes);
   }
   await writeFile(join(dir,'report.json'),JSON.stringify(report));
-  persist(()=>{const record=current(r.dto.id);record.delivery!.report=report;record.delivery!.reportDirectory=dir;});
+  persist(()=>{const record=current(r.dto.id);record.delivery!.report=report;record.delivery!.reportDirectory=dir;record.delivery!.sealedIdentities=[...identities.values()];});
   return report;
  };
  const validateZipDirectory=(bytes:Buffer)=>{
@@ -277,7 +287,7 @@ export function registerDelivery(h:Host){
   versions:request.context.facts.versions.map(v=>{const stored=store.state.versions.find(x=>x.dto.id===v.id)!,r=origin(stored);return {versionId:v.id,quality:r?.delivery?(r.delivery.invalid?'blocked':r.delivery.verified?r.delivery.report?.quality??'pending':'pending'):'legacy_unverified',report:r?.delivery?.report?{id:r.delivery.report.id,hash:r.delivery.report.hash}:null,sourceSnapshotHash:r?.delivery?.report?.attempts.at(-1)?.sourceBeforeHash??null,provenance:provenance(stored,r),gaps:r?.delivery?.report?.gaps??[]};}),
   runs:request.context.facts.runs.map(v=>{const r=store.state.runs.find(x=>x.dto.id===v.id)!;return {runId:v.id,quality:r.delivery?(r.delivery.invalid?'blocked':r.delivery.verified||r.delivery.report?.quality==='blocked'?r.delivery.report?.quality??'pending':'pending'):'legacy_unverified',report:r.delivery?.report?{id:r.delivery.report.id,hash:r.delivery.report.hash}:null,gaps:r.delivery?.report?.gaps??[]};}),availableActions:[]}) as Record<string,unknown>));
  return {tick,verifyCandidate,archive,view,failureSummary,provenance,facts,signed,request,loadReport,
-  invalid(r:RunRecord,error?:unknown){persist(()=>{const currentRecord=current(r.dto.id);const reasons:Record<string,string>={'Nonpublic lockfile':'LOCKFILE_NONPUBLIC_REFERENCE','Archive checksum mismatch':'ARCHIVE_CHECKSUM_MISMATCH','Archive contents manifest mismatch':'ARCHIVE_CONTENTS_MISMATCH','Candidate source/dist mismatch':'SOURCE_DIST_BINDING_MISMATCH','Report subject mismatch':'REPORT_SUBJECT_MISMATCH','Report changed frozen bundle':'FROZEN_BUNDLE_MISMATCH','Unknown or exceeded total usage':'BUDGET_USAGE_INVALID','Canonical hash mismatch':'OBJECT_HASH_MISMATCH','Sealed attempt history changed':'ATTEMPT_HISTORY_CHANGED','Published evidence history changed':'EVIDENCE_HISTORY_CHANGED','Sealed clean observation changed':'CLEAN_HISTORY_CHANGED','Sealed export observation changed':'EXPORT_HISTORY_CHANGED'};currentRecord.delivery!.invalidReason=error instanceof Error&&error.name==='ZodError'?'CONTRACT_INVALID':error instanceof Error?reasons[error.message]??'DELIVERY_VALIDATION_FAILED':'DELIVERY_VALIDATION_FAILED';currentRecord.delivery!.invalid='Evidence validation failed';if(!terminal(currentRecord.dto.status)){if(!currentRecord.delivery!.prepare&&!currentRecord.delivery!.wrapper||currentRecord.delivery!.runtimeStopped)h.finish(currentRecord,currentRecord.dto.status==='cancelling'?'cancelled':'failed','ARTIFACT_INVALID','交付证据未通过完整性校验，保留当前版本。');else{currentRecord.cancelCommand??={commandId:id('command')};h.updateRun(currentRecord,{status:'cancelling',pendingAttention:null,pendingAnswer:null});}}});},
+  invalid(r:RunRecord,error?:unknown){persist(()=>{const currentRecord=current(r.dto.id);const reasons:Record<string,string>={'Nonpublic lockfile':'LOCKFILE_NONPUBLIC_REFERENCE','Archive checksum mismatch':'ARCHIVE_CHECKSUM_MISMATCH','Archive contents manifest mismatch':'ARCHIVE_CONTENTS_MISMATCH','Candidate source/dist mismatch':'SOURCE_DIST_BINDING_MISMATCH','Report subject mismatch':'REPORT_SUBJECT_MISMATCH','Report changed frozen bundle':'FROZEN_BUNDLE_MISMATCH','Unknown or exceeded total usage':'BUDGET_USAGE_INVALID','Canonical hash mismatch':'OBJECT_HASH_MISMATCH','Sealed attempt history changed':'ATTEMPT_HISTORY_CHANGED','Published evidence history changed':'EVIDENCE_HISTORY_CHANGED','Sealed clean observation changed':'CLEAN_HISTORY_CHANGED','Sealed export observation changed':'EXPORT_HISTORY_CHANGED','Sealed archive observation changed':'ARCHIVE_HISTORY_CHANGED'};currentRecord.delivery!.invalidReason=error instanceof Error&&error.name==='ZodError'?'CONTRACT_INVALID':error instanceof Error?reasons[error.message]??'DELIVERY_VALIDATION_FAILED':'DELIVERY_VALIDATION_FAILED';currentRecord.delivery!.invalid='Evidence validation failed';if(!terminal(currentRecord.dto.status)){if(!currentRecord.delivery!.prepare&&!currentRecord.delivery!.wrapper||currentRecord.delivery!.runtimeStopped)h.finish(currentRecord,currentRecord.dto.status==='cancelling'?'cancelled':'failed','ARTIFACT_INVALID','交付证据未通过完整性校验，保留当前版本。');else{currentRecord.cancelCommand??={commandId:id('command')};h.updateRun(currentRecord,{status:'cancelling',pendingAttention:null,pendingAnswer:null});}}});},
   async restoreCheck(v:VersionRecord){if(!v.deliveryOriginRunId)return;const r=origin(v);if(!r?.delivery?.report?.exportManifest)throw new Error('Missing restore provenance');for(const f of r.delivery.report.exportManifest.files){const bytes=await readFile(join(v.directory,f.path));if(bytes.length!==f.bytes||hash(bytes)!==f.sha256)throw new Error('Restore source changed');}}
  };
 }

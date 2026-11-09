@@ -1,0 +1,87 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import type { DeepSeekHarness } from '@deepseek-ai/dsh-sdk-client';
+import { prepareRequest } from '@atoms/contracts/delivery-fixtures';
+import { compilePlanningRecipes, inspectRecipeFields, recipeActionExamples, recipePlanningPrompt, RECIPE_VERSION, RECIPE_ROLES } from '../src/planning-recipes.js';
+import { mapModelPlan, ModelPlanSchemaError } from '../src/planning-format.js';
+import { reviewPlanSemantics } from '../src/planning-semantics.js';
+import { DshPlanningAdapter } from '../src/delivery-planning.js';
+import { createAgentServer } from '../src/runtime.js';
+import { trustedTemplate } from '../src/trusted-template.js';
+import { runBrowserPlan } from '../src/browser-dsl.js';
+const refs = prepareRequest.seed.items.map((_, i) => 's' + i);
+const ir = (recipes: unknown[]) => ({ formatVersion: RECIPE_VERSION, criteria: [{ ref: 'r0', description: 'Generic source-backed controls and initial observations', sourceSeedRefs: refs, verification: { method: 'automated', recipes } }] });
+// Shape-only reductions of both observed failures. No original product goals, native logs or user data.
+const first = () => ir([{ kind: 'initial_controls', targets: [{ role: 'application', name: 'Workbench view' }] }, { kind: 'text_outcome', actions: [{ action: 'press', key: 'ArrowLeft' }], target: { testId: 'status' }, observation: 'text', exact: 'Ready' }]);
+const second = () => ir([{ kind: 'initial_controls', targets: [{ role: 'application', name: 'Workbench view' }] }, { kind: 'text_outcome', actions: [], target: { testId: 'status' }, observation: 'text', exact: 'Ready' }]);
+test('one bounded preflight exposes unsupported source role and missing press target across independent recipes without modifying or accepting either capture', () => {
+    const raw = first(), original = JSON.stringify(raw), issues = inspectRecipeFields(raw);
+    assert.ok(issues.some(i => i.path.includes('targets') && i.requirement.includes(RECIPE_ROLES.join(',')) && i.requirement.includes('aria-label')));
+    assert.ok(issues.some(i => i.path.includes('actions') && i.requirement.includes('press') && i.requirement.includes('target')));
+    assert.throws(() => compilePlanningRecipes(raw), ModelPlanSchemaError);
+    assert.equal(JSON.stringify(raw), original);
+    const correctedAction = second();
+    const remaining = inspectRecipeFields(correctedAction);
+    assert.equal(remaining.length, 1, 'initial text with actions [] is not an action-effect failure');
+    assert.ok(remaining[0].requirement.includes('aria-label'));
+    assert.throws(() => compilePlanningRecipes(correctedAction), ModelPlanSchemaError);
+    const many = ir([{ kind: 'text_outcome', actions: [{ action: 'press', key: 'ArrowLeft' }, { action: 'fill', target: { role: 'application', name: 'View' } }], target: { role: 'application', name: 'View' }, observation: 'unknown', contains: '' }, { kind: 'geometry_delta', actions: [], target: { label: 'Actual entity' }, dx: 1, dy: 0, tolerancePx: 8 }]);
+    const all = inspectRecipeFields(many);
+    for (const field of ['actions', 'target', 'observation', 'contains'])
+        assert.ok(all.some(i => i.path.includes(field)), field);
+    assert.ok(all.some(i => i.requirement.includes('no-motion')));
+    assert.throws(() => compilePlanningRecipes(many), ModelPlanSchemaError);
+    const examples = recipeActionExamples();
+    assert.equal(examples.length, 6);
+    assert.deepEqual(examples.find(a => a.action === 'press'), { action: 'press', target: { label: 'Example application region' }, key: 'ArrowRight' });
+    const prompt = recipePlanningPrompt(prepareRequest, []);
+    assert.ok(prompt.includes(JSON.stringify(examples)));
+    assert.match(prompt, /actions:\[\] is allowed ONLY here/);
+    assert.match(prompt, /NOT a fixed board\/viewport\/application container/);
+});
+test('actual browser supports source aria-label application region and initial text/value checks with no actions; movement/count still need actions', { timeout: 15000 }, async (t) => {
+    const raw = ir([{ kind: 'initial_controls', targets: [{ label: 'Workbench view' }] }, { kind: 'text_outcome', actions: [], target: { label: 'Status' }, observation: 'text', exact: 'Ready' }, { kind: 'text_outcome', actions: [], target: { label: 'Editable' }, observation: 'value', exact: 'Initial' }]);
+    const { plan } = mapModelPlan(compilePlanningRecipes(raw), prepareRequest);
+    assert.equal(reviewPlanSemantics(plan).status, 'policy_pass');
+    assert.ok(plan.cases[1].steps.every(s => ['open_current_app', 'expect_text'].includes(s.op)));
+    for (const recipe of [{ kind: 'geometry_delta', target: { testId: 'entity' }, actions: [], dx: 40, dy: 0, tolerancePx: 2 }, { kind: 'collection_delta', collection: { role: 'article', name: 'Entry' }, actions: [], delta: 1 }])
+        assert.throws(() => compilePlanningRecipes(ir([recipe])), ModelPlanSchemaError);
+    assert.throws(() => compilePlanningRecipes(ir([{ kind: 'text_outcome', actions: [], target: { label: 'Status' }, observation: 'text', contains: '' }])), ModelPlanSchemaError);
+    const root = await mkdtemp(path.join(os.tmpdir(), 'atoms-recipe-label-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await writeFile(path.join(root, 'index.html'), '<!doctype html><main><div role="application" aria-label="Workbench view" tabindex="0">Actual source region</div><span aria-label="Status">Ready</span><input aria-label="Editable" value="Initial"></main>');
+    const result = await runBrowserPlan({ dist: root, plan, evidenceDir: path.join(root, 'evidence'), signal: new AbortController().signal });
+    assert.equal(result.caseResults.length, 3);
+    assert.ok(result.caseResults.every(c => c.status === 'passed'), JSON.stringify(result.caseResults));
+});
+test('mock replay of both mechanically invalid IR responses receives aggregate actionable feedback but stops at the unchanged single retry', { timeout: 10000 }, async (t) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'atoms-recipe-capture-replay-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    let calls = 0;
+    const prompts: string[] = [];
+    const run = async (prompt: string, callback: any) => { prompts.push(prompt); const i = calls++; callback.onNotification({ method: 'session.event', params: { sessionId: 'session_recipe_usability', event: { type: 'step/start', seq: 1, data: { turn: 1, step: 0 } } } }); callback.onNotification({ method: 'session.event', params: { sessionId: 'session_recipe_usability', event: { type: 'assistant/message', seq: 2, data: { turn: 1, step: 0, usage: { inputTokens: 10, outputTokens: 100, totalTokens: 110 } } } } }); return { sessionId: 'session_recipe_usability', finishReason: 'stop', finalResponse: JSON.stringify(i ? second() : first()) }; };
+    const adapter = new DshPlanningAdapter({ apiKey: 'synthetic-no-provider', harnessFactory: () => ({ run, async close() { } } as unknown as DeepSeekHarness) });
+    const app = createAgentServer({ dataDir: root, mode: 'fake', serviceToken: 'recipe-usability-unit', planningAdapter: adapter });
+    t.after(() => app.close());
+    const req = structuredClone(prepareRequest);
+    req.planningMode = 'model_proposed';
+    req.profileHint = null;
+    req.toolchain = (await trustedTemplate()).descriptor;
+    await app.planning.start(req, req.preparationId);
+    for (let n = 0; n < 500 && !['failed', 'completed'].includes(app.planning.get(req.preparationId).snapshot.status); n++)
+        await new Promise(r => setTimeout(r, 10));
+    const state = app.planning.get(req.preparationId).snapshot;
+    assert.equal(state.status, 'failed');
+    assert.equal(calls, 2);
+    assert.equal(state.usage.modelSteps, 2);
+    assert.equal(state.usage.inputTokens, 20);
+    assert.equal(state.usage.outputTokens, 200);
+    assert.equal(state.result, null);
+    assert.equal(app.runtime.records.size, 0);
+    assert.ok(prompts[1].includes('Supported role values are exactly'));
+    assert.ok(prompts[1].includes('Every press requires an explicit target and key'));
+    assert.match(state.error!.message, /PLAN_REVIEW_V1/);
+});

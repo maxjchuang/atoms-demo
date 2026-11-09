@@ -1,3 +1,5 @@
+import * as Q from '@atoms/contracts/requirements';
+import type {registerRequirements} from './requirements.js';
 import * as D from '@atoms/contracts/delivery';
 import type {registerDelivery} from './delivery.js';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -17,7 +19,7 @@ import type { Store, SessionRecord, ProjectRecord, RunRecord, VersionRecord, Mes
 type Result = {status:number;body?:unknown;cookie?:string};
 type NewRunOptions = {sourceMessageId:string;originTurnId:string;proposalId:string;exactBaseVersionId?:string|null};
 export interface CoordinationHost {
-  app:FastifyInstance; store:Store; agentUrl:string; serviceToken:string;
+  requirements?:ReturnType<typeof registerRequirements>;app:FastifyInstance; store:Store; agentUrl:string; serviceToken:string;
   codeActive?:(id:string)=>boolean;canDispatch?:()=>Promise<boolean>;deploymentFacts?:()=>StartCoordinationRequestDto['context']['facts']['deployment'];messageLimit?:number; messagesPerMinute?:number;delivery?:ReturnType<typeof registerDelivery>;
   id:(prefix:string)=>string; now:()=>string; hash:(input:string|Uint8Array)=>string; canonical:(value:unknown)=>string;
   fail:(status:number,code:string,message:string)=>never;
@@ -94,7 +96,7 @@ export function registerCoordination(host:CoordinationHost) {
   };
   const turnSource=(turn:CoordinationRecord)=>store.state.messages.find(m=>m.id===turn.dto.userMessageId&&m.projectId===turn.dto.projectId)!;
   const createTurn=(project:ProjectRecord,codeId:string,content:string,mode:'auto'|'ask'|'build',runMode:'build'|'plan',
-    operation:StartCoordinationRequestDto['operation'],options:{replyTo?:StartCoordinationRequestDto['replyTo'];continuationOfTurnId?:string;retryOfTurnId?:string;reuseMessageId?:string;contextVersionId?:string|null}={})=>{
+    operation:StartCoordinationRequestDto['operation'],options:{replyTo?:StartCoordinationRequestDto['replyTo'];continuationOfTurnId?:string;retryOfTurnId?:string;reuseMessageId?:string;contextVersionId?:string|null;requirementsReview?:ReturnType<typeof Q.RequirementSnapshotRef.parse>}={})=>{
     const q=quota(codeId);if(q.reserved+q.used>=q.limit)fail(403,'COORDINATION_QUOTA_EXCEEDED','项目对话额度已用完；生成额度独立计算');
     const pending=state().turns.filter(t=>t.dto.projectId===project.dto.id&&!terminal(t.dto.status));
     if(pending.length>=DEFAULTS.maxPendingTurnsPerProject)fail(429,'RATE_LIMITED','本项目待处理消息过多，请稍后再试');
@@ -108,7 +110,7 @@ export function registerCoordination(host:CoordinationHost) {
       contextRevisionUsed:project.dto.revision,memoryRevisionUsed:memory(project.dto.id).revision,conversationRevisionUsed:state().revisions[project.dto.id]??0,
       result:null,error:null,continuationOfTurnId:options.continuationOfTurnId??null,retryOfTurnId:options.retryOfTurnId??null,
       createdAt:now(),startedAt:null,completedAt:null,updatedAt:now()}),codeId,operation,inputContent:content,replyTo:options.replyTo,sourceSeq:0,started:false,
-      requestedContextVersionId:options.contextVersionId};
+      requestedContextVersionId:options.contextVersionId,...(options.requirementsReview?{requirementsReview:options.requirementsReview}:{})};
     state().turns.push(record);coordEvent(project.dto.id,turnId,{type:'turn.updated',payload:record.dto});return {userMessage:message,turn:record.dto};
   };
   const response=(request:FastifyRequest,reply:FastifyReply,session:SessionRecord,fn:()=>Result)=>host.mutation(request,reply,session.id,fn);
@@ -231,8 +233,8 @@ export function registerCoordination(host:CoordinationHost) {
       if(proposal.revision!==body.expectedRevision)fail(409,'STALE_REVISION','提案已变化');
       if(proposal.status==='accepted'||proposal.status==='dismissed')fail(409,'CONFLICT','该提案不能重新评估');
       const project=host.ownProject(proposal.projectId,session);
-      return {status:202,body:createTurn(project,session.codeId,'基于最新版本重新整理这项提案。','ask','build',
-        {kind:'proposal_refresh',proposalId:proposal.id,expectedRevision:proposal.revision,forceProposalOnly:true})};
+      return {status:202,body:createTurn(project,session.codeId,'基于最新版本重新整理这项提案。','ask',host.requirements?'plan':'build',
+        {kind:'proposal_refresh',proposalId:proposal.id,expectedRevision:proposal.revision,forceProposalOnly:true},host.requirements?{requirementsReview:(()=>{const s=host.requirements!.snapshot(project.dto.id);return{id:s.id,hash:s.hash,revision:s.revision};})()}:undefined)};
     });
   });
   const acceptedGoal=(proposal:ChangeProposalDto,record:CoordinationRecord,runId:string,actorSessionId:string|null)=>{
@@ -247,9 +249,9 @@ export function registerCoordination(host:CoordinationHost) {
     view.revision++;view.summary=view.decisions.filter(d=>d.status==='active').map(d=>`${d.kind}: ${d.text}`).join('\n');
     view.summaryThroughConversationRevision=state().revisions[proposal.projectId]??0;view.updatedAt=confirmedAt;
   };
-  const accept=(proposal:ChangeProposalDto,record:CoordinationRecord,runMode:'build'|'plan',actorSessionId:string|null=null)=>{
+  const accept=(proposal:ChangeProposalDto,record:CoordinationRecord,runMode:'build'|'plan',actorSessionId:string|null=null,reviewedComplete=false)=>{
     if(proposal.acceptedRunId)return store.state.runs.find(r=>r.dto.id===proposal.acceptedRunId)!;
-    const project=store.state.projects.find(p=>p.dto.id===proposal.projectId)!;
+    const project=store.state.projects.find(p=>p.dto.id===proposal.projectId)!;if(!reviewedComplete&&host.requirements&&(host.requirements.needsReview(proposal.id)||!host.requirements.summaryFor(proposal.id)&&host.requirements.legacyBlocked(proposal.projectId)))fail(409,'CONFLICT','请通过完整需求审阅入口确认，不可只接受最后一项补充');
     const code=store.state.codes.find(c=>c.id===record.codeId);
     if(!code||code.revoked||Date.parse(code.expiresAt)<=Date.now())fail(403,'FORBIDDEN','体验权限已失效');
     if(Date.parse(proposal.expiresAt)<=Date.now())fail(409,'PROPOSAL_EXPIRED','提案已过期，请刷新后确认');
@@ -262,7 +264,7 @@ export function registerCoordination(host:CoordinationHost) {
     catch(error){if((error as {code?:string}).code==='QUOTA_EXCEEDED')fail(403,'GENERATION_QUOTA_EXCEEDED','生成额度已用完；项目对话额度独立计算');throw error;}
     acceptedGoal(proposal,record,run.dto.id,actorSessionId);
     proposal.status='accepted';proposal.acceptedRunId=run.dto.id;proposal.revision++;proposal.updatedAt=now();proposal.lastAdmissionError=null;
-    coordEvent(proposal.projectId,record.dto.id,{type:'proposal.updated',payload:proposal});return run;
+    host.requirements?.confirm(proposal,run);coordEvent(proposal.projectId,record.dto.id,{type:'proposal.updated',payload:proposal});return run;
   };
   app.post(base+'/proposals/:proposalId/accept',(request,reply)=>{
     const session=host.authorize(request);const body=AcceptProposalRequest.parse(request.body);const proposal=ownProposal(String((request.params as {proposalId:string}).proposalId),session);
@@ -346,7 +348,7 @@ export function registerCoordination(host:CoordinationHost) {
       assistantMessageId,content:record.inputContent,operation:record.operation,mode:record.dto.mode,runMode:record.dto.runMode,
       ...(record.replyTo?{replyTo:record.replyTo}:{}),...(record.dto.continuationOfTurnId?{continuationOfTurnId:record.dto.continuationOfTurnId}:{}),
       context,budget:CoordinationBudget.parse({})});
-    record.request=request;if(host.delivery)record.deliveryRequest=D.DeliveryCoordinationRequest.parse(host.delivery.signed({protocolVersion:D.DeliveryProtocolVersion,coordination:request,deliveryFacts:host.delivery.facts(request)}));record.requestHash=host.hash(host.canonical(request));
+    record.request=request;if(host.delivery)record.deliveryRequest=D.DeliveryCoordinationRequest.parse(host.delivery.signed({protocolVersion:D.DeliveryProtocolVersion,coordination:request,deliveryFacts:host.delivery.facts(request)}));if(host.requirements&&record.deliveryRequest)record.requirementsRequest=host.requirements.wrap(record,record.deliveryRequest);record.requestHash=host.hash(host.canonical(record.requirementsRequest??record.deliveryRequest??request));
     record.putPending=false;
     updateTurn(record,{assistantMessageId,contextVersionId:context.contextVersionId,contextRevisionUsed:context.contextRevision,
       memoryRevisionUsed:context.projectMemory.revision,conversationRevisionUsed:context.conversationRevision});return request;
@@ -426,15 +428,15 @@ export function registerCoordination(host:CoordinationHost) {
       const refreshed=record.operation.kind==='proposal_refresh';
       const proposal:ChangeProposalDto={id:id('proposal'),projectId,revision:1,originatingTurnId:record.dto.id,
         sourceMessageIds:result.evidence.map(e=>e.messageId),summary:result.summary,goal:result.goal,acceptance:result.acceptance,origin:result.origin,
-        basePolicy:refreshed?{kind:'exact_version',expectedBaseVersionId:store.state.projects.find(p=>p.dto.id===projectId)!.dto.currentVersionId}:result.basePolicy,
+        basePolicy:refreshed||record.requirementsReview?{kind:'exact_version',expectedBaseVersionId:record.requirementsRequest?(record.requirementsRequest.requirements.base.kind==='empty_project'?null:record.requirementsRequest.requirements.base.versionId):store.state.projects.find(p=>p.dto.id===projectId)!.dto.currentVersionId}:result.basePolicy,
         contextUsed:result.contextUsed,status:'open',acceptedRunId:null,supersedesProposalId:refreshed?record.operation.kind==='proposal_refresh'?record.operation.proposalId:null:null,
         lastAdmissionError:null,expiresAt:new Date(Date.now()+DEFAULTS.proposalTtlMs).toISOString(),createdAt:now(),updatedAt:now()};
-      state().proposals.push(proposal);let admission:'proposed'|'run_queued'|'blocked'='proposed';let runId:string|null=null;
+      state().proposals.push(proposal);if(host.requirements&&record.requirementsRequest){if(!record.requirementsResponse||host.canonical(record.requirementsResponse.delivery.coordination.result)!==host.canonical(result))fail(409,'CONFLICT','完整范围快照与协调结果不一致');host.requirements.materialize(record,result,proposal);}let admission:'proposed'|'run_queued'|'blocked'='proposed';let runId:string|null=null;
       for(const update of result.memoryUpdates)for(const messageId of update.sourceMessageIds){
         if(!store.state.messages.some(m=>m.id===messageId&&m.projectId===projectId&&m.role==='user'))fail(403,'FORBIDDEN','提案记忆建议来源不可验证');
       }
       state().proposalMemorySuggestions[proposal.id]=structuredClone(result.memoryUpdates);
-      if(record.dto.mode!=='ask'&&!refreshed&&result.origin!=='inferred_suggestion'&&proposal.basePolicy.kind==='latest_on_dispatch'){
+      if(!host.requirements?.needsReview(proposal.id)&&record.dto.mode!=='ask'&&!refreshed&&result.origin!=='inferred_suggestion'&&proposal.basePolicy.kind==='latest_on_dispatch'){
         try {const run=accept(proposal,record,record.dto.runMode);runId=run.dto.id;admission='run_queued';}
         catch(error){const code=(error as {code?:string}).code;proposal.lastAdmissionError={code:code==='QUOTA_EXCEEDED'||code==='GENERATION_QUOTA_EXCEEDED'?'GENERATION_QUOTA_EXCEEDED':'CONFLICT',message:'理解了修改目标，但未通过执行准入；尚未创建任务。',retryable:false};admission='blocked';}
       }
@@ -466,8 +468,8 @@ export function registerCoordination(host:CoordinationHost) {
     updateTurn(record,{status:'completed',result:outcome,error:null,completedAt:now()});
   };
   const fetchRuntime=async(path:string,method='GET',body?:unknown)=>{
-    const isDelivery=path.startsWith('/internal/delivery/');
-    const response=await fetch(host.agentUrl.replace(/\/$/,'')+path,{method,headers:{authorization:`Bearer ${host.serviceToken}`,...(isDelivery?{'X-Atoms-Delivery-Version':D.DeliveryProtocolVersion}:{'X-Atoms-Coordination-Version':VERSION}),'content-type':'application/json'},
+    const isRequirements=path.startsWith(Q.RequirementsInternalPrefix),isDelivery=path.startsWith('/internal/delivery/');
+    const response=await fetch(host.agentUrl.replace(/\/$/,'')+path,{method,headers:{authorization:`Bearer ${host.serviceToken}`,...(isRequirements?{[Q.RequirementsVersionHeader]:Q.RequirementsProtocolVersion}:isDelivery?{'X-Atoms-Delivery-Version':D.DeliveryProtocolVersion}:{'X-Atoms-Coordination-Version':VERSION}),'content-type':'application/json'},
       ...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(5000)});
     if(!response.ok)throw Object.assign(new Error('Coordination runtime response unavailable'),{status:response.status});return response;
   };
@@ -508,7 +510,7 @@ export function registerCoordination(host:CoordinationHost) {
               else settle(record,{kind:'consult',answer:deploymentHelp(),contextUsed:usedContext(record.request!),references:context.facts.availableActions.filter(a=>a.kind==='source_download').map(a=>({kind:'available_action' as const,actionId:a.id})),memoryUpdates:[]});
             });continue;
           }
-          const path=record.deliveryRequest?`/internal/delivery/v1/coordination-turns/${turnId}`:`/internal/v2/coordination-turns/${turnId}`;
+          const path=record.requirementsRequest?Q.RequirementsInternalPrefix+`/coordination-turns/${turnId}`:record.deliveryRequest?`/internal/delivery/v1/coordination-turns/${turnId}`:`/internal/v2/coordination-turns/${turnId}`;
           if(record.dto.status==='cancelling'){
             let exists=true;
             try{await fetchRuntime(path);}catch(error){if((error as {status?:number}).status===404)exists=false;else throw error;}
@@ -524,15 +526,17 @@ export function registerCoordination(host:CoordinationHost) {
           }else{
             // Persist uncertainty before sending. A timed-out PUT may still arrive remotely.
             store.transaction(()=>{state().turns.find(t=>t.dto.id===turnId)!.putPending=true;});
-            await fetchRuntime(path,'PUT',record.deliveryRequest??record.request);
+            await fetchRuntime(path,'PUT',record.requirementsRequest??record.deliveryRequest??record.request);
             store.transaction(()=>{state().turns.find(t=>t.dto.id===turnId)!.putPending=false;});
           }
           record=state().turns.find(t=>t.dto.id===turnId)!;
           if(record.cancelCommand)await fetchRuntime(path+'/cancel','POST',record.cancelCommand);
-          const rawPage=await(await fetchRuntime(path+`/events?after=${record.sourceSeq}&limit=100`)).json();
+          if(record.requirementsRequest){const raw=await(await fetchRuntime(path)).json();let typed;try{typed=Q.RequirementsCoordinationSnapshot.parse(raw);Q.validateRequirementInterpretation(record.requirementsRequest,typed);}catch{store.transaction(()=>{record=state().turns.find(t=>t.dto.id===turnId)!;const metered=CoordinationExecutionSnapshot.safeParse((raw as{delivery?:{coordination?:unknown}}).delivery?.coordination);if(metered.success&&metered.data.id===record.dto.id&&metered.data.projectId===record.dto.projectId&&host.canonical(metered.data.contextUsed)===host.canonical(usedContext(record.request!))&&metered.data.usage.modelSteps>0)record.started=true;const basis=record.requirementsRequest!.requirements.base;failure(record,'INTERNAL_ERROR',basis.kind==='published_version'&&!basis.sourceAvailable?'当前版本源码不可用；没有改用模板，也没有创建构建任务。':'完整要求结果未通过来源与一致性校验；没有创建构建任务。');});continue;}store.transaction(()=>{state().turns.find(t=>t.dto.id===turnId)!.requirementsResponse=typed;});}
+          let rawPage=await(await fetchRuntime(path+`/events?after=${record.sourceSeq}&limit=100`)).json();
+          if(record.requirementsRequest){const typed=Q.RequirementsCoordinationEvents.parse(rawPage);const req=record.requirementsRequest;if(host.canonical(typed.requirementsUsed)!==host.canonical({id:req.requirements.id,hash:req.requirements.hash,revision:req.requirements.revision})||host.canonical(typed.purposeUsed)!==host.canonical(req.purpose))throw Error('Requirements source page scope mismatch');rawPage=typed.delivery;}
           if(record.deliveryRequest){const outer=D.DeliveryCoordinationEventPage.parse(rawPage);const f=record.deliveryRequest.deliveryFacts;if(outer.deliveryFactsUsed.hash!==f.hash||outer.deliveryFactsUsed.projectId!==f.projectId||outer.deliveryFactsUsed.revision!==f.revision||outer.deliveryFactsUsed.asOf!==f.asOf)throw new Error('Delivery facts response mismatch');}
           const page=CoordinationSourceEventPage.parse(record.deliveryRequest?rawPage.page:rawPage);
-          for(const source of page.items){
+          for(const source of page.items){if(record.requirementsRequest&&source.event.type==='coordination.completed'&&record.requirementsResponse?.delivery.coordination.status!=='completed')break;
             record=state().turns.find(t=>t.dto.id===turnId)!;
             if(source.turnId!==turnId||source.projectId!==record.dto.projectId)throw new Error('Coordination source ownership mismatch');
             if(source.sourceSeq<=record.sourceSeq)continue;if(source.sourceSeq!==record.sourceSeq+1)throw new Error('Coordination event gap');
@@ -555,7 +559,7 @@ export function registerCoordination(host:CoordinationHost) {
       }
     }finally{busy=false;}
   };
-  return {mirror,tick,async close(){closing=true;while(busy)await new Promise(resolve=>setTimeout(resolve,10));},
+  return {review(session:SessionRecord,project:ProjectRecord,content:string,ref:ReturnType<typeof Q.RequirementSnapshotRef.parse>){return createTurn(project,session.codeId,content,'ask','plan',{kind:'message',input:{kind:'text',content}},{requirementsReview:ref});},acceptComplete(proposal:ChangeProposalDto,session:SessionRecord){const record=state().turns.find(t=>t.dto.id===proposal.originatingTurnId)!;return accept(proposal,record,'build',session.id,true);},mirror,tick,async close(){closing=true;while(busy)await new Promise(resolve=>setTimeout(resolve,10));},
     markExactConflict(record:RunRecord){const proposal=state().proposals.find(p=>p.id===record.proposalId);if(proposal){proposal.status='stale';proposal.acceptedRunId=null;proposal.revision++;proposal.updatedAt=now();coordEvent(proposal.projectId,record.originTurnId??null,{type:'proposal.updated',payload:proposal});}},
     projectMemory(projectId:string){return memory(projectId).summary;}};
 }

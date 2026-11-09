@@ -27,6 +27,18 @@ export function isPublicDeliveryLockfile(lock:string):boolean {
  }
  return true;
 }
+/** Only a host-owned finite diagnostic grammar is public; SDK/provider/raw model errors are never forwarded. */
+function parsePreparationDiagnostic(value:unknown):{envelope:string;schema:number;semantic:number}|undefined{
+ const parsed=D.DeliveryFailure.safeParse(value);if(!parsed.success||parsed.data.code!=='PLANNING_FAILED'||parsed.data.retryable)return;
+ const message=parsed.data.message,suffix='。请先修正计划的字段、初始条件或可验证效果；未启动代码生成。';if(message.length>768||!message.endsWith(suffix))return;
+ const match=/^PLAN_REVIEW_V1 schema=(0|[1-9]\d{0,2}) semantic=(0|[1-9]\d{0,2}) categories=([A-Z_]+:[1-9]\d{0,2}(?:,[A-Z_]+:[1-9]\d{0,2}){0,9})$/.exec(message.slice(0,-suffix.length));if(!match)return;
+ const schema=Number(match[1]),semantic=Number(match[2]);if(schema>120||semantic>120||schema+semantic===0)return;
+ const schemaCodes=new Set(['SCHEMA_COMPARISON','SCHEMA_FIELDS','SCHEMA_REFERENCE','SCHEMA_OTHER']),semanticCodes=new Set(['COUNT_ON_SCALAR_VALUE','COUNT_ON_INDEXED_LOCATOR','COLLECTION_UNPROVEN','STATE_TRIGGER_UNPROVEN','ACTION_WITHOUT_POSTCONDITION','CASE_WITHOUT_ASSERTION']);let schemaSum=0,semanticSum=0;const seen=new Set<string>();
+ for(const part of match[3].split(',')){const[code,raw]=part.split(':'),count=Number(raw);if(count>120||seen.has(code))return;seen.add(code);if(schemaCodes.has(code))schemaSum+=count;else if(semanticCodes.has(code))semanticSum+=count;else return;}
+ if(schemaSum!==schema||semanticSum!==semantic)return;return{envelope:message,schema,semantic};
+}
+export function trustedPreparationSummary(value:unknown):string|undefined{const diagnostic=parsePreparationDiagnostic(value);return diagnostic?`验收计划未通过：格式${diagnostic.schema}项、状态/效果条件${diagnostic.semantic}项；尚未进入编码。请重新整理完整方案后再构建。`:undefined;}
+type PrivatePreparationDiagnostic={preparationDiagnosticEnvelope?:string};
 export function registerDelivery(h:Host){
  const {store,app,hash,id,now,fail}=h;
  const digest=(v:Record<string,unknown>)=>hash(D.deliveryHashBody(v));
@@ -169,7 +181,7 @@ export function registerDelivery(h:Host){
    if(r.delivery!.invalid&&r.delivery!.runtimeStopped){persist(()=>h.finish(current(runId),'failed','ARTIFACT_INVALID','交付证据无效，执行服务已确认停止。'));return;}
    if(snapshot.status==='completed'&&r.dto.status!=='cancelling'){freeze(r,snapshot);return;}
    if(['failed','cancelled','interrupted'].includes(snapshot.status)||snapshot.status==='completed'&&r.dto.status==='cancelling'){
-    const finalReport=await loadReport(r);if(!finalReport?.final)return;persist(()=>{r=current(runId);h.finish(r,r.dto.status==='cancelling'?'cancelled':snapshot.status==='interrupted'?'interrupted':'failed',r.dto.status==='cancelling'?undefined:'VERIFICATION_FAILED','交付计划准备未完成，未发布新版本。');});
+    const finalReport=await loadReport(r);if(!finalReport?.final)return;persist(()=>{r=current(runId);const diagnostic=parsePreparationDiagnostic(snapshot.error);if(diagnostic)(r.delivery! as NonNullable<RunRecord['delivery']>&PrivatePreparationDiagnostic).preparationDiagnosticEnvelope=diagnostic.envelope;h.finish(r,r.dto.status==='cancelling'?'cancelled':snapshot.status==='interrupted'?'interrupted':'failed',r.dto.status==='cancelling'?undefined:'VERIFICATION_FAILED',trustedPreparationSummary(snapshot.error)??'交付计划准备未完成，未发布新版本。');});
    }
   }else{
    if(r.answerCommand&&r.dto.status!=='cancelling'){await request(path+'/inputs','POST',r.answerCommand);persist(()=>{current(runId).answerCommand=undefined;});}
@@ -199,7 +211,7 @@ export function registerDelivery(h:Host){
   if(d.invalid)return D.DeliveryReadView.parse({...subject,state:'available',binding:d.report?binding(d.report):{deliveryId:d.preparationId,reportHash:hash(d.invalid),reportRevision:1,sourceSnapshotHash:null},reportFinal:true,apiVerification:'invalid',quality:'blocked',publication:publication(undefined,r),provenance:provenance(v,r),report:null,gaps:[],error:{code:'EVIDENCE_INVALID',message:'交付证据未通过完整性校验。',retryable:false}});
   if(!d.report&&terminal(r.dto.status)&&d.noReportExpected)fail(404,'NOT_FOUND','任务在派发前停止，没有生成验证报告');
   if(!d.report)return D.DeliveryReadView.parse({...subject,state:'pending',phase:d.stage==='preparing'?'preparing':'executing',preparationId:d.preparationId,publication:publication(v,r)});
-  const report=d.report;const trusted=report.quality==='blocked'||d.verified===true;return D.DeliveryReadView.parse({...subject,state:'available',binding:binding(report),reportFinal:report.final,apiVerification:report.final&&trusted?'verified':'pending',quality:report.final&&trusted?report.quality:'pending',publication:publication(v,r),provenance:provenance(v,r),report,gaps:report.gaps,error:null});
+  const report=d.report;const trusted=report.quality==='blocked'||d.verified===true;const preparationSummary=d.stage==='preparing'&&report.lifecycle==='failed'?(trustedPreparationSummary(report.failure)??trustedPreparationSummary({code:'PLANNING_FAILED',message:(d as typeof d&PrivatePreparationDiagnostic).preparationDiagnosticEnvelope??'',retryable:false})):undefined;return D.DeliveryReadView.parse({...subject,state:'available',binding:binding(report),reportFinal:report.final,apiVerification:report.final&&trusted?'verified':'pending',quality:report.final&&trusted?report.quality:'pending',publication:publication(v,r),provenance:provenance(v,r),report,gaps:report.gaps,error:preparationSummary?{code:'PLANNING_FAILED',message:preparationSummary,retryable:false}:null});
  };
  const base='/api/delivery/v1';
  app.addHook('onRequest',async(r,reply)=>{if(r.url.startsWith(base+'/')){reply.header('X-Atoms-Delivery-Version',D.DeliveryProtocolVersion);if(r.headers['x-atoms-delivery-version']!==D.DeliveryProtocolVersion)fail(400,'INVALID_REQUEST','Delivery protocol header required');}});

@@ -243,6 +243,8 @@ function workspace(projectId: string) {
 const turnItem = (value: unknown) => Object.entries(store.projects).flatMap(([projectId, data]) => data.turns.filter(turn => turn.id === value).map(turn => ({ projectId, data, turn })))[0];
 const proposalItem = (value: unknown) => Object.entries(store.projects).flatMap(([projectId, data]) => data.proposals.filter(proposal => proposal.id === value).map(proposal => ({ projectId, data, proposal })))[0];
 const questionItem = (value: unknown) => Object.entries(store.projects).flatMap(([projectId, data]) => data.questions.filter(question => question.id === value).map(question => ({ projectId, data, question })))[0];
+// Mock-only collaboration seam; never imported by production components.
+export const mockCoordinationStore = { state, begin, finish, addMessage, context, emit, admit, save, get store() { return store; } };
 export const coordinationHandlers = [
   http.get('/api/v2/session', () => execution.unauthorized() ?? asJson({ session: execution.session(), coordinationQuota: { limit: 50, reserved: store.reserved, used: store.used } })),
   http.get('/api/v2/projects/:id/workspace', ({ params }) => execution.unauthorized() ?? (projectRecord(params.id) ? asJson(workspace(String(params.id))) : error(404, 'NOT_FOUND', '项目不存在'))),

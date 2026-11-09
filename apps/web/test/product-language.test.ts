@@ -23,3 +23,11 @@ test('assistant progress uses product roles and leaves unrelated words intact', 
   assert.equal(assistantText('Router 与 Agent 正在处理。'), '项目负责人 与 Atoms 正在处理。');
   assert.equal(assistantText('Reactant MyWorker file.tsx'), 'Reactant MyWorker file.tsx');
 });
+
+test('typed final answer preserves complete model wording and tail rather than applying progress vocabulary', () => {
+  const answer = '已发布源码和版本中的 React Router 与 Worker 是这个缺陷的诊断对象。' + '具体诊断与排查步骤。'.repeat(80) + '正文末尾：请先核对输入事件，再修改。';
+  assert.equal(assistantText(answer, true), answer);
+  assert.match(assistantText(answer, true), /React Router 与 Worker/);
+  assert.ok(assistantText(answer, true).endsWith('正文末尾：请先核对输入事件，再修改。'));
+  assert.equal(assistantText('Worker 正在实现 React 多文件应用。'), '程序员 正在实现 多文件网页应用。');
+});

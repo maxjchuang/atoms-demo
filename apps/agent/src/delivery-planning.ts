@@ -1,3 +1,4 @@
+import { inspectPlanningCandidate, combinedPlanIssues, savePlanningProposal, safePlanFailure } from './planning-diagnostics.js';
 import { verifiedSemanticSource, reviewPlanSemantics, type SemanticSource } from './planning-semantics.js';
 import { DSH_NATIVE_READONLY_ENV } from './dsh-native-env.js';
 import { mkdirSync, readFileSync, existsSync, writeFileSync, renameSync } from 'node:fs';
@@ -108,7 +109,18 @@ export class DshPlanningAdapter implements PlanningAdapter {
       await writeModelDiagnostic(home, { stage: 'response_received', role: 'delivery-planning', id: context.request.preparationId, finishReason: result.finishReason, textLength: result.finalResponse.length, usageKnown: true, remaining: { activeMs: context.remainingActiveMs?.() ?? context.request.planningBudget.maxWallTimeMs, outputTokens: context.remainingOutput() } });
       if (context.signal.aborted) throw new Error('Planning aborted');
       const raw = parseModelJson({ text: result.finalResponse, finishReason: result.finishReason }, 'delivery-planning') as Record<string, unknown>;
-      const compiled=mapModelPlan(raw, context.request);const semantic=reviewPlanSemantics(compiled.plan,semanticSources);await writeFile(path.join(home,'plan-semantic-review.json'),JSON.stringify(semantic));if(semantic.issues.length)throw new ModelPlanSchemaError(semantic.issues.slice(0,16).map(i=>({code:i.code,path:['cases',compiled.plan.cases.findIndex(c=>c.id===i.caseId),'steps',compiled.plan.cases.find(c=>c.id===i.caseId)!.steps.findIndex(s=>s.id===i.stepId)],requirement:i.detail+' Do not alter the requirement; choose a proven locator/trigger or retain it as required manual/unsupported.'})));return compiled;
+      const preflight=inspectPlanningCandidate(raw,semanticSources);let compiled:ReturnType<typeof mapModelPlan>|undefined;let compilationIssues:import('./planning-format.js').SafePlanIssue[]=[];try{compiled=mapModelPlan(raw,context.request);}catch(e){if(!(e instanceof ModelPlanSchemaError))throw e;compilationIssues=e.issues;}const finalReceipt = compiled ? reviewPlanSemantics(compiled.plan, semanticSources) : undefined;
+      const finalIssues = finalReceipt?.issues.map(issue => {
+        const caseIndex = compiled!.plan.cases.findIndex(test => test.id === issue.caseId);
+        const stepIndex = compiled!.plan.cases[caseIndex]?.steps.findIndex(step => step.id === issue.stepId) ?? -1;
+        return { code: issue.code, path: ['cases', caseIndex, 'steps', stepIndex], requirement: issue.detail };
+      }) ?? [];
+      const issues=combinedPlanIssues(preflight.issues,compilationIssues,finalIssues);
+      await savePlanningProposal(home,context.formatFeedback?1:0,raw,compiled,issues);
+      await writeFile(path.join(home,'plan-semantic-projection.json'),JSON.stringify(preflight.receipt));
+      if(issues.length)throw new ModelPlanSchemaError(issues);
+      await writeFile(path.join(home,'plan-semantic-review.json'),JSON.stringify(finalReceipt));
+      return compiled!;
     } catch (error) {
       if (accounting.isUnknown()) context.markUsageUnknown?.();
       await writeModelDiagnostic(home, { stage: error instanceof ModelPlanSchemaError ? 'dsl_schema_invalid' : error instanceof StructuredOutputError ? 'structured_rejected' : 'request_failed', role: 'delivery-planning', id: context.request.preparationId, ...(error instanceof ModelPlanSchemaError ? { errorClass: 'SchemaError' as const, errorCategory: 'dsl_schema_invalid', issues: error.issues, ...responseMeta } : error instanceof StructuredOutputError ? structuredDiagnostic(error) : { errorClass: error instanceof UsageAccountingError ? 'UsageAccountingError' as const : error && typeof error === 'object' && 'issues' in error ? 'SchemaError' as const : 'RequestError' as const, finishReason: null, textLength: null }), interruption: context.signal.reason === 'budget' ? 'budget' : context.signal.aborted ? 'cancelled' : error instanceof StructuredOutputError || error instanceof ModelPlanSchemaError ? null : 'sdk_or_transport', usageKnown: !accounting.isUnknown(), remaining: { activeMs: context.remainingActiveMs?.() ?? context.request.planningBudget.maxWallTimeMs, outputTokens: context.remainingOutput() } });
@@ -211,7 +223,7 @@ export class DeliveryPlanningRuntime {
       if (record.usageObservationVersion === 'settled-request-v1' && record.pendingModelRequest) context.markUsageUnknown!();
       record.snapshot.usage.activeMs = Date.now() - startedAt;
       this.fail(record, controller.signal.reason === 'cancel' || this.closed ? 'cancelled' : 'failed',
-        controller.signal.reason === 'budget' || (error instanceof DeliveryError && error.code === 'BUDGET_EXCEEDED') ? 'BUDGET_EXCEEDED' : 'PLANNING_FAILED', 'Readonly preparation did not produce a freezeable plan.');
+        controller.signal.reason === 'budget' || (error instanceof DeliveryError && error.code === 'BUDGET_EXCEEDED') ? 'BUDGET_EXCEEDED' : 'PLANNING_FAILED', safePlanFailure(error)||'Readonly preparation did not produce a freezeable plan.');
     } finally { clearTimeout(timer); this.controllers.delete(record.request.preparationId); this.persist(); }
   }); this.pending.add(job); void job.finally(() => this.pending.delete(job)); }
   private fail(record: PlanRecord, state: 'failed' | 'cancelled' | 'interrupted', code: 'BUDGET_EXCEEDED' | 'PLANNING_FAILED' | 'EXECUTION_INTERRUPTED', message: string, preserveCompleted = false) {

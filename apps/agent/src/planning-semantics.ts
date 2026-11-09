@@ -39,7 +39,7 @@ export type SemanticIssue = {
     detail: string;
 };
 export type PlanSemanticReceipt = {
-    policyRevision: 'bounded-observation-v1';
+    policyRevision: 'bounded-observation-v2';
     planHash: string;
     receiptHash: string;
     status: 'policy_pass' | 'known_invalid';
@@ -188,13 +188,9 @@ export function reviewPlanSemantics(plan: BrowserTestPlanDto, sources: SemanticS
         if (!test.steps.some(s => ['expect_visible', 'expect_text', 'expect_value', 'expect_count', 'expect_box_moved', 'expect_box_same'].includes(s.op)))
             issue('CASE_WITHOUT_ASSERTION', test.id, test.steps[0].id, 'An automated case must contain an observable expected result, not only setup/dispatch.');
         const actions = test.steps.map((s, i) => ({ s, i })).filter(({ s }) => ['click', 'check', 'press', 'fill', 'drag_by'].includes(s.op));
-        for (const { s, i } of actions)
-            if (!test.steps.slice(i + 1).some(next => ['expect_visible', 'expect_text', 'expect_value', 'expect_count', 'expect_box_moved', 'expect_box_same'].includes(next.op)))
-                issue('ACTION_WITHOUT_POSTCONDITION', test.id, s.id, 'Executing an action without a later observable assertion does not verify its effect.');
-        const state = new Map(c.initial), visible = new Set<string>();
+        const state = new Map(c.initial), triggerAt=new Map<string,number>();const effects:number[]=[];const passive:{stepId:string;at:number}[]=[];
         let acted = false;
-        let lastTarget: string | null = null;
-        for (const step of test.steps) {
+        for (const [stepIndex,step] of test.steps.entries()) {
             checkedSteps.push(step.id);
             if (step.op === 'open_current_app')
                 continue;
@@ -210,8 +206,8 @@ export function reviewPlanSemantics(plan: BrowserTestPlanDto, sources: SemanticS
             }
             if (['click', 'check', 'press', 'fill', 'drag_by'].includes(step.op) && loc) {
                 acted = true;
-                lastTarget = key(loc);
-                for (const trigger of c.triggers.filter(t => key(t.target) === key(loc))) {
+
+                for (const trigger of c.triggers.filter(t => key(t.target) === key(loc))) {triggerAt.set(trigger.state,stepIndex);
                     if (trigger.effect === 'checked' && step.op === 'check')
                         state.set(trigger.state, step.checked);
                     else if (typeof trigger.effect === 'boolean')
@@ -227,14 +223,15 @@ export function reviewPlanSemantics(plan: BrowserTestPlanDto, sources: SemanticS
                     const known = values.includes(false) ? false : values.includes(null) ? null : true;
                     if (known === null || known !== step.visible)
                         issue('STATE_TRIGGER_UNPROVEN', test.id, step.id, 'No proven initial/explicit control transition reaches the requested conditional state; natural time is not a deterministic fixture.');
+                    else if(condition.some(x=>triggerAt.has(x.state)))effects.push(stepIndex);
                 }
-                else if (acted && !visible.has(key(step.target)) && lastTarget !== key(step.target))
-                    issue('STATE_TRIGGER_UNPROVEN', test.id, step.id, 'A new post-action visible state has no host-verified transition/fixture.');
-                if (step.visible)
-                    visible.add(key(step.target));
+                else if(acted) passive.push({stepId:step.id,at:stepIndex});
             }
+            if(['expect_text','expect_value','expect_count','expect_box_moved','expect_box_same'].includes(step.op))effects.push(stepIndex);
         }
+        for(const {s,i} of actions)if(!effects.some(at=>at>i))issue('ACTION_WITHOUT_POSTCONDITION',test.id,s.id,'Action dispatch/passive visibility alone cannot prove its effect; use a real text/value/collection/geometry assertion or a source-proven control transition.');
+        for(const p of passive)if(!effects.some(at=>actions.some(a=>at>a.i)))issue('STATE_TRIGGER_UNPROVEN',test.id,p.stepId,'This visibility observation has no proven state trigger and is not accompanied by a measured effect. Keep a static invariant before actions, or retain unknown state coverage as required manual/unsupported.');
     }
-    const body = { policyRevision: 'bounded-observation-v1' as const, planHash: plan.hash, status: issues.length ? 'known_invalid' as const : 'policy_pass' as const, checkedSteps, issues, sourceHashes: sources.map(s => ({ path: s.path, sha256: s.sha256 })), scope: ['DOM cardinality versus scalar values', 'indexed collection misuse', 'finite initial/direct-control conditional visibility', 'action dispatch versus observable postcondition'], limitations: ['Not arbitrary natural-language semantic proof', 'A postcondition is required but arbitrary goal-to-assertion causality is not universally proved', 'Numeric HUD comparison/increase has no supported numeric DSL operation', 'Natural-time terminal reachability is not proved', 'Source evidence is bounded; unknown conditional transitions remain unsupported'] };
+    const body = { policyRevision: 'bounded-observation-v2' as const, planHash: plan.hash, status: issues.length ? 'known_invalid' as const : 'policy_pass' as const, checkedSteps, issues, sourceHashes: sources.map(s => ({ path: s.path, sha256: s.sha256 })), scope: ['DOM cardinality versus scalar values', 'indexed collection misuse', 'finite initial/direct-control conditional visibility', 'action dispatch versus observable postcondition'], limitations: ['Not arbitrary natural-language semantic proof', 'A postcondition is required but arbitrary goal-to-assertion causality is not universally proved', 'Numeric HUD comparison/increase has no supported numeric DSL operation', 'Natural-time terminal reachability is not proved', 'Unknown visibility may be a passive invariant only, not a causal/terminal-state proof','Source evidence is bounded; unknown conditional transitions remain unsupported'] };
     return { ...body, receiptHash: sha256(canonicalDeliveryJson(body)) };
 }

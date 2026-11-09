@@ -16,12 +16,12 @@ test('completed proposal refresh rereads delayed requirements without changing c
   const id = await setup(page, 'legacy');
   await page.getByLabel('消息模式').selectOption('ask'); await page.getByLabel('项目消息', { exact: true }).fill('把按钮改成蓝色'); await page.getByRole('button', { name: '发送消息', exact: true }).click();
   const refresh = page.getByRole('button', { name: '整理完整方案供确认', exact: true }); await expect(refresh).toBeVisible({ timeout: 15000 });
-  const before = await current(page, id);
   await page.evaluate(async () => { const path = '/src/requirements-api.ts'; const { requirementsApi } = await import(path); const original = requirementsApi.read; requirementsApi.read = async (...args: Parameters<typeof original>) => { const value = await original(...args); await new Promise(resolve => setTimeout(resolve, 1200)); return value; }; });
   await refresh.click(); await expect(page.getByText('正在读取最新完整方案…', { exact: true }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: '整理完整方案供确认', exact: true })).toHaveCount(0);
+  const submitted = await current(page, id);
   const card = page.locator('.conversation-item .complete-requirements-summary'); await expect(card).toHaveCount(1, { timeout: 15000 });
-  const after = await current(page, id); expect(after.conversationRevision).toBe(before.conversationRevision); expect(after.execution.latestRun).toBeNull();
+  const after = await current(page, id); expect(after.conversationRevision).toBe(submitted.conversationRevision); expect(after.execution.latestRun).toBeNull();
   await card.locator('.complete-summary-review>summary').click(); await card.getByRole('button', { name: '接受完整方案并创建构建', exact: true }).click();
   await expect(card).toContainText('完整方案已明确接受'); expect((await current(page, id)).execution.latestRun).not.toBeNull();
 });

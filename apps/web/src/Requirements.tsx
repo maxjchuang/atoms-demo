@@ -6,16 +6,18 @@ import type { Session } from '@atoms/contracts';
 import type { z } from 'zod';
 import './requirements.css';
 
-export function useRequirements(projectId: string, revision: number, baseId: string | null) {
+export function useRequirements(projectId: string, revision: number, baseId: string | null, changeKey = '') {
   const [view, setView] = useState<RequirementsView | null>(null), [error, setError] = useState(''), [loading, setLoading] = useState(true), [retry, setRetry] = useState(0);
-  const identity = useRef(projectId); identity.current = projectId;
+  const readKey = JSON.stringify([projectId, revision, baseId, changeKey, retry]);
+  const [settledKey, setSettledKey] = useState('');
+  const identity = useRef(readKey); identity.current = readKey;
   useEffect(() => {
     let alive = true; const abort = new AbortController(); setLoading(true); setError('');
-    void requirementsApi.read(projectId, abort.signal).then(value => { if (alive && identity.current === projectId) setView(previous => previous?.snapshot.projectId === projectId && previous.snapshot.revision > value.snapshot.revision ? previous : value); })
-      .catch(failure => { if (alive) setError(failure instanceof Error ? failure.message : '完整需求暂不可读。'); }).finally(() => { if (alive) setLoading(false); });
+    void requirementsApi.read(projectId, abort.signal).then(value => { if (alive && identity.current === readKey) { setView(previous => previous?.snapshot.projectId === projectId && previous.snapshot.revision > value.snapshot.revision ? previous : value); setSettledKey(readKey); } })
+      .catch(failure => { if (alive && identity.current === readKey) { setView(null); setSettledKey(readKey); setError(failure instanceof Error ? failure.message : '完整需求暂不可读。'); } }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; abort.abort(); };
-  }, [projectId, revision, baseId, retry]);
-  return { view: view?.snapshot.projectId === projectId ? view : null, error, loading, reload: () => setRetry(value => value + 1) };
+  }, [projectId, revision, baseId, changeKey, retry]);
+  return { view: settledKey === readKey && view?.snapshot.projectId === projectId ? view : null, error: settledKey === readKey ? error : '', loading: loading || settledKey !== readKey, reload: () => setRetry(value => value + 1) };
 }
 const authorization = { requested: '已提出 · 未授权构建', suggested: '建议 · 未确认', confirmed: '已明确确认' };
 const state = { active: '当前要求', withdrawn: '已撤销（保留来源）', superseded: '已被替代（保留来源）' };

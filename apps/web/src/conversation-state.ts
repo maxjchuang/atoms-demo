@@ -76,3 +76,22 @@ export const turnLabels: Record<CoordinationTurnDto['status'], string> = {
   queued: '消息已排队', processing: '正在处理你的消息', cancelling: '正在停止回答',
   completed: '已处理', cancelled: '本次回答已停止', failed: '消息处理失败', interrupted: '消息处理中断',
 };
+
+/** Cards inherit their source message position; revisions never become timeline positions. */
+export function proposalMessageAnchor(proposal: ChangeProposalDto, turns: CoordinationTurnDto[], messages: ConversationMessageDto[]): string | null {
+  const turn = turns.find(value => value.id === proposal.originatingTurnId && value.projectId === proposal.projectId);
+  if (!turn) return null;
+  if (turn.assistantMessageId && messages.some(message => message.id === turn.assistantMessageId)) return turn.assistantMessageId;
+  return messages.some(message => message.id === turn.userMessageId) ? turn.userMessageId : null;
+}
+
+export function conversationSegments(messages: ConversationMessageDto[], protectedMessages: ReadonlySet<string> = new Set()): ({ kind: 'message'; message: ConversationMessageDto } | { kind: 'execution'; messages: ConversationMessageDto[] })[] {
+  const segments: ({ kind: 'message'; message: ConversationMessageDto } | { kind: 'execution'; messages: ConversationMessageDto[] })[] = [];
+  for (const message of messages) {
+    if (protectedMessages.has(message.id) || message.role === 'user' || !['worker', 'system', 'legacy_assistant'].includes(message.actor)) { segments.push({ kind: 'message', message }); continue; }
+    const previous = segments.at(-1);
+    if (message.runId && previous?.kind === 'execution' && previous.messages[0].runId === message.runId) previous.messages.push(message);
+    else segments.push({ kind: 'execution', messages: [message] });
+  }
+  return segments;
+}

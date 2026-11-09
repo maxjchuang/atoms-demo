@@ -3,7 +3,7 @@ import { BookOpen, Check, ChevronDown, Clock3, FileText, History, Layers3, Loade
 import type { AnswerRequestDto, ProjectEventDto, RunDto, VersionDto } from '@atoms/contracts';
 import type { ChangeProposalDto, ClarificationDto, CoordinationTurnDto, ProjectMemoryViewDto, SubmitMessageRequestDto } from '@atoms/contracts/conversation';
 import type { ConversationView } from './conversation-state';
-import { actorLabels, turnLabels } from './conversation-state';
+import { actorLabels, turnLabels, proposalMessageAnchor, conversationSegments } from './conversation-state';
 import { api } from './api';
 import { isTerminal, statusLabels, phaseLabels } from './state';
 import { RunReplan, type ReplanRequest } from './RunReplan';
@@ -13,7 +13,7 @@ import { formatDuration } from './activity';
 import { HostAction } from './HostAction';
 import { BudgetRecoveryCard } from './BudgetRecovery';
 import { recoverySelectionKey, recoveryApi, diagnosticSummary } from './budget-recovery-api';
-import { RequirementsPanel, useRequirements } from './Requirements';
+import { CompleteSummary, RequirementsPanel, useRequirements } from './Requirements';
 import { requirementsApi } from './requirements-api';
 import { HttpError } from './api';
 import type { ProjectRequirementSnapshotDto } from '@atoms/contracts/requirements';
@@ -64,10 +64,7 @@ export function ProjectConversation(props: Props) {
   const currentRun = execution.activeRun ?? execution.latestRun;
   const requirements = useRequirements(execution.project.id, view.workspace.conversationRevision, execution.currentVersion?.id ?? null);
   async function prepareRequirementsReview() { try { const fresh = await requirementsApi.read(execution.project.id); props.onPrepareRequirementsReview(fresh.snapshot); setTab('chat'); } catch (failure) { setSourceError(failure instanceof Error ? failure.message : '当前完整需求暂不可读。'); } }
-  async function acceptLegacy(proposal: ChangeProposalDto, mode: 'build' | 'plan') {
-    try { await requirementsApi.summary(execution.project.id, proposal.id); requirements.reload(); setSourceError('此提案已有完整需求审阅绑定，请使用上方统一接受入口。'); }
-    catch (failure) { if (failure instanceof HttpError && failure.status === 404 && failure.code === 'NOT_FOUND') await props.onAccept(proposal, mode); else setSourceError(failure instanceof Error ? failure.message : '未确认提案绑定，未执行旧接受入口。'); }
-  }
+
   useEffect(() => {
     setChatBudgetSummary(null);
     if (currentRun?.status !== 'failed') return;
@@ -136,21 +133,24 @@ export function ProjectConversation(props: Props) {
     }}>
       {sourceError && <p className="coordination-inline-error" role="alert">{sourceError}</p>}
       {tab === 'chat' ? <>
-        <div className="coordination-intro"><Sparkles size={16}/><p>可以询问项目，也可以明确提出修改。<small>咨询与状态不占构建次数；明确修改会独立排队。</small></p></div>
+        {!view.messages.length && <div className="coordination-intro"><Sparkles size={16}/><p>可以询问项目，也可以明确提出修改。<small>咨询与状态不占构建次数；明确修改会独立排队。</small></p></div>}
         <div className="conversation-shortcuts"><button disabled={busy} onClick={() => void props.onSubmit({ input: { kind: 'status' }, mode: 'ask', runMode: 'build' })}><Clock3 size={13}/>查看当前进度</button><button disabled={busy} onClick={() => void props.onSubmit({ input: { kind: 'sharing_help' }, mode: 'ask', runMode: 'build' })}>如何预览与分享？</button></div>
-        <RequirementsPanel view={requirements.view} loading={requirements.loading} error={requirements.error} onReload={requirements.reload} onPrepareReview={() => void prepareRequirementsReview()} onViewRun={id => void openRun(id)} onQuota={props.onBudgetQuota}/>
+        {requirements.error && <p role="alert">完整方案暂不可核对，未授权构建。请展开需求详情重读。</p>}<details className="requirements-audit"><summary>完整需求与来源（详情）</summary><RequirementsPanel showSummaries={false} view={requirements.view} loading={requirements.loading} error={requirements.error} onReload={requirements.reload} onPrepareReview={() => void prepareRequirementsReview()} onViewRun={id => void openRun(id)} onQuota={props.onBudgetQuota}/></details>
         {view.olderCursor && <button className="load-older" disabled={olderLoading} onClick={() => void older()}>{olderLoading ? <LoaderCircle className="spin" size={13}/> : <History size={13}/>}加载更早消息</button>}
-        {view.messages.map(message => {
+        {conversationSegments(view.messages, new Set([...view.turns.flatMap(turn => turn.assistantMessageId ? [turn.assistantMessageId] : []), ...view.clarifications.map(question => question.questionMessageId)])).map(segment => {
+          if (segment.kind === 'execution') return <details className="execution-message" key={`execution:${segment.messages[0].id}`}><summary>构建过程（{segment.messages.length}条）</summary>{segment.messages.map(message => <div className="conversation-item execution-record" key={message.id} id={`conversation-${message.id}`} data-message-id={message.id}><small>{actorLabels[message.actor]} · <time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',hour12:false})}</time></small><div className={`message ${message.role}`}><p>{message.content}</p></div></div>)}</details>;
+          const message = segment.message;
           const turn = message.coordinationTurnId ? view.turns.find(item => item.id === message.coordinationTurnId) : undefined;
           const result = turn?.status === 'completed' && turn.assistantMessageId === message.id ? turn.result : null;
-          const question = result?.kind === 'clarify' ? view.clarifications.find(item => item.id === result.clarificationId) : null;
-          const proposal = result?.kind === 'change_proposal' ? view.proposals.find(item => item.id === result.proposalId) : null;
+          const question = view.clarifications.find(item => item.questionMessageId === message.id);
+          const summary = requirements.view?.pendingSummaries.find(item => { return proposalMessageAnchor(item.proposal, view.turns, view.messages) === message.id; });
+          const proposal = summary?.proposal ?? (result?.kind === 'change_proposal' ? view.proposals.find(item => item.id === result.proposalId) : null);
           return <div key={message.id} id={`conversation-${message.id}`} className="conversation-item" data-message-id={message.id}>
-            <div className={`message ${message.role}`}><span className={`message-avatar ${message.role}`}>{message.actor === 'user' ? '你' : message.actor === 'coordinator' ? 'M' : message.actor === 'worker' ? 'W' : '·'}</span><div><small>{actorLabels[message.actor]}{result && <span className={`outcome-badge ${result.kind}`}>{kindLabels[result.kind]}</span>}</small><p>{message.content}{message.status === 'streaming' && <span className="typing-dot"/>}</p>
+            <div className={`message ${message.role}`}><span className={`message-avatar ${message.role}`}>{message.actor === 'user' ? '你' : message.actor === 'coordinator' ? 'M' : message.actor === 'worker' ? 'W' : '·'}</span><div><small>{actorLabels[message.actor]} <time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',hour12:false})}</time>{result && <span className={`outcome-badge ${result.kind}`}>{kindLabels[result.kind]}</span>}</small><p>{message.content}{message.status === 'streaming' && <span className="typing-dot"/>}</p>
               {result && (result.kind === 'consult' || result.kind === 'status') && <div className="answer-basis">基于 {versionLabel(result.contextUsed.contextVersionId)} · 截止 {new Date(result.contextUsed.asOf).toLocaleTimeString('zh-CN', { hour12: false })}<span>项目约定 revision {result.contextUsed.memoryRevision}</span></div>}
             </div></div>
             {result && (result.kind === 'consult' || result.kind === 'status') && result.references.length > 0 && <div className="answer-references">{result.references.map((reference, index) => reference.kind === 'available_action' ? <HostAction key={index} turnId={turn!.id} actionId={reference.actionId} onViewRun={id => void openRun(id)}/> : <span key={index}>{reference.kind === 'version' ? `参考 ${versionLabel(reference.versionId)}` : reference.kind === 'file' ? `源码：${reference.path}` : reference.kind === 'run' ? <button onClick={() => void openRun(reference.runId)}>查看关联任务</button> : <button onClick={() => setTab('memory')}>查看项目约定</button>}</span>)}</div>}
-            {proposal && (requirements.view?.pendingSummaries.some(summary => summary.proposal.id === proposal.id) ? <div className="requirements-legacy-notice">此提案绑定完整累计需求，不能仅接受最后一句追加。<button onClick={() => document.querySelector<HTMLElement>(`.complete-requirements-summary[data-proposal-id="${proposal.id}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })}>查看完整累计方案</button></div> : <ProposalCard proposal={proposal} busy={busy || requirements.loading || !!requirements.error} runMode={turn?.runMode ?? 'build'} versionLabel={versionLabel} onAccept={mode => void acceptLegacy(proposal, mode)} onRefresh={() => void props.onRefreshProposal(proposal)} onDismiss={() => void props.onDismissProposal(proposal)} onViewRun={id => void openRun(id)}/>)}
+            {summary && requirements.view ? <CompleteSummary key={summary.id} summary={summary} snapshot={requirements.view.snapshot} disabled={busy || requirements.loading || !!requirements.error} onReload={requirements.reload} onQuota={props.onBudgetQuota} onViewRun={id => void openRun(id)} onRefresh={() => void props.onRefreshProposal(summary.proposal)}/> : proposal && <ProposalCard proposal={proposal} busy={busy || requirements.loading || !!requirements.error} versionLabel={versionLabel} onRefresh={() => void props.onRefreshProposal(proposal)} onDismiss={() => void props.onDismissProposal(proposal)} onViewRun={id => void openRun(id)}/> }
             {question && <ClarificationCard question={question} busy={busy} onDismiss={() => void props.onDismissClarification(question)} onReply={input => props.onSubmit({ input, mode: turn?.mode ?? 'ask', runMode: turn?.runMode ?? 'build', replyTo: { clarificationId: question.id, expectedRevision: question.revision, replyToMessageId: question.questionMessageId } })}/>}
             {result?.kind === 'control' && <div className="control-receipt"><Square size={13}/><span>{result.receipt === 'cancellation_requested' ? '取消构建请求已接收，等待执行停止确认。' : result.receipt === 'already_terminal' ? '目标构建已结束，没有新增任务。' : result.reason?.message ?? '未执行取消。'}</span><button onClick={() => void openRun(result.targetRunId)}>查看目标构建</button></div>}
             {message.role === 'user' && view.turns.filter(item => item.userMessageId === message.id && item.status !== 'completed'
@@ -208,21 +208,9 @@ function ClarificationCard({ question, busy, onReply, onDismiss }: { question: C
     {question.status === 'open' ? <><p>这条回答只绑定当前问题，不会被当作其他任务的授权。</p><div className="clarification-options">{question.options.map(option => <button key={option.id} disabled={busy} onClick={() => void onReply({ kind: 'selection', optionId: option.id })}>{option.label}</button>)}</div>{question.allowText && <form onSubmit={event => { event.preventDefault(); void onReply({ kind: 'text', content: text.trim() }); }}><label>回复此澄清<textarea aria-label="回复消息澄清" value={text} onChange={event => setText(event.target.value)} placeholder="补充这个问题的具体答案…"/></label><button className="primary-button" disabled={busy || !text.trim()}>提交澄清回答</button></form>}<button className="card-dismiss" disabled={busy} onClick={onDismiss}>暂不处理此问题</button></> : <p>{({ answered: '回答已保存，后续消息会独立处理。', dismissed: '已关闭此问题。', superseded: '问题已被新的上下文替代，请勿回答旧问题。', expired: '问题已过期，可重新说明需求。' })[question.status]}</p>}
   </div>;
 }
-function ProposalCard({ proposal, busy, runMode, versionLabel, onAccept, onRefresh, onDismiss, onViewRun }: {
-  proposal: ChangeProposalDto; busy: boolean; runMode: 'build' | 'plan'; versionLabel: (id: string | null) => string;
-  onAccept: (mode: 'build' | 'plan') => void; onRefresh: () => void; onDismiss: () => void; onViewRun: (id: string) => void;
-}) {
-  const [strategy, setStrategy] = useState(runMode);
-  return <div className={`change-proposal ${proposal.status}`} data-proposal-id={proposal.id}>
-    <span className="card-kind"><Layers3 size={13}/>{proposal.status === 'accepted' ? '修改已准入' : '修改提案 · 尚未执行'}</span><h3>{proposal.summary}</h3><strong>本提案目标</strong><p>{proposal.goal}</p>
-    <div className="proposal-baseline">{proposal.basePolicy.kind === 'latest_on_dispatch' ? '将在开始构建时使用最新成功版本。' : proposal.basePolicy.expectedBaseVersionId === null ? '首个版本，尚无已发布应用；首次交付后此基线需要重新确认。' : `仅针对 ${versionLabel(proposal.basePolicy.expectedBaseVersionId)}；基线改变后需要重新确认。`}</div>
-    <strong>本提案验收要求</strong><ul>{proposal.acceptance.map(item => <li key={item.id}><Check size={12}/>{item.description}</li>)}</ul>
-    {proposal.lastAdmissionError && <p className="proposal-error">{proposal.lastAdmissionError.message}</p>}
-    {proposal.status === 'open' && <><label className="proposal-strategy">构建策略<select aria-label="提案构建策略" value={strategy} onChange={event => setStrategy(event.target.value as 'build' | 'plan')}><option value="build">直接构建</option><option value="plan">先确认计划</option></select></label><button className="primary-button" disabled={busy} onClick={() => onAccept(strategy)}>接受提案并创建构建</button><small>仅此操作会使用一次构建额度；刷新提案不会创建构建。</small><button className="card-dismiss" disabled={busy} onClick={onDismiss}>不采用此提案</button></>}
-    {['stale', 'expired'].includes(proposal.status) && <><p>当前提案不可执行。刷新只会重新评估，并产生需要再次接受的新提案。</p><button className="secondary-button" disabled={busy} onClick={onRefresh}><RefreshCw size={13}/>刷新提案（只读重评）</button></>}
-    {proposal.status === 'accepted' && proposal.acceptedRunId && <button className="secondary-button" onClick={() => onViewRun(proposal.acceptedRunId!)}>查看已创建的构建任务</button>}
-    {proposal.status === 'dismissed' && <p>已关闭，没有创建构建。</p>}
-  </div>;
+function ProposalCard({ proposal, busy, versionLabel, onRefresh, onDismiss, onViewRun }: { proposal: ChangeProposalDto; busy: boolean; versionLabel: (id: string | null) => string; onRefresh: () => void; onDismiss: () => void; onViewRun: (id: string) => void }) {
+  if (proposal.status === 'accepted' && proposal.acceptedRunId) return <div className="change-proposal accepted"><button onClick={() => onViewRun(proposal.acceptedRunId!)}>查看已创建的构建任务</button></div>;
+  return <div className={`change-proposal ${proposal.status}`} data-proposal-id={proposal.id}><h3>{proposal.summary}</h3>{proposal.status === 'dismissed' ? <p>已关闭，没有创建构建。</p> : <><p>此历史提案尚无可核对的完整方案，先整理原目标、验收要求与基线，再明确确认构建。</p><button className="primary-button" disabled={busy} onClick={onRefresh}>整理完整方案供确认</button><small>仅请求重新整理，不创建构建。{proposal.basePolicy.kind === 'exact_version' ? `原基线：${versionLabel(proposal.basePolicy.expectedBaseVersionId)}` : ''}</small><button disabled={busy} onClick={onDismiss}>不采用此提案</button></>}</div>;
 }
 function RunAttention({ run, busy, onAnswer, onReplan }: { run: RunDto; busy: boolean; onAnswer: (answer: AnswerRequestDto) => void; onReplan: (answer: AnswerRequestDto) => void }) {
   const [text, setText] = useState(''); const [replanOption, setReplanOption] = useState(''); const attention = run.pendingAttention!;

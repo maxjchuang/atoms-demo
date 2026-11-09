@@ -21,10 +21,10 @@ export function registerSharing(h:Host){
   if(body.expectedDeploymentInstanceId!==(deployment?.deploymentInstanceId??'deployment_local'))h.fail(409,'CONFLICT','部署代际已变化，请刷新后重新复制链接');
   if(!h.profile)h.fail(409,'CONFLICT','当前仅本机运行，没有公网分享入口');if(!deployment?.ready)h.fail(503,'RUNTIME_UNAVAILABLE','公开部署尚未就绪');
   const previous=attempts.get(session.codeId),stamp=Date.now();if(!previous||stamp-previous.since>=60000)attempts.set(session.codeId,{since:stamp,count:1});else if(++previous.count>30)h.fail(429,'RATE_LIMITED','链接解析过于频繁，请稍后再试');
-  const common={protocolVersion:SharingProtocolVersion,kind:body.kind,projectId:project.dto.id,deploymentInstanceId:deployment!.deploymentInstanceId,scope:'public_temporary',temporary:true,issuedAt:h.now()};
-  if(body.kind==='build_entry')return ResolvedSharing.parse({...common,kind:'build_entry',audience:'experience_code_required',requiresExperienceCode:true,url:deployment!.workbenchOrigin+'/',expiresAt:null});
+  const common={protocolVersion:SharingProtocolVersion,kind:body.kind,projectId:project.dto.id,deploymentInstanceId:deployment!.deploymentInstanceId,scope:'public_temporary',temporary:true};
+  if(body.kind==='build_entry')return ResolvedSharing.parse({...common,issuedAt:h.now(),kind:'build_entry',audience:'experience_code_required',requiresExperienceCode:true,url:deployment!.workbenchOrigin+'/',expiresAt:null});
   const dto=h.freshVersion(version!);const url=new URL(dto.previewUrl);if(url.origin!==deployment!.previewOrigin)h.fail(503,'RUNTIME_UNAVAILABLE','预览地址尚未更新');
-  return ResolvedSharing.parse({...common,kind:'app_preview',subjectVersionId:version!.dto.id,audience:'anyone_with_link',url:dto.previewUrl,expiresAt:dto.previewExpiresAt});
+  return ResolvedSharing.parse({...common,issuedAt:h.now(),kind:'app_preview',subjectVersionId:version!.dto.id,audience:'anyone_with_link',url:dto.previewUrl,expiresAt:dto.previewExpiresAt});
  });
  return {hostFacts};
 }

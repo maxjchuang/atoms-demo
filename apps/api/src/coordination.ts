@@ -205,9 +205,10 @@ export function registerCoordination(host:CoordinationHost) {
     const {session,record}=ownedTurn(request);const body=ExpectedCoordinationRevision.parse(request.body);
     return response(request,reply,session,()=>{
       if(record.dto.revision!==body.expectedRevision||!['failed','interrupted','cancelled'].includes(record.dto.status))fail(409,'CONFLICT','只有失败、中断或取消的协调可显式重试');
+      if(host.requirements&&record.operation.kind==='proposal_refresh'&&!record.requirementsReview)fail(409,'CONFLICT','旧提案重试缺少受信完整审阅绑定，请重新整理原提案；未增加产品要求');
       const project=host.ownProject(record.dto.projectId,session);
       return {status:202,body:createTurn(project,session.codeId,record.inputContent,record.dto.mode,record.dto.runMode,structuredClone(record.operation),
-        {reuseMessageId:record.dto.userMessageId,replyTo:record.replyTo,continuationOfTurnId:record.dto.continuationOfTurnId??undefined,retryOfTurnId:record.dto.id,contextVersionId:record.requestedContextVersionId})};
+        {reuseMessageId:record.dto.userMessageId,replyTo:record.replyTo,continuationOfTurnId:record.dto.continuationOfTurnId??undefined,retryOfTurnId:record.dto.id,contextVersionId:record.requestedContextVersionId,requirementsReview:record.requirementsReview?structuredClone(record.requirementsReview):undefined})};
     });
   });
   const readEntity=(kind:'proposals'|'clarifications',key:string)=>(request:FastifyRequest)=>{

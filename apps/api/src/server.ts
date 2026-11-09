@@ -1,5 +1,6 @@
 import {assertProvisionedPublicState} from './public-provisioning.js';
 import {assertPublicQuotaAuthorizations,effectivePublicRunLimit} from './public-quota.js';
+import {registerBudgetRecovery} from './budget-recovery.js';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
@@ -69,6 +70,7 @@ export async function createApi(options: ApiOptions) {
   const codeActive=(codeId:string)=>{const c=store.state.codes.find(c=>c.id===codeId);return !!c&&!c.revoked&&Date.parse(c.expiresAt)>Date.now();};
   let delivery:ReturnType<typeof registerDelivery>;
   let coordination:ReturnType<typeof registerCoordination>|undefined;
+  let budgetRecovery:ReturnType<typeof registerBudgetRecovery>|undefined;
   const loginAttempts = new Map<string, { since: number; count: number }>();
   const authHeaders = { authorization: `Bearer ${options.serviceToken}`, 'X-Atoms-Protocol-Version': PROTOCOL_VERSION, 'content-type': 'application/json' };
   const cookie = (token: string, clear = false, maxAge=604800) => `atoms_session=${clear ? '' : token}; Path=/; HttpOnly; SameSite=Lax${options.secureCookies||options.publicProfile ? '; Secure' : ''}; Max-Age=${clear ? 0 : maxAge}`;
@@ -274,8 +276,8 @@ export async function createApi(options: ApiOptions) {
     const items = rows.slice(0, limit); return { items, nextCursor: items.at(-1)?.seq ?? after, hasMore: rows.length > items.length };
   });
   const createRunCore = (projectId:string,prompt:string,mode:'build'|'plan',codeId:string,metadata?:{
-    sourceMessageId:string;originTurnId:string;proposalId:string;exactBaseVersionId?:string|null})=>{
-      const existing=metadata&&store.state.runs.find(r=>r.originTurnId===metadata.originTurnId&&r.dto.projectId===projectId);
+    sourceMessageId?:string;originTurnId?:string;proposalId?:string;exactBaseVersionId?:string|null;budgetContinuation?:boolean})=>{
+      const existing=metadata?.originTurnId&&store.state.runs.find(r=>r.originTurnId===metadata.originTurnId&&r.dto.projectId===projectId);
       if(existing)return existing;
     CreateRunRequest.parse({prompt,mode});
       const code=store.state.codes.find(c=>c.id===codeId)!;if(options.publicProfile&&!codeActive(codeId))fail(403,'FORBIDDEN','体验码已失效，未创建新任务');
@@ -285,10 +287,10 @@ export async function createApi(options: ApiOptions) {
         mode, baseVersionId: null, resultVersionId: null, executionId: null, pendingAttention: null,
         pendingAnswer: null, checks: [], createdAt: now(), updatedAt: now(), error: null });
       const record:RunRecord={dto:run,prompt,codeId,started:false,sourceSeq:0,...(options.legacyFixtureMode?{}:{delivery:{stage:'preparing' as const,preparationId:id('preparation'),planningSeq:0}}),...metadata};store.state.runs.push(record);
-      const message=metadata?store.state.messages.find(m=>m.id===metadata.sourceMessageId&&m.projectId===projectId&&m.role==='user'):
-        {id:id('message'),projectId,runId:run.id,role:'user' as const,status:'complete' as const,content:prompt,createdAt:now()};
+      const message=metadata?.sourceMessageId?store.state.messages.find(m=>m.id===metadata.sourceMessageId&&m.projectId===projectId&&m.role==='user'):
+        {id:id('message'),projectId,runId:run.id,role:metadata?.budgetContinuation?'assistant' as const:'user' as const,status:'complete' as const,content:metadata?.budgetContinuation?'已明确授权使用一次构建额度，从已保存源码继续同一冻结目标；旧失败记录保持不变。':prompt,createdAt:now()};
       if(!message)fail(409,'CONFLICT','来源消息不可用');
-      message!.runId=run.id;if(!metadata)store.state.messages.push(message!);
+      message!.runId=run.id;if(!metadata?.sourceMessageId)store.state.messages.push(message!);
       emit(projectId,run.id,{type:'message.updated',payload:message!});emit(projectId,run.id,{type:'run.updated',payload:run});return record;
   };
   app.post('/api/v1/projects/:projectId/runs', (request, reply) => {
@@ -548,7 +550,7 @@ export async function createApi(options: ApiOptions) {
           updateRun(record, { executionId, baseVersionId: project.dto.currentVersionId });
         });
       }
-      for(const record of store.state.runs.filter(r=>r.delivery?.prepare&&terminal(r.dto.status)&&!r.delivery.report?.final&&!r.delivery.invalid&&!r.delivery.noReportExpected)){try{await delivery.loadReport(record);}catch{/* Final failure reports can arrive after the terminal source event; read-only retry, never replay work. */}}
+      for(const record of store.state.runs.filter(r=>r.delivery&&(r.delivery.prepare||r.recovery)&&terminal(r.dto.status)&&!r.delivery.report?.final&&!r.delivery.invalid&&!r.delivery.noReportExpected)){try{await delivery.loadReport(record);}catch{/* Final failure reports can arrive after the terminal source event; read-only retry, never replay work. */}}
       for (const reference of store.state.runs.filter((entry) => entry.dto.executionId && !terminal(entry.dto.status))) {
         let record = store.state.runs.find((entry) => entry.dto.id === reference.dto.id)!;
         const path = `/internal/v1/executions/${record.dto.executionId}`;
@@ -576,6 +578,7 @@ export async function createApi(options: ApiOptions) {
           // Keep identity, pending commands and project lock; retry the same outbox next tick.
         }
       }
+      await budgetRecovery?.tick();
     } finally { busy = false; }
   };
   const seedCode = (code: string, limits = { projectLimit: 3, runLimit: 10 }) => store.transaction(() => {
@@ -587,6 +590,7 @@ export async function createApi(options: ApiOptions) {
   if (options.demoCode) seedCode(options.demoCode);
   delivery=registerDelivery({app,store,dataDir,agentUrl:options.agentUrl,serviceToken:options.serviceToken,toolchainId:options.deliveryToolchainId??'toolchain_react_v1',toolchain:options.deliveryToolchain,planningMode:options.deliveryPlanningMode,profileHint:options.deliveryProfileHint,id,now,hash,fail,authorize,ownRun,ownProject,ownVersion,updateRun,finish,
     message(record,content,time=now()){const message={id:id('message'),projectId:record.dto.projectId,runId:record.dto.id,role:'assistant' as const,status:'complete' as const,content,createdAt:time};store.state.messages.push(message);emit(message.projectId,message.runId,{type:'message.updated',payload:message},time);}});
+  budgetRecovery=registerBudgetRecovery({scopeCompatible:run=>{const base=store.state.versions.find(v=>v.dto.id===run.dto.baseVersionId);return run.request?.mandate.projectMemory===[coordination?.projectMemory(run.dto.projectId),base?.dto.summary].filter(Boolean).join('\n').slice(0,20000);},closing:()=>closed,app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,hash,id,now,fail,authorize,ownRun,ownProject,sessionDto,createRun:createRunCore,updateRun});
   sharing=registerSharing({app,store,profile:options.publicProfile,authorize,ownProject,ownVersion,fail,freshVersion,now});
   coordination=registerCoordination({app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,id,now,hash,canonical,fail,
     delivery:options.legacyFixtureMode?undefined:delivery,

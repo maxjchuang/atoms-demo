@@ -12,7 +12,7 @@ export interface ProjectRecord { dto: ProjectDto; codeId: string }
 export interface RunRecord { dto: RunDto; prompt: string; codeId: string; started: boolean; sourceSeq: number;
   request?: StartExecutionDto; manifestHash?: string; answerCommand?: object; cancelCommand?: object;
   isolationWaiting?:boolean; runtimeDisconnected?: boolean; originTurnId?: string; sourceMessageId?: string; proposalId?: string;
-  exactBaseVersionId?: string | null; delivery?: DeliveryRecord }
+  exactBaseVersionId?: string | null; delivery?: DeliveryRecord; budgetContinuation?:boolean; recovery?:{parentRunId:string;rootRunId:string;segment:number;request:import('@atoms/contracts/budget-recovery').RecoveryExecutionRequestDto} }
 export interface DeliveryRecord {
   stage:'preparing'|'executing'; preparationId:string; planningSeq:number;
   prepare?:PrepareDeliveryPlanRequestDto; prepareHash?:string; wrapper?:DeliveryExecutionRequestDto;
@@ -50,7 +50,9 @@ export interface PublicProvisionReceipt {
  previousCodeIds:string[];projectLimitChanges:{codeId:string;from:number;to:10}[];
  preserved:{projects:number;runs:number;versions:number;messages:number;events:number;started:number};historySha256:string;
 }
-export interface State { codes: Code[]; sessions: SessionRecord[]; projects: ProjectRecord[]; runs: RunRecord[];
+export interface BudgetRecoveryOrigin {view?:ReturnType<typeof import('@atoms/contracts/budget-recovery').RecoveryRuntimeView.parse>;invalid?:boolean;checkedAt?:number;quote?:ReturnType<typeof import('@atoms/contracts/budget-recovery').RecoveryOffer.parse>;revision:number;stopCommand?:ReturnType<typeof import('@atoms/contracts/budget-recovery').RecoveryStopRequest.parse>}
+export interface BudgetRecoveryState {origins:Record<string,BudgetRecoveryOrigin>;successors:Record<string,{runId:string;operationId:string;codeId:string;requestHash:string}>;keys:Record<string,{requestHash:string;runId:string;operationId:string}>}
+export interface State { budgetRecovery?:BudgetRecoveryState; codes: Code[]; sessions: SessionRecord[]; projects: ProjectRecord[]; runs: RunRecord[];
   versions: VersionRecord[]; messages: MessageRecord[]; events: ProjectEventDto[]; sourceEvents: AgentEventDto[];
   idempotency: Record<string, IdempotentResult>; coordination: CoordinationState;publicProvisions?:PublicProvisionReceipt[];publicQuotaAuthorizations?:PublicQuotaAuthorization[];publicQuotaResets?:PublicQuotaReset[] }
 const empty = (): State => ({ codes: [], sessions: [], projects: [], runs: [], versions: [], messages: [], events: [], sourceEvents: [], idempotency: {}, coordination: emptyCoordination() });

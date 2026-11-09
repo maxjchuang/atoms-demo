@@ -1,3 +1,4 @@
+import { recordRouterFailure } from './coordinator-diagnostics.js';
 import { RequirementsCoordinationRequest, type RequirementsCoordinationRequestDto, type RequirementsCoordinationSnapshotDto } from '@atoms/contracts/requirements';
 import { settleRequirements } from './requirements-context.js';
 import { randomUUID } from 'node:crypto';
@@ -172,6 +173,7 @@ export class CoordinatorRuntime {
         }
       },
     };
+    let failureStage='coordination';
     try {
       record.snapshot.status = 'running'; record.snapshot.revision++;
       this.emit(record, { type: 'coordination.started', payload: {} });
@@ -197,7 +199,7 @@ export class CoordinatorRuntime {
         let retries = 0; let sourcePass = false;
         while (true) {
           if (controller.signal.aborted) throw new Error('Coordination aborted');
-          try { decision = await this.adapter.decide(context, retries > 0); }
+          try { failureStage='model_decision';decision = await this.adapter.decide(context, retries > 0); }
           catch (error) {
             if (!(error instanceof StructuredOutputError) || retries >= request.budget.maxStructuredRetries) throw error;
             retries++; report(`协调模型结构化结果不完整，开始有界重试（${retries}/${request.budget.maxStructuredRetries}）。`); continue;
@@ -224,8 +226,9 @@ export class CoordinatorRuntime {
           .slice(0, 8).map((entry) => `${entry.label}：${entry.quality}${entry.gaps.length ? `；${entry.gaps.length} 项缺口：${entry.gaps.slice(0, 3).map((gap) => gap.description.slice(0, 120) + '（' + gap.coverage + '/' + gap.result + '）').join('；')}` : ''}`);
         decision!.answer = `宿主交付事实（${facts.asOf}）：\n${summary.join('\n') || '尚无交付验收记录。'}\ncomplete 仅表示冻结约定全部通过；partial 含明确缺口，blocked 不可交付，legacy_unverified 未经本协议验证。\n\n${decision!.answer}`;
       }
+      failureStage='settle_decision';
       const result = settleDecision(request, decision!, context.sources, this.excludedTurns);
-      if(record.requirements){const facts=record.requirements.coordination.deliveryFacts;const terminal={...record.snapshot,result,status:'completed' as const,revision:record.snapshot.revision+1,updatedAt:now()};record.requirementsSnapshot=settleRequirements(record.requirements,decision!,result,{protocolVersion:'0.1.0',coordination:terminal,deliveryFactsUsed:{projectId:facts.projectId,revision:facts.revision,asOf:facts.asOf,hash:facts.hash}});}
+      if(record.requirements){failureStage='settle_requirements';const facts=record.requirements.coordination.deliveryFacts;const terminal={...record.snapshot,result,status:'completed' as const,revision:record.snapshot.revision+1,updatedAt:now()};record.requirementsSnapshot=settleRequirements(record.requirements,decision!,result,{protocolVersion:'0.1.0',coordination:terminal,deliveryFactsUsed:{projectId:facts.projectId,revision:facts.revision,asOf:facts.asOf,hash:facts.hash}});}
       record.snapshot.result = result; record.snapshot.status = 'completed'; record.snapshot.revision++;
       this.memories.set(request.projectId, RouterMemory.parse({ projectId: request.projectId,
         revision: request.context.projectMemory.revision, summary: request.context.projectMemory.summary,
@@ -235,6 +238,7 @@ export class CoordinatorRuntime {
       this.emit(record, { type: 'coordination.completed', payload: result });
       await this.adapter.commit?.(request.projectId, request.turnId).catch(() => {});
     } catch (error) {
+      await recordRouterFailure(context.projectHome,request.turnId,failureStage,error).catch(()=>{});
       await this.adapter.close(request.turnId).catch(() => {});
       this.excludedTurns.add(request.turnId);
       new ProjectSessionFence(path.join(this.root, 'projects', request.projectId, 'dsh')).invalidate();
@@ -245,9 +249,10 @@ export class CoordinatorRuntime {
         this.emit(record, { type: 'coordination.cancelled', payload: {} });
       } else {
         record.snapshot.status = 'failed';
-        const code = controller.signal.aborted ? 'BUDGET_EXCEEDED' : error instanceof CoordinationError ? error.code : 'INTERNAL_ERROR';
+        const schemaFailure=Boolean(error && typeof error==='object' && 'issues' in error && Array.isArray(error.issues));
+        const code = controller.signal.aborted ? 'BUDGET_EXCEEDED' : error instanceof CoordinationError ? error.code : schemaFailure?'INVALID_REQUEST':'INTERNAL_ERROR';
         const message = controller.signal.aborted ? '项目协调已达到执行预算，未产生写入操作。'
-          : error instanceof CoordinationError || error instanceof StructuredOutputError ? error.message : '项目协调失败，未产生写入操作。';
+          : error instanceof CoordinationError || error instanceof StructuredOutputError ? error.message : schemaFailure?'协调结果未通过结构或需求来源校验，未创建构建任务。' : '项目协调失败，未产生写入操作。';
         record.snapshot.error = { code: code as NonNullable<CoordinationExecutionSnapshotDto['error']>['code'], message, retryable: false };
         this.emit(record, { type: 'coordination.failed', payload: record.snapshot.error });
       }

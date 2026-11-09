@@ -38,6 +38,12 @@ export interface PublicQuotaAuthorization {
  observedUsed:number;observedReserved:0;codeExpiresAt:string;authorizedAt:string;
  preserved:{projects:number;runs:number;versions:number;messages:number;events:number;started:number};historySha256:string;
 }
+export interface PublicQuotaReset {
+ kind:'public-code-remaining-reset';operationId:string;dataNamespaceId:string;codeId:string;
+ requestedRemaining:number;previousEffectiveRunLimit:number;effectiveRunLimit:number;
+ observedUsed:number;observedReserved:0;codeExpiresAt:string;authorizedAt:string;
+ preserved:{projects:number;runs:number;versions:number;messages:number;events:number;started:number};historySha256:string;
+}
 export interface PublicProvisionReceipt {
  kind:'new-public-identity';operationId:string;dataNamespaceId:string;codeId:string;
  projectLimit:10;runLimit:3;maxIdentities:10;issuedAt:string;expiresAt:string;
@@ -46,7 +52,7 @@ export interface PublicProvisionReceipt {
 }
 export interface State { codes: Code[]; sessions: SessionRecord[]; projects: ProjectRecord[]; runs: RunRecord[];
   versions: VersionRecord[]; messages: MessageRecord[]; events: ProjectEventDto[]; sourceEvents: AgentEventDto[];
-  idempotency: Record<string, IdempotentResult>; coordination: CoordinationState;publicProvisions?:PublicProvisionReceipt[];publicQuotaAuthorizations?:PublicQuotaAuthorization[] }
+  idempotency: Record<string, IdempotentResult>; coordination: CoordinationState;publicProvisions?:PublicProvisionReceipt[];publicQuotaAuthorizations?:PublicQuotaAuthorization[];publicQuotaResets?:PublicQuotaReset[] }
 const empty = (): State => ({ codes: [], sessions: [], projects: [], runs: [], versions: [], messages: [], events: [], sourceEvents: [], idempotency: {}, coordination: emptyCoordination() });
 
 /** Single API process owns this SQLite database. State changes are atomic snapshots. */

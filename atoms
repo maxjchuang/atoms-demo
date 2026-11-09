@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+supported() { "$1" -e 'const [a,b]=process.versions.node.split(".").map(Number);process.exit(a>24||a===24&&b>=9?0:1)' >/dev/null 2>&1; }
+if [ -n "${ATOMS_NODE_BIN:-}" ]; then
+  NODE=$ATOMS_NODE_BIN
+  supported "$NODE" || { echo 'ATOMS_NODE_BIN must name an executable Node >=24.9.' >&2; exit 1; }
+else
+  NODE=
+  for candidate in "$HOME/.local/share/atoms-node26/node-v26.5.0-darwin-x64/bin/node" "$HOME/.local/share/atoms-node26/node-v26.5.0-darwin-arm64/bin/node" "$(command -v node || true)"; do
+    if [ -n "$candidate" ] && supported "$candidate"; then NODE=$candidate; break; fi
+  done
+  [ -n "$NODE" ] || { echo 'Node >=24.9 required. Set ATOMS_NODE_BIN to its executable.' >&2; exit 1; }
+fi
+exec "$NODE" "$ROOT/scripts/atoms-ops.mjs" "$@"

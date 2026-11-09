@@ -3,7 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "packageManager": "pnpm@10.33.0",
-  "engines": { "node": ">=24.9.0" },
+  "engines": {
+    "node": ">=24.9.0"
+  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:demo": "node scripts/dev.mjs --demo",
@@ -39,6 +41,12 @@
     "m3:build-connector": "node scripts/m3-build-connector.mjs",
     "m3:test-connector": "node --test scripts/m3-docker-transport.test.mjs",
     "m3:probe-connector-network": "node scripts/m3-connector-probe.mjs",
-    "m3:handoff": "node --import tsx scripts/m3-handoff.mjs"
+    "m3:handoff": "node --import tsx scripts/m3-handoff.mjs",
+    "ops": "./atoms",
+    "ops:start": "./atoms start",
+    "ops:stop": "./atoms stop",
+    "ops:restart": "./atoms restart",
+    "ops:status": "./atoms status",
+    "test:ops": "node --test scripts/atoms-ops*.test.mjs scripts/m3-reset-code.test.mjs"
   }
 }

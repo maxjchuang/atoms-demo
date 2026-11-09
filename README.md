@@ -2,6 +2,8 @@
 
 以 DeepSeek Harness（DSH）为 Agent 底座的 React 应用生成工作台。
 
+当前 Docker 公网部署的启停、状态、备份和体验码管理使用根目录 `./atoms`，详见 [运维说明](docs/operations.md)。下方本地开发说明与历史阶段记录不替代实际部署状态。
+
 当前已完成 M1 项目协调，并在隔离分支通过 M2 可信交付验收：真实 React 多文件生成、修改、恢复后显式接受 exact 提案再修改、冻结行为计划、同计划浏览器验证、独立安装源码 ZIP、只读咨询和严格重启。另一次受控持久化故障由真实 DeepSeek 修复并复验通过；三次业务交付仍诚实标为 partial。M2 已合入 main 并完成本机安全升级，Docker 隔离与公网分享由 M3 单独验收。详见 [当前 M2 状态](docs/m2-delivery-status.md) 和 [能力路线图](docs/capability-roadmap.md)。
 
 ## 本地启动

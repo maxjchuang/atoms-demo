@@ -15,12 +15,14 @@ COPY job-lock.yaml ./pnpm-lock.yaml
 RUN pnpm install --frozen-lockfile --ignore-workspace --ignore-pnpmfile --ignore-scripts --registry=https://registry.npmjs.org --config.enable-global-virtual-store=false
 COPY template/ /opt/template/
 RUN cd /opt/template && pnpm install --frozen-lockfile --ignore-workspace --ignore-pnpmfile --ignore-scripts --registry=https://registry.npmjs.org --store-dir=/opt/offline-store --config.enable-global-virtual-store=false --config.package-import-method=copy
+# Static dependency/browser permission layer: never invalidate for dynamic verifier/source edits.
+RUN chmod -R a+rX /ms-playwright /opt/offline-store /opt/template /opt/runner
 COPY contracts/ /opt/runner/node_modules/@atoms/contracts/
 COPY verifier/ /opt/verifier/
 COPY job.ts /opt/runner/
 COPY --from=watchdog-build /watchdog /watchdog-probe /opt/runner/
 RUN ln -s /opt/runner/node_modules /opt/verifier/node_modules && ln -s /opt/template/node_modules/typescript /opt/runner/node_modules/typescript
-RUN chmod -R a+rX /ms-playwright /opt/offline-store /opt/template /opt/runner /opt/verifier
+RUN chmod -R a+rX /opt/verifier /opt/runner/node_modules/@atoms/contracts && chmod a+r /opt/runner/job.ts && chmod a+rx /opt/runner/watchdog /opt/runner/watchdog-probe
 USER 10002:10002
 WORKDIR /job
 ENV HOME=/job/home TMPDIR=/tmp NODE_ENV=development

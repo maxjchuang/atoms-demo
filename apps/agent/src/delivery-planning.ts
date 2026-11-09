@@ -1,3 +1,4 @@
+import { compilePlanningRecipes, recipePlanningPrompt, recipeCompilationReceipt } from './planning-recipes.js';
 import { inspectPlanningCandidate, combinedPlanIssues, savePlanningProposal, safePlanFailure } from './planning-diagnostics.js';
 import { verifiedSemanticSource, reviewPlanSemantics, type SemanticSource } from './planning-semantics.js';
 import { DSH_NATIVE_READONLY_ENV } from './dsh-native-env.js';
@@ -18,7 +19,7 @@ import { sha256 } from './files.js';
 import { PLANNING_DSH_PATCH, PLANNING_REASONING_EFFORT } from './planning-profile.js';
 import { verifyDshToolPolicy } from './dsh-policy.js';
 import { NativeRequestAccounting, UsageAccountingError, nativeEventIdentity, type NativeTokenUsage } from './native-usage.js';
-import { mapModelPlan, planningPrompt, ModelPlanSchemaError } from './planning-format.js';
+import { mapModelPlan, ModelPlanSchemaError } from './planning-format.js';
 import { structuredDiagnostic, writeModelDiagnostic } from './model-diagnostics.js';
 import { structuredRetryAdmission } from './retry-admission.js';
 import { parseModelJson, StructuredOutputError } from './structured-output.js';
@@ -94,7 +95,7 @@ export class DshPlanningAdapter implements PlanningAdapter {
     try {
       await writeModelDiagnostic(home, { stage: 'request_started', role: 'delivery-planning', id: context.request.preparationId, remaining: { activeMs: context.remainingActiveMs?.() ?? context.request.planningBudget.maxWallTimeMs, outputTokens: context.remainingOutput() } });
       accounting.begin(); context.beginModelRequest?.();
-      const result = await harness.run(planningPrompt(context.request, sources, context.formatFeedback), {
+      const result = await harness.run(recipePlanningPrompt(context.request, sources, context.formatFeedback), {
         onNotification(notification) {
           if (notification.method !== 'session.event') return;
           const event = notification.params.event as { type?: string; seq?: unknown; data?: { turn?: unknown; step?: unknown; usage?: NativeTokenUsage } } | undefined;
@@ -109,7 +110,11 @@ export class DshPlanningAdapter implements PlanningAdapter {
       await writeModelDiagnostic(home, { stage: 'response_received', role: 'delivery-planning', id: context.request.preparationId, finishReason: result.finishReason, textLength: result.finalResponse.length, usageKnown: true, remaining: { activeMs: context.remainingActiveMs?.() ?? context.request.planningBudget.maxWallTimeMs, outputTokens: context.remainingOutput() } });
       if (context.signal.aborted) throw new Error('Planning aborted');
       const raw = parseModelJson({ text: result.finalResponse, finishReason: result.finishReason }, 'delivery-planning') as Record<string, unknown>;
-      const preflight=inspectPlanningCandidate(raw,semanticSources);let compiled:ReturnType<typeof mapModelPlan>|undefined;let compilationIssues:import('./planning-format.js').SafePlanIssue[]=[];try{compiled=mapModelPlan(raw,context.request);}catch(e){if(!(e instanceof ModelPlanSchemaError))throw e;compilationIssues=e.issues;}const finalReceipt = compiled ? reviewPlanSemantics(compiled.plan, semanticSources) : undefined;
+      const isRecipe = raw !== null && typeof raw === 'object' && 'formatVersion' in raw;
+      let expanded:unknown=raw;
+      try { if(isRecipe) expanded=compilePlanningRecipes(raw); }
+      catch(error) { if(error instanceof ModelPlanSchemaError) await savePlanningProposal(home,context.formatFeedback?1:0,raw,undefined,error.issues); throw error; }
+      const preflight=inspectPlanningCandidate(expanded,semanticSources);let compiled:ReturnType<typeof mapModelPlan>|undefined;let compilationIssues:import('./planning-format.js').SafePlanIssue[]=[];try{compiled=mapModelPlan(expanded,context.request);}catch(e){if(!(e instanceof ModelPlanSchemaError))throw e;compilationIssues=e.issues;}const finalReceipt = compiled ? reviewPlanSemantics(compiled.plan, semanticSources) : undefined;
       const finalIssues = finalReceipt?.issues.map(issue => {
         const caseIndex = compiled!.plan.cases.findIndex(test => test.id === issue.caseId);
         const stepIndex = compiled!.plan.cases[caseIndex]?.steps.findIndex(step => step.id === issue.stepId) ?? -1;
@@ -117,6 +122,7 @@ export class DshPlanningAdapter implements PlanningAdapter {
       }) ?? [];
       const issues=combinedPlanIssues(preflight.issues,compilationIssues,finalIssues);
       await savePlanningProposal(home,context.formatFeedback?1:0,raw,compiled,issues);
+      if(isRecipe && compiled) await writeFile(path.join(home,`recipe-compilation_${context.formatFeedback?1:0}.json`),JSON.stringify(recipeCompilationReceipt(raw,expanded,compiled,issues.length?'rejected':'policy_pass')),{flag:'wx',mode:0o600});
       await writeFile(path.join(home,'plan-semantic-projection.json'),JSON.stringify(preflight.receipt));
       if(issues.length)throw new ModelPlanSchemaError(issues);
       await writeFile(path.join(home,'plan-semantic-review.json'),JSON.stringify(finalReceipt));

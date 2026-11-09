@@ -56,10 +56,20 @@ if (resume) {
     const owner = await stat(root);
     if (owner.uid !== process.getuid?.() || (owner.mode & 0o077) !== 0)
         throw new Error('Fixture owner/mode mismatch');
-    const receipt = JSON.parse(await readFile(path.join(root, 'fixture-identity.json'), 'utf8'));
-    if (receipt.kind !== 'atoms-controller-http-v1' || receipt.dataDir !== path.join(root, 'agent-data'))
+    const identityFile=path.join(root,'fixture-identity.json');const identity=await lstat(identityFile);
+    if(identity.isSymbolicLink()||identity.uid!==owner.uid||(identity.mode&0o777)!==0o600)throw new Error('Fixture receipt owner/mode mismatch');
+    const receipt = JSON.parse(await readFile(identityFile, 'utf8'));
+    // macOS /var is an OS alias of /private/var. Compare canonical identities,
+    // while rejecting user-selected child symlinks/traversal and foreign parents.
+    const savedData=receipt.dataDir;
+    if(typeof savedData!=='string'||!path.isAbsolute(savedData)||path.normalize(savedData)!==savedData||path.basename(savedData)!=='agent-data'||await realpath(path.dirname(savedData))!==root)throw new Error('Not a synthetic controller fixture');
+    const data=await lstat(savedData);
+    if(data.isSymbolicLink()||!data.isDirectory()||data.uid!==owner.uid||await realpath(savedData)!==path.join(root,'agent-data'))throw new Error('Fixture data identity mismatch');
+    if (receipt.kind !== 'atoms-controller-http-v1')
         throw new Error('Not a synthetic controller fixture');
     ({ port, api, scenario, infra } = receipt);
+    const savedApi=new URL(api);
+    if(!Number.isInteger(port)||port<1024||port>65535||!['clean_repair','no_change'].includes(scenario)||typeof infra!=='boolean'||savedApi.protocol!=='http:'||!['127.0.0.1','localhost'].includes(savedApi.hostname)||savedApi.username||savedApi.password||savedApi.pathname!=='/'||savedApi.search||savedApi.hash)throw new Error('Invalid saved synthetic configuration');
     tokenFile = path.join(root, 'service-token');
     const credential = await lstat(tokenFile);
     if (credential.isSymbolicLink() || credential.uid !== owner.uid || (credential.mode & 0o777) !== 0o600)
@@ -69,7 +79,7 @@ if (resume) {
         throw new Error('Refusing nonsynthetic credential');
 }
 else {
-    root = await mkdtemp(path.join(os.tmpdir(), 'atoms-controller-http-'));
+    root = await mkdtemp(path.join(await realpath(os.tmpdir()), 'atoms-controller-http-'));
     await chmod(root, 0o700);
     token = 'synthetic_controller_' + randomUUID();
     tokenFile = path.join(root, 'service-token');

@@ -51,7 +51,7 @@ export const Attention = z.object({
   kind: z.enum(['plan_confirmation', 'question']),
   title: z.string(), description: z.string(),
   options: z.array(z.object({ id: Id, label: z.string() }).strict()),
-  allowText: z.boolean(), plan: Plan.optional(), createdAt: Timestamp,
+  allowText: z.boolean(), plan: Plan.optional(), resolution: z.literal('replan').optional(), createdAt: Timestamp,
 }).strict();
 export const Answer = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('approve_plan') }).strict(),

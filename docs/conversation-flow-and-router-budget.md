@@ -10,7 +10,7 @@
 
 验证：主管独立18单测+23浏览器（38.4s）及Web check/build/API check；后端新增锚点/完整接受HTTP回归独立1/1（0.71s）。真实5180无Mock只读检查：台账折叠、旧接受按钮0、50条时间标注、日志分组、无业务POST/页面错误，quota前后相同。最后展示小补丁独立19单测+指定1浏览器（4.3s）和check/build，保留分批口径，不声称最后源码重新跑了全部23。作者contracts122项通过。本轮没有模型生成或用户任务操作。
 
-部署仅前端热更新，未重启API/Agent、未迁移或改写数据库。实际服务工作树为atoms-demo-quota-integration的live/conversation-flow，最终生产代码3756c51，其Git source tree与独立候选dd43ffd完全相同；本分支后续管理MD不改变运行代码。数据根/项目额度10/原任务和报告保留。用户刷新5180使用新展示。
+部署仅前端热更新，未重启API/Agent、未迁移或改写历史业务记录。实际只读检查仅登录时新增会话，其余为GET，未发送业务消息或任务。实际服务工作树为atoms-demo-quota-integration的live/conversation-flow，最终生产代码3756c51，其Git source tree与独立候选dd43ffd完全相同；本分支后续管理MD不改变运行代码。数据根/项目额度10/原任务和报告保留。用户刷新5180使用新展示。
 
 ## 已排查、尚未实施：页面英文改中文
 

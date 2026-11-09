@@ -1,5 +1,5 @@
 import {assertProvisionedPublicState} from './public-provisioning.js';
-import {readPublicHandoff} from './public-handoff.js';
+import {assertPublicQuotaAuthorizations,effectivePublicRunLimit} from './public-quota.js';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
@@ -59,7 +59,7 @@ export async function createApi(options: ApiOptions) {
   const store = new Store(join(dataDir, 'api.sqlite'));
   if(options.publicProfile){try{assertProvisionedPublicState(store.state,parsePublicDeployment(options.publicProfile.deployment()));}catch(error){store.close();releasePublicWriter();throw error;}}
   const publicEffectiveLimits=new Map<string,number>();
-  if(options.publicProfile){try{const deployment=parsePublicDeployment(options.publicProfile.deployment());for(const code of store.state.codes){const grant=readPublicHandoff(dataDir,deployment,code);publicEffectiveLimits.set(code.id,grant?.effectiveRunLimit??code.runLimit);}}catch(error){store.close();releasePublicWriter();throw error;}}
+  if(options.publicProfile){try{const deployment=parsePublicDeployment(options.publicProfile.deployment());assertPublicQuotaAuthorizations(store.state,deployment);for(const code of store.state.codes)publicEffectiveLimits.set(code.id,effectivePublicRunLimit(dataDir,deployment,store.state,code));}catch(error){store.close();releasePublicWriter();throw error;}}
   const effectiveRunLimit=(code:Code)=>options.publicProfile?(publicEffectiveLimits.get(code.id)??code.runLimit):code.runLimit;
   const app = Fastify({ logger: false, bodyLimit: 65536,trustProxy:options.publicProfile?(options.trustedProxy??[]):false });
   const preview = Fastify({ logger: false, routerOptions: { maxParamLength: 4096 } });

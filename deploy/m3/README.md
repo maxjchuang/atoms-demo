@@ -145,3 +145,20 @@ ATOMS_ALLOW_M3_REVOKE_CODE=1 node scripts/m3-revoke-code.mjs --revoke \
 ```
 
 The code travels only via stdin into an owned temporary0600 admin file, deleted afterwards. Only its exact hash-matched identity is revoked; other owners, sessions and quotas are not reset. The legacy revoke wrapper continues to target its configured original code; it no longer assumes the first/only DB identity. Provision/revoke do not restart the API or invoke models; the operator verifies DB receipts, starts the reviewed services and performs only login/session/project-list/foreign-owner denial checks in production.
+
+## Existing-code total build limit10
+
+A separate stopped/drained authorization may raise one explicitly selected existing identity's **total** build limit to10. It does not mean10 remaining, issue a new code, reset used/history or extend TTL. `Code.runLimit=3` and the original provisioning receipt remain unchanged; a code-scoped private SQLite authorization receipt records the previous effective total, necessary delta, observed used, unchanged expiry and history counts. Runtime uses the maximum authorized total across baseline, owner-bound legacy handoff and this receipt, never their sum.
+
+After operator backup and API drain/stop:
+
+```sh
+ATOMS_ALLOW_M3_CODE_TOPUP=1 node scripts/m3-code-topup.mjs --topup \
+  --project atoms-m3-public --operation-id operator_existing_code_total10 \
+  --code-id code_EXPLICIT_EXPECTED_OWNER \
+  --code-file /absolute/private/existing-experience-code --total-limit 10
+```
+
+The target must be an active code identified by a current-owner regular0600 file and the explicit expected owner ID. Plaintext only travels through stdin to the private admin process; neither the DB receipt nor stdout contains it or its credential hash. Other code owners and their effective limits are unchanged. Run-level model budgets, verification requirements and publication rules are unchanged.
+
+Repeating the same operation returns the same receipt and current usage. A different operation requesting the already-authorized total10 is a no-op and does not append another grant. The host stores a private journal; if the result is uncertain after an interrupted response, inspect the DB receipt and replay only the same target/operation. SQLite receipt insertion is atomic, and no retry can make used become zero or turn10 into another additive10. The operation does not start services or models; the operator restarts the reviewed API and validates current `/session` quota through each entrance without creating a production Run.

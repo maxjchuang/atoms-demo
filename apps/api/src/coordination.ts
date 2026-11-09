@@ -414,11 +414,11 @@ export function registerCoordination(host:CoordinationHost) {
         outcome={kind:'status',replyMessageId:replyId,contextUsed:result.contextUsed,observations,references:result.references};
       }else{
         text=result.answer;
-        // Output fact validation, not intent routing: a model cannot invent deployed capability/URLs.
-        if(!record.request!.context.facts.deployment.publicDeployment&&/(?:已(?:经)?(?:公开|公网)?(?:部署|上线|发布)|可(?:以)?(?:直接)?(?:公网|外网|公开)访问|https?:\/\/)/i.test(text)){
-          text='宿主部署事实：当前应用仅在本机服务预览，尚未完成公网部署。可以下载源码；给他人公网访问需要后续部署，不能把本机地址当作公网链接。';
-        }
-        if(deploymentFacts().publicDeployment&&/(?:https?:\/\/|永久|永不失效)/i.test(text))text=deploymentHelp();
+        // Only a typed user sharing operation requests a host deployment answer.
+        // Ordinary discussion of published source is not a deployment claim.
+        const sharing=record.operation.kind==='message'&&record.operation.input.kind==='sharing_help';
+        if(sharing)text=deploymentHelp();
+        else text=text.replace(/https?:\/\/[^\s<>"'，。；）]+/gi,'[未验证链接已移除，请通过分享操作获取可信链接]');
         outcome={kind:'consult',replyMessageId:replyId,contextUsed:result.contextUsed,references:result.references};
       }
     }else if(result.kind==='clarify'){
@@ -461,12 +461,6 @@ export function registerCoordination(host:CoordinationHost) {
       text=receipt==='cancellation_requested'?'已请求停止该任务，等待执行服务确认停止。':receipt==='already_terminal'?'该任务已经结束，没有需要停止的执行。':reason!.message;
       outcome={kind:'control',action:'cancel_run',targetRunId:result.targetRunId,replyMessageId:replyId,receipt,run:target!.dto,reason};
       coordEvent(projectId,record.dto.id,{type:'control.receipt',payload:{turnId:record.dto.id,targetRunId:result.targetRunId,receipt,run:target!.dto}});
-    }
-    if(record.deliveryRequest&&(outcome.kind==='consult'||outcome.kind==='status')){
-      const versionId=record.request!.context.contextVersionId;const v=versionId?store.state.versions.find(v=>v.dto.id===versionId):undefined;
-      if(v){const r=store.state.runs.find(r=>r.dto.id===(v.deliveryOriginRunId??v.dto.runId));const quality=r?.delivery?.verified?r.delivery.report?.quality:r?.delivery?.invalid?'blocked':'legacy_unverified';const gaps=r?.delivery?.report?.gaps??[];
-        const body=text.length>8000?text.slice(0,8000)+'…（答复已截断）':text;const gapsText=gaps.map(g=>g.description+'：'+g.reason).join('；').slice(0,3000);
-        text=`宿主交付事实（${now()}，版本 ${v.dto.id}）：${quality==='complete'?'本次冻结约定全部通过':quality==='partial'?'部分交付，仍有验收缺口':quality==='blocked'?'交付受阻':'旧版本未有可信交付验证'}。${gapsText}\n${body}`;}
     }
     // A proposal suggestion is not an accepted decision. Explicit accept records host-confirmed goal scope.
     if(outcome.kind!=='change_proposal'&&!(outcome.kind==='control'&&outcome.receipt==='not_applied'))applyMemory(record,result);

@@ -25,3 +25,31 @@ test('completed proposal refresh rereads delayed requirements without changing c
   await card.locator('.complete-summary-review>summary').click(); await card.getByRole('button', { name: '接受完整方案并创建构建', exact: true }).click();
   await expect(card).toContainText('完整方案已明确接受'); expect((await current(page, id)).execution.latestRun).not.toBeNull();
 });
+
+test('ordinary bug consultation keeps published-source wording and full answer tail separate from basis and typed sharing action', async ({ page }) => {
+  const id = await setup(page, 'legacy');
+  const data = await page.evaluate(async id => {
+    const post = async (path: string, body: unknown) => { const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'test_' + crypto.randomUUID() }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(await response.text()); return response.json(); };
+    await post(`/api/v1/projects/${id}/runs`, { prompt: '创建便签墙', mode: 'build' });
+    for (let i = 0; i < 9; i++) await fetch(`/api/v1/projects/${id}/events?after=0`);
+    await post('/__mock/delivery/seed', { projectId: id, scenario: 'manual-demotion' });
+    const execution = await (await fetch(`/api/v1/projects/${id}/workspace`)).json();
+    const path = '/src/mock/coordination-handlers.ts'; const { mockCoordinationStore: mock } = await import(path);
+    for (let i = 0; i < 65; i++) mock.addMessage(id, { role: 'assistant', actor: 'system', content: `历史缺口记录 ${i}：旧观测不应被前缀到本次回答。` });
+    const { turn } = mock.begin(id, { input: { kind: 'text', content: '已发布源码和版本里的按钮为什么会漏响应？只分析原因，不改代码。' }, mode: 'ask', runMode: 'build' });
+    const actionId = 'action_bug_consult_deployment'; mock.state(id).actions[turn.id] = [{ id: actionId, turnId: turn.id, kind: 'deployment_help', label: '查看真实分享条件', available: true }];
+    const answer = '已发布源码和版本中的 React Router 与 Worker 需要区分：这里先分析按钮输入事件，不是讨论公网发布。' + '建议检查事件绑定与状态更新，并保留原始诊断依据。'.repeat(55) + '诊断正文尾部：先确认点击与键盘事件，再决定是否修改。';
+    mock.finish(turn, answer, (reply: { id: string }) => ({ kind: 'consult', replyMessageId: reply.id, contextUsed: mock.context(id), references: [{ kind: 'version', versionId: execution.currentVersion.id }, { kind: 'available_action', actionId }] })); mock.save();
+    return { answer, messageId: turn.assistantMessageId };
+  }, id);
+  await page.reload(); const reply = page.locator(`[data-message-id="${data.messageId}"]`);
+  await expect(reply.locator('.message>div>p')).toContainText('已发布源码和版本中的 React Router 与 Worker');
+  expect(await reply.locator('.message>div>p').innerText()).not.toContain('历史缺口记录');
+  await expect(reply.locator('.long-message')).not.toHaveAttribute('open'); await reply.locator('.long-message>summary').click();
+  await expect(reply.locator('.long-message p')).toHaveText(data.answer); await expect(reply.locator('.long-message p')).toContainText('诊断正文尾部：先确认点击与键盘事件，再决定是否修改。');
+  await expect(reply.locator('.answer-basis')).toContainText('基于 V1'); await expect(page.getByTestId('delivery-summary').first()).toContainText('部分交付');
+  const resolved: string[] = []; page.on('request', request => { if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/resolve')) resolved.push(new URL(request.url()).pathname); });
+  await reply.getByRole('button', { name: '查看真实分享条件', exact: true }).click(); await expect(reply.locator('.host-action p')).toContainText('本机预览不等于公网部署'); expect(resolved).toHaveLength(1);
+  await expect(reply.locator('.host-action a')).toHaveCount(0);
+  await page.getByTestId('delivery-summary').first().getByRole('button', { name: '查看交付报告' }).click(); await expect(page.getByTestId('delivery-report')).toContainText('人工项尚未验收');
+});

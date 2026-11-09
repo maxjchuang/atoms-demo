@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CoordinationWorkspace } from '@atoms/contracts/conversation';
 import { workspace, consultEvents, consultTurn, consultUser, consultReply, legacyConversationMessage } from '@atoms/contracts/conversation-fixtures';
-import { hydrateConversation, mergeMessages, mergeOlderMessages, applyConversationEvents, applyExecutionEvents, actorLabels } from '../src/conversation-state.js';
+import { hydrateConversation, mergeMessages, mergeOlderMessages, applyConversationEvents, applyExecutionEvents, actorLabels, proposalMessageAnchor, conversationSegments } from '../src/conversation-state.js';
 
 test('message IDs/revisions upsert and historySeq controls order, not event timestamp', () => {
   const first = { ...consultReply, revision: 2, content: 'newest' };
@@ -56,4 +56,21 @@ test('clarification completion is not an active Run or an indefinitely processin
   const completed = applyConversationEvents(view, [{ ...consultEvents[0], seq: 1, event: { type: 'turn.updated', payload: consultTurn } }]);
   assert.equal(completed.workspace.pendingCoordinationTurns.length, 0);
   assert.equal(completed.workspace.execution.latestRun?.id, workspace.execution.latestRun?.id);
+});
+
+test('proposal card stays anchored to original reply regardless updated revision and falls back to its loaded user source', () => {
+  const proposal = { id:'proposal_anchor', projectId:consultTurn.projectId, originatingTurnId:consultTurn.id } as Parameters<typeof proposalMessageAnchor>[0];
+  const turn = { ...consultTurn, assistantMessageId:consultReply.id };
+  assert.equal(proposalMessageAnchor(proposal,[turn],[consultUser,consultReply]),consultReply.id);
+  assert.equal(proposalMessageAnchor({...proposal,revision:99,updatedAt:'2099-01-01T00:00:00Z'},[turn],[consultUser,consultReply]),consultReply.id);
+  assert.equal(proposalMessageAnchor(proposal,[turn],[consultUser]),consultUser.id);
+  assert.equal(proposalMessageAnchor(proposal,[turn],[]),null);
+});
+
+test('only consecutive same-run execution records group, never absorb later logs across a user or coordinator message', () => {
+ const log=(id:string,seq:number,runId='run_a')=>({...consultReply,id,historySeq:seq,runId,actor:'worker' as const});
+ const messages=[log('a',1),{...log('b',2),actor:'system' as const}, {...consultUser,historySeq:3},log('c',4),{...consultReply,historySeq:5},log('d',6),log('e',7,'run_b')];
+ const grouped=conversationSegments(messages);assert.deepEqual(grouped.map(segment=>segment.kind==='execution'?segment.messages.map(message=>message.id):segment.message.id),[['a','b'],consultUser.id,['c'],consultReply.id,['d'],['e']]);
+ assert.deepEqual(grouped.flatMap(segment=>segment.kind==='execution'?segment.messages:[segment.message]),messages);
+ assert.equal(conversationSegments([log('protected',1)],new Set(['protected']))[0].kind,'message');
 });

@@ -73,6 +73,17 @@ export const requirementsHandlers = [
     const projectId = String(params.projectId); if (!execution.find(projectId)) return error(404, 'NOT_FOUND', '项目不存在。'); const data = await settings(projectId); if (data.delayMs) await delay(data.delayMs); return HttpResponse.json(data.scenario === 'corrupt' ? { ...data.view, snapshot: { ...data.view.snapshot, hash: 'f'.repeat(64) } } : data.view, { headers });
   }),
   http.get('/api/requirements/v1/proposals/:proposalId', ({ params }) => { const value = findSummary(String(params.proposalId)); return value ? HttpResponse.json(value.summary, { headers }) : error(404, 'NOT_FOUND', '此提案没有完整需求summary绑定。'); }),
+  http.post('/api/v2/proposals/:proposalId/refresh', async ({ params }) => {
+    const found = execution.state.projects.map(record => ({ record, proposal: coordination.state(record.project.id).proposals.find(item => item.id === String(params.proposalId)) })).find(item => item.proposal);
+    if (!found || findSummary(String(params.proposalId))) return undefined;
+    const { record, proposal } = found, data = await settings(record.project.id), current = coordination.state(record.project.id);
+    if (!data.view.snapshot.entries.length) { const sourceId = proposal!.sourceMessageIds[0]; data.view.snapshot = ProjectRequirementSnapshot.parse(await seal({ ...data.view.snapshot, revision: data.view.snapshot.revision + 1, entries: [{ id: id('requirement'), text: proposal!.goal, kind: 'goal', authorization: 'requested', state: 'active', sources: [{ messageId: sourceId, quote: current.messages.find(item => item.id === sourceId)?.content ?? proposal!.goal, proposalId: proposal!.id, decisionId: null, clarificationId: null, questionMessageId: null, questionText: null }], createdAt: proposal!.createdAt }] })); }
+    const summary = await summaryFor(record.project.id, '请基于原提案整理完整方案供我确认，先不构建。');
+    if (!summary) return error(409, 'REVIEW_REQUIRED', '尚无完整来源，未创建构建。');
+    proposal!.status = 'stale'; proposal!.revision++; coordination.emit(record.project.id, proposal!.originatingTurnId, { type: 'proposal.updated', payload: proposal! });
+    const turn = current.turns.find(item => item.id === summary.proposal.originatingTurnId)!, userMessage = current.messages.find(item => item.id === turn.userMessageId)!; coordination.save(); save();
+    return HttpResponse.json({ userMessage, turn }, { status: 202, headers: { 'X-Atoms-Coordination-Version': '0.2.0' } });
+  }),
   http.post('/api/v2/proposals/:proposalId/accept', ({ params }) => findSummary(String(params.proposalId)) ? execution.error(409, 'CONFLICT', '请使用完整需求审阅的精确接受入口。') : undefined),
   http.post('/api/requirements/v1/proposals/:proposalId/accept', async ({ params, request }) => {
     if (!execution.state.authenticated) return error(401, 'UNAUTHENTICATED', '请重新登录。'); const item = findSummary(String(params.proposalId)); if (!item) return error(404, 'NOT_FOUND', '完整方案不存在。');

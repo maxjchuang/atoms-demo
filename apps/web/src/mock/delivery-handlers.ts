@@ -1,6 +1,6 @@
 import { http, HttpResponse, delay } from 'msw';
 import { DeliveryReadView, DeliveryReport, ExportReadView, VersionDiffPage, EvidenceDescriptor, deriveCriterionGaps, deriveDeliveryQuality, type DeliveryReportDto } from '@atoms/contracts/delivery';
-import { mixedProjection, automaticProjection } from './projection-reports';
+import { mixedProjection, automaticProjection, manualDemotionProjection } from './projection-reports';
 import * as fixture from '@atoms/contracts/delivery-fixtures';
 import { mockExecutionStore as execution } from './handlers';
 import { cleanBehaviorFailure, cleanRepairProvisional, cleanRepairComplete, cleanCasesNotRun, previousCleanEvidence } from './repair-controller-reports';
@@ -28,7 +28,7 @@ function remap<T>(value: T, projectId: string, runId: string, executionId: strin
 }
 async function reportFor(subject: NonNullable<ReturnType<typeof locate>>): Promise<DeliveryReportDto> {
   const { config, record, run } = subject;
-  const source = config.scenario === 'projection-mixed' ? mixedProjection : config.scenario === 'projection-auto' ? automaticProjection : config.scenario === 'controlled' ? fixture.controlledSourceReport : ['partial', 'manual'].includes(config.scenario) ? fixture.partial : config.scenario === 'optional-failure' ? fixture.optionalFailure : config.scenario === 'blocked' ? fixture.requiredFailure : config.scenario === 'repair' ? fixture.repaired : config.scenario === 'source-changed' ? fixture.sourceChanged : config.scenario === 'export-failure' ? fixture.exportFailure : config.scenario === 'planning-failure' ? fixture.planningFailure : config.scenario === 'cancelled' ? fixture.cancelled : config.scenario === 'provisional' ? fixture.provisional : fixture.complete;
+  const source = config.scenario === 'manual-demotion' ? manualDemotionProjection : config.scenario === 'projection-mixed' ? mixedProjection : config.scenario === 'projection-auto' ? automaticProjection : config.scenario === 'controlled' ? fixture.controlledSourceReport : ['partial', 'manual'].includes(config.scenario) ? fixture.partial : config.scenario === 'optional-failure' ? fixture.optionalFailure : config.scenario === 'blocked' ? fixture.requiredFailure : config.scenario === 'repair' ? fixture.repaired : config.scenario === 'source-changed' ? fixture.sourceChanged : config.scenario === 'export-failure' ? fixture.exportFailure : config.scenario === 'planning-failure' ? fixture.planningFailure : config.scenario === 'cancelled' ? fixture.cancelled : config.scenario === 'provisional' ? fixture.provisional : fixture.complete;
   const chosen = config.scenario === 'clean-cases-not-run' ? cleanCasesNotRun : config.scenario === 'clean-behavior-failed' ? cleanBehaviorFailure : config.scenario === 'clean-repair-loop' ? cleanRepairProvisional : config.scenario === 'clean-repair-complete' ? cleanRepairComplete : source;
   const report = remap(structuredClone(chosen), record.project.id, run?.id ?? 'run_mock_source', run?.executionId ?? 'execution_mock_source');
   report.id = `delivery_${run?.id ?? record.project.id}`;

@@ -54,6 +54,7 @@ export function DeliveryBadge({ subject, onOpen, context, previewLabel }: { subj
     note = [view.publication.status === 'published' ? '此版本已发布' : '尚未发布',
       view.apiVerification === 'pending' ? '报告待核验' : view.apiVerification === 'invalid' ? '证据未通过可信核验' : '',
       gaps.length ? `${gaps.length} 项待确认${manual ? ` · ${manual} 项需人工判断` : ''}${failed ? ` · ${failed} 项验证失败` : ''}` : '',
+      manual ? '可运行不等于全部验收通过；人工项尚未验收' : '',
       view.error?.message || '',
       cleanFailureSummary(view.report) || '',
       view.provenance.evidenceReuse === 'restored_unchanged_source' ? '复用原约定证据，未重跑' : '',
@@ -106,6 +107,7 @@ function Report({ view }: { view: Extract<DeliveryReadViewDto, { state: 'availab
   const spec = report.bundle?.spec; const plan = report.bundle?.plan; const groups = deliveryGroups(report);
   return <>
     <section><h3>本次约定与覆盖</h3><p className="delivery-goal">{report.seed.goal}</p><p>来源：{admissionLabel[report.seed.source.admission]} · {report.seed.source.messageIds.length} 条原始消息 · {spec?.origin === 'model_proposed' ? '模型细化约定，宿主冻结；不等于语义覆盖已被证明' : spec ? '预置验收计划' : '尚未冻结约定'}</p>
+      {groups.criteria.some(criterion => plan!.coverage.find(item => item.criterionId === criterion.id)?.method === 'manual') && <p>基础运行检查与已通过自动用例不等于全部功能验收；人工项尚未验收，具体原因逐条保留。</p>}
       {groups.derived && <h4>具体行为验收</h4>}
       {groups.criteria.map(criterion => { const coverage = plan!.coverage.find(item => item.criterionId === criterion.id)!; return <article className="criterion-row concrete-criterion" key={criterion.id}><strong>{criterion.description}</strong><div><span>{criterion.required ? '必需' : '可选'}</span><span>{coverageLabel[coverage.method]}</span><span>{result[criterionResult(report, criterion.id)]}</span></div>{coverage.reason && <p>{reasonLabel(coverage.reason)}</p>}<details><summary>核对来源约定项</summary><small>{criterion.seedItemIds.join('、')}</small></details></article>; })}
       {groups.derived && <div className="canonical-criteria"><h4>原始总体目标汇总</h4><p>汇总状态不重复计入具体行为数；{groups.parentGaps.length ? '仍有未满足子项，已通过的自动子项不受影响。' : '通过结论复用同一批实际用例，并未额外执行测试。'}</p>{groups.parents.map((criterion, index) => { const coverage = plan!.coverage.find(item => item.criterionId === criterion.id)!; return <article className="criterion-row aggregate-criterion" key={criterion.id}><strong>总体目标 {index + 1}</strong><div><span>{criterion.required ? '必需' : '可选'}</span><span>{coverageLabel[coverage.method]}</span><span>{result[criterionResult(report, criterion.id)]}</span></div><details><summary>完整目标与原始汇总依据</summary><p>{criterion.description}</p><pre>{criterion.id}{'\n'}{coverage.reason ?? '全部映射子项采用自动验证，使用现有用例并集。'}</pre><small>来源：{criterion.seedItemIds.join('、')}</small></details></article>; })}</div>}

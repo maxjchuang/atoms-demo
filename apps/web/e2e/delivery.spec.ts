@@ -154,3 +154,17 @@ for (const scenario of ['projection-mixed', 'projection-auto']) for (const viewp
   expect(await panel(page).evaluate(element => getComputedStyle(element).fontSize)).toBe('14px');
   await panel(page).evaluate(element => { element.scrollTop = 0; }); await page.screenshot({ path: `review-artifacts/m2/${scenario}-report-${viewport.width}-mock.png` });
 });
+
+test('manual planning gap keeps valid automatic checks and explicit reasons without greenwashing required failure', async ({ page }) => {
+  const subject = await seed(page, 'manual-demotion'); const summary = page.getByTestId('delivery-summary').first();
+  await expect(summary).toContainText('部分交付'); await expect(summary).toContainText('人工项尚未验收'); await expect(summary).not.toContainText('约定验收完成');
+  await report(page); const rows = panel(page).locator('.concrete-criterion'); await expect(rows).toHaveCount(4);
+  for (const name of ['新增便签后显示', '编辑便签文字', '搜索便签过滤']) await expect(rows.filter({ hasText: name })).toContainText('通过');
+  const manual = rows.filter({ hasText: '跨窗口拖放排序符合原目标' }); await expect(manual).toContainText('必需'); await expect(manual).toContainText('需人工判断'); await expect(manual).toContainText('未运行');
+  await expect(manual).toContainText('无法可靠自动核验跨窗口排序'); await expect(manual).toContainText('未执行不代表通过');
+  await manual.getByText('核对来源约定项', { exact: true }).click(); await expect(manual.locator('small')).toBeVisible();
+  await expect(panel(page).locator('.delivery-goal')).not.toBeEmpty(); await expect(panel(page).locator('.clean-case-summary')).toContainText('3/3 通过');
+  await page.getByRole('button', { name: '代码', exact: true }).click(); await expect(page.locator('.source-view')).toContainText('已发布版本');
+  await configure(page, subject.projectId, 'blocked'); await page.reload(); await expect(page.getByTestId('delivery-summary').first()).toContainText('交付受阻');
+  await report(page); await expect(panel(page).getByRole('heading', { name: '交付受阻', exact: true })).toBeVisible(); await expect(panel(page).locator('.concrete-gaps')).toContainText('失败');
+});

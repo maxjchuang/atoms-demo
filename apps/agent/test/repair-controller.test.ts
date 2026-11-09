@@ -98,3 +98,5 @@ test('a valid rehashed chain cannot disguise wrong stage/subject/derived cache o
     pending.repairController!.pendingEffect = null;
     assert.throws(() => beginControllerEffect(pending, 'generate', binding, budget, () => { }), /cache/);
 });
+
+test('v2 aggregate failure fingerprints retain semantic failure identity instead of drifting with pixel positions',()=>{const row=(x:number)=>({caseId:'case_one',failure:{stepId:'step_one',expected:JSON.stringify({frozenStep:{op:'expect_box_moved',dx:20,dy:0}}),actual:JSON.stringify({op:'expect_box_moved',delta:{dx:x,dy:x},baseline:{x},box:{x:x+1},stableForMs:0,requiredStableMs:120,matchCount:1})}});assert.equal(failureFingerprint('required_behavior',JSON.stringify({formatVersion:'repair-feedback-v2',checks:[],failures:[row(21)]})),failureFingerprint('required_behavior',JSON.stringify({formatVersion:'repair-feedback-v2',checks:[],failures:[row(29)]})));});

@@ -1,3 +1,4 @@
+import {assertGeometryBoundary} from './geometry-contract.js';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -42,7 +43,7 @@ export function assertGeometryObservationBudget(plan:BrowserTestPlanDto){if(plan
 function geometryWindow(){let anchor:Box|null=null;let since=0;return(actual:Box,matched=true)=>{const now=Date.now();if(!matched){anchor=null;since=now;return 0;}if(!anchor||(['x','y','width','height']as const).some(k=>Math.abs(actual[k]-anchor![k])>0.5)){anchor=actual;since=now;}return now-since;};}
 /** Fixed interpreter: never evals strings or accepts model URLs/JS/commands. */
 export async function runBrowserPlan(options: { dist: string; plan: BrowserTestPlanDto; evidenceDir: string; signal: AbortSignal; chromiumSandbox?: boolean;trustedBrowserLocale?:string }) {
-  const plan = BrowserTestPlan.parse(options.plan);assertGeometryObservationBudget(plan); await mkdir(options.evidenceDir, { recursive: true });
+  const plan = BrowserTestPlan.parse(options.plan);assertGeometryObservationBudget(plan);assertGeometryBoundary(plan); await mkdir(options.evidenceDir, { recursive: true });
   const server = createServer(async (req, res) => {
     try {
       const name = decodeURIComponent(new URL(req.url || '/', 'http://app').pathname).slice(1) || 'index.html';

@@ -1,8 +1,9 @@
+import {assertControlledSource} from './source-policy.js';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, symlink, writeFile,rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -44,35 +45,31 @@ export async function linkDependencies(workspace: string) {
   if (!existsSync(target)) await symlink(path.join(agentRoot, 'node_modules'), target, 'dir');
 }
 
-export async function verifyApplication(workspace: string, evidenceRoot: string, signal: AbortSignal,
-  report: (check: CheckValue) => void, activity: (message: string) => void = () => {}, options: { installedDependencies?: boolean; chromiumSandbox?: boolean } = {}) {
-  await mkdir(evidenceRoot, { recursive: true });
-  if (!options.installedDependencies) await linkDependencies(workspace);
-  const checks: CheckValue[] = [];
-  const checkCommand = async (kind: 'typecheck' | 'build', args: string[]) => {
-    const label = kind === 'typecheck' ? 'TypeScript 类型检查' : 'Vite 生产构建';
-    activity(`开始${label}。`);
-    const result = await verificationCommand(args, workspace, signal);
-    await writeFile(path.join(evidenceRoot, `${kind}.log`), result.log);
-    const check: CheckValue = { id: `check_${kind}`, kind, name: kind === 'build' ? 'Vite 生产构建' : 'TypeScript 类型检查', required: true,
-      status: result.success ? 'passed' : 'failed', summary: result.success ? '命令执行通过' : result.log.slice(-1500), evidenceIds: [`evidence_${kind}`] };
-    checks.push(check); report(check);
-    activity(`${label}${result.success ? '通过' : '未通过，已保存检查日志'}。`);
-    return result;
-  };
-  const dependency = options.installedDependencies ? createRequire(path.join(workspace, 'package.json')) : require;
-  const typed = await checkCommand('typecheck', [dependency.resolve('typescript/bin/tsc'), '--noEmit']);
-  if (!typed.success) return { checks, errors: typed.log,failureCategory: !typed.terminationSignal&&/error TS[0-9]+:/.test(typed.log)?'code_check' as const:'infrastructure' as const };
-  const built = await checkCommand('build', [path.join(path.dirname(dependency.resolve('vite/package.json')), 'bin/vite.js'), 'build']);
-  if (!built.success) return { checks, errors: built.log,failureCategory: !built.terminationSignal&&/\[vite:|RollupError|Transform failed|Could not resolve/.test(built.log)?'code_check' as const:'infrastructure' as const };
-  activity('开始浏览器加载检查：验证页面可加载且无运行时异常。');
-  const smoke = await smokeBrowser(path.join(workspace, 'dist'), evidenceRoot, signal, options.chromiumSandbox);
-  const check: CheckValue = { id: 'check_smoke', kind: 'smoke', name: '浏览器加载检查', required: true,
-    status: smoke.success ? 'passed' : 'failed', summary: smoke.log.slice(-1500),
-    evidenceIds: ['evidence_smoke', ...(smoke.screenshot ? ['evidence_screenshot'] : [])] };
-  checks.push(check); report(check);
-  activity(smoke.success ? '浏览器加载检查通过；具体功能行为仍需验收。' : '浏览器加载检查未通过，已保存检查日志。');
-  return { checks, errors: smoke.success ? null : smoke.log,failureCategory:smoke.success?undefined:smoke.failureCategory };
+export function knownSourceTypeErrors(log:string){const headers=log.split('\n').filter(line=>/error TS[0-9]+:/.test(line));return headers.length>0&&headers.every(line=>/^src\/[^\n:(]+(?:\([0-9]+,[0-9]+\)|:[0-9]+:[0-9]+).*error TS[0-9]+:/.test(line));}
+export type ApplicationDiagnostic={kind:'typecheck'|'build'|'smoke';category:'code_check'|'infrastructure';message:string};
+export type ApplicationVerification={checks:CheckValue[];errors:string|null;failureCategory?:'code_check'|'infrastructure';diagnosticDistReady?:boolean;diagnostics?:ApplicationDiagnostic[]};
+export async function verifyApplication(workspace:string,evidenceRoot:string,signal:AbortSignal,
+ report:(check:CheckValue)=>void,activity:(message:string)=>void=()=>{},options:{installedDependencies?:boolean;chromiumSandbox?:boolean;trustedConfigFiles?:Record<string,string>}={}):Promise<ApplicationVerification>{
+ await mkdir(evidenceRoot,{recursive:true});if(signal.aborted)throw new Error('Execution aborted');if(options.trustedConfigFiles)for(const name of ['package.json','pnpm-lock.yaml','vite.config.ts','tsconfig.json']){const expected=options.trustedConfigFiles[name];const actual=await readFile(await safeFile(workspace,name),'utf8');if(expected===undefined||actual!==expected)throw Object.assign(new Error('Trusted build configuration changed; no diagnostic execution'),{controllerCategory:'trust'});}await assertControlledSource(workspace);
+ if(!options.installedDependencies)await linkDependencies(workspace);
+ const checks:CheckValue[]=[],diagnostics:ApplicationDiagnostic[]=[];
+ const result=(diagnosticDistReady=false):ApplicationVerification=>({checks,errors:diagnostics.length?diagnostics.map(d=>d.kind+': '+d.message).join('\n'):null,failureCategory:diagnostics.some(d=>d.category==='infrastructure')?'infrastructure':diagnostics.length?'code_check':undefined,diagnosticDistReady,diagnostics});
+ const checkCommand=async(kind:'typecheck'|'build',args:string[])=>{
+  if(signal.aborted)throw new Error('Execution aborted');const label=kind==='typecheck'?'TypeScript 类型检查':'Vite 生产构建';activity(`开始${label}。`);const value=await verificationCommand(args,workspace,signal);await writeFile(path.join(evidenceRoot,kind+'.log'),value.log);
+  const check:CheckValue={id:'check_'+kind,kind,name:label,required:true,status:value.success?'passed':'failed',summary:value.success?'命令执行通过':value.log.slice(-1500),evidenceIds:['evidence_'+kind]};checks.push(check);report(check);activity(`${label}${value.success?'通过':'未通过，已保存检查日志'}。`);return value;
+ };
+ const dependency=options.installedDependencies?createRequire(path.join(workspace,'package.json')):require;
+ const typed=await checkCommand('typecheck',[dependency.resolve('typescript/bin/tsc'),'--noEmit']);
+ if(!typed.success){const category=!typed.terminationSignal&&knownSourceTypeErrors(typed.log)?'code_check' as const:'infrastructure' as const;diagnostics.push({kind:'typecheck',category,message:typed.log});if(category==='infrastructure')return result();activity('类型代码错误已保留；继续独立构建当前源码以聚合诊断，类型门禁仍失败，不允许交付。');}
+ if(signal.aborted)throw new Error('Execution aborted');
+ // Delete only this candidate's controlled build output. Never inspect an old dist after a failed build.
+ await rm(await safeFile(workspace,'dist'),{recursive:true,force:true});
+ const built=await checkCommand('build',[path.join(path.dirname(dependency.resolve('vite/package.json')),'bin/vite.js'),'build']);
+ if(!built.success){diagnostics.push({kind:'build',category:!built.terminationSignal&&/\[vite:|RollupError|Transform failed|Could not resolve/.test(built.log)?'code_check':'infrastructure',message:built.log});return result();}
+ if(signal.aborted)throw new Error('Execution aborted');activity('当前源码已生成全新构建，开始浏览器加载诊断；已有类型失败不因此变为通过。');
+ const smoke=await smokeBrowser(path.join(workspace,'dist'),evidenceRoot,signal,options.chromiumSandbox);
+ const check:CheckValue={id:'check_smoke',kind:'smoke',name:'浏览器加载检查',required:true,status:smoke.success?'passed':'failed',summary:smoke.log.slice(-1500),evidenceIds:['evidence_smoke',...(smoke.screenshot?['evidence_screenshot']:[])]};checks.push(check);report(check);
+ if(!smoke.success)diagnostics.push({kind:'smoke',category:smoke.failureCategory,message:smoke.log});activity(smoke.success?'当前源码构建加载诊断通过；类型与行为门禁分别保留。':'浏览器加载检查未通过，未继续依赖它的行为诊断。');return result(smoke.success);
 }
 
 export async function smokeBrowser(dist: string, evidenceRoot: string, signal: AbortSignal, chromiumSandbox = false) {

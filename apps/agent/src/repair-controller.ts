@@ -90,14 +90,15 @@ export function failureFingerprint(category: FailureCategory, observations: unkn
             value = JSON.parse(value);
         }
         catch { }
-    if (Array.isArray(value) && value.every(x => x && typeof x === 'object' && 'caseId' in x))
-        value = value.map((x: any) => { let expected = x.failure?.expected, actual = x.failure?.actual; try {
+    const envelope=value&&typeof value==='object'&&!Array.isArray(value)&&(value as {formatVersion?:unknown}).formatVersion==='repair-feedback-v2'?value as {checks?:unknown;failures?:unknown}:null;const rows=envelope?.failures??value;
+    if (Array.isArray(rows) && rows.every(x => x && typeof x === 'object' && 'caseId' in x))
+        {const normalized = rows.map((x: any) => { let expected = x.failure?.expected, actual = x.failure?.actual; try {
             expected = JSON.parse(expected);
         }
         catch { } try {
             actual = JSON.parse(actual);
         }
-        catch { } return { caseId: x.caseId, stepId: x.failure?.stepId ?? null, expected: expected ?? null, actualClass: actual && typeof actual === 'object' ? { op: actual.op ?? null, matchCount: actual.matchCount ?? null, count: actual.count ?? null, valueMatched: actual.value?.matched ?? null, geometryStable: typeof actual.stableForMs === 'number' ? actual.stableForMs >= actual.requiredStableMs : null, hasGeometryDelta: Boolean(actual.delta), truncated: actual.truncated ?? false } : typeof actual }; }).sort((a, b) => String(a.caseId).localeCompare(String(b.caseId)));
+        catch { } return { caseId: x.caseId, stepId: x.failure?.stepId ?? null, expected: expected ?? null, actualClass: actual && typeof actual === 'object' ? { op: actual.op ?? null, matchCount: actual.matchCount ?? null, count: actual.count ?? null, valueMatched: actual.value?.matched ?? null, geometryStable: typeof actual.stableForMs === 'number' ? actual.stableForMs >= actual.requiredStableMs : null, hasGeometryDelta: Boolean(actual.delta), truncated: actual.truncated ?? false } : typeof actual }; }).sort((a, b) => String(a.caseId).localeCompare(String(b.caseId)));value=envelope?{checks:Array.isArray(envelope.checks)?envelope.checks.map((c:any)=>({kind:c.kind,category:c.category,diagnosticCodes:typeof c.message==='string'?(c.message.match(/TS[0-9]+/g)??[]):[]})):[],failures:normalized}:normalized;}
     return sha256(canonicalDeliveryJson({ category, observations: value }));
 }
 export function controllerDecision(stage: RepairStage, result: StageResult, budget: BudgetObservation, structuredRetriesRemaining = 0): RepairDecision {

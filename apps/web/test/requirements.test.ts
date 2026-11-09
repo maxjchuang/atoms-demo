@@ -24,6 +24,18 @@ test('complete review includes original goal plus all requested increments, not 
   assert.deepEqual(acceptanceFor(summary).expectedBase, { kind: 'empty_project' }); assert.deepEqual(acceptanceFor(summary).expectedSnapshot, snapshotRef(snapshot));
   assert.equal(isCurrentSummary(summary, snapshot), true); assert.equal(isCurrentSummary(summary, { ...snapshot, revision: snapshot.revision + 1 }), false);
 });
+test('latest, exact and empty-base presentation never changes the exact typed acceptance snapshot/base', async () => {
+  const { snapshot, summary } = await sealed();
+  for (const base of [{ kind: 'empty_project' as const }, { kind: 'published_version' as const, versionId: 'version_reviewed', sourceAvailable: true, sourceSnapshotHash: 'a'.repeat(64) }]) {
+    const source = { ...snapshot, base, hash: await requirementHash({ ...snapshot, base }) };
+    for (const policy of [{ kind: 'latest_on_dispatch' as const }, { kind: 'exact_version' as const, expectedBaseVersionId: base.kind === 'empty_project' ? null : base.versionId }]) {
+      const raw = { ...summary, snapshot: source, proposal: { ...summary.proposal, basePolicy: policy, contextUsed: { ...summary.proposal.contextUsed, contextVersionId: base.kind === 'empty_project' ? null : base.versionId } }, draft: { ...summary.draft, snapshot: snapshotRef(source), implementation: base.kind === 'empty_project' ? 'new_app' as const : 'modify_app' as const } };
+      const input = RequirementSummary.parse({ ...raw, hash: await requirementHash(raw) });
+      assert.deepEqual(acceptanceFor(input).expectedBase, base); assert.deepEqual(acceptanceFor(input).expectedSnapshot, snapshotRef(source));
+      assert.equal('basePolicy' in acceptanceFor(input), false, 'The existing authoritative proposal controls dispatch; the browser sends no replacement policy.');
+    }
+  }
+});
 test('published-source basis and stale scope cannot silently substitute current/source authority', async () => {
   const { snapshot, summary } = await sealed();
   assert.equal(isCurrentSummary(summary, ProjectRequirementSnapshot.parse({ ...snapshot, base: { kind: 'published_version', versionId: 'version_other', sourceAvailable: true, sourceSnapshotHash: 'a'.repeat(64) } })), false);

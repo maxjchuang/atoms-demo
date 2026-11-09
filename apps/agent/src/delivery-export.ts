@@ -52,7 +52,7 @@ async function install(workspace: string, home: string, signal: AbortSignal) {
 }
 /** ZIP bytes, then external export manifest, then clean report: no self-referential archive. */
 export type IsolatedClean = (options:{workspace:string;evidenceDir:string;bundle:FrozenDeliveryBundleDto;exported:ReturnType<typeof SourceExportManifest.parse>;startedAt:string;signal:AbortSignal})=>Promise<{clean:ReturnType<typeof CleanBuildReport.parse>;evidence:Evidence[]}>;
-export async function exportAndVerify(options: { isolatedClean?:IsolatedClean; workspace: string; root: string; bundle: FrozenDeliveryBundleDto; signal: AbortSignal; activity: (text: string) => void }) {
+export async function exportAndVerify(options: { trustedBrowserLocale?:string;isolatedClean?:IsolatedClean; workspace: string; root: string; bundle: FrozenDeliveryBundleDto; signal: AbortSignal; activity: (text: string) => void }) {
   const { workspace, root, bundle, signal } = options; const toolchain = bundle.binding.toolchain;
   const files = await fingerprints(workspace, 'source/'); const sourceHash = inventoryHash(files);
   if (files.find((entry) => entry.path === 'source/package.json')?.sha256 !== toolchain.packageJsonHash
@@ -72,7 +72,7 @@ export async function exportAndVerify(options: { isolatedClean?:IsolatedClean; w
     archive: { id: `archive_${bundle.binding.executionId}`, sha256: sha256(archive), bytes: archive.length }, createdAt: new Date().toISOString() }));
   return { exported, archive: Buffer.from(archive), ...await verifyArchive({ ...options, exported, archive }) };
 }
-export async function verifyArchive(options: { isolatedClean?:IsolatedClean; root: string; bundle: FrozenDeliveryBundleDto; exported: ReturnType<typeof SourceExportManifest.parse>; archive: Uint8Array; signal: AbortSignal; activity: (text: string) => void }) {
+export async function verifyArchive(options: { trustedBrowserLocale?:string;isolatedClean?:IsolatedClean; root: string; bundle: FrozenDeliveryBundleDto; exported: ReturnType<typeof SourceExportManifest.parse>; archive: Uint8Array; signal: AbortSignal; activity: (text: string) => void }) {
   const { root, bundle, exported, signal, activity } = options; const startedAt = new Date().toISOString();
   const cleanRoot = path.join(root, 'clean'); const workspace = path.join(cleanRoot, 'source'); const evidenceDir = path.join(root, 'evidence', 'clean'); await mkdir(evidenceDir, { recursive: true }); await mkdir(cleanRoot, { recursive: true });
   const notRun = () => ({ status: 'not_run' as const, evidenceIds: [] as string[], reason: 'A prior clean export stage failed.' });
@@ -98,7 +98,7 @@ export async function verifyArchive(options: { isolatedClean?:IsolatedClean; roo
     if (!installed.success) throw new Error('Clean install failed'); await assertIndependentTree(await realpath(cleanRoot), path.join(workspace, 'node_modules'));
     const verified = await verifyApplication(workspace, evidenceDir, signal, () => {}, activity, { installedDependencies: true });
     for (const kind of ['typecheck', 'build', 'smoke'] as const) { const check = verified.checks.find((entry) => entry.kind === kind); if (check) stages[kind] = { status: check.status, evidenceIds: [`clean_${kind}`], reason: check.status === 'passed' ? null : check.summary } as never; }
-    if (!verified.errors) { activity('开始在干净导出构建中重跑同一冻结浏览器计划。'); const behavior = await runBrowserPlan({ dist: path.join(workspace, 'dist'), plan: bundle.plan, evidenceDir, signal }); results = behavior.caseResults; if (behavior.interrupted) { await writeFile(path.join(evidenceDir, 'browser-budget.log'), 'Clean frozen browser validation exceeded its bounded budget or was cancelled.'); stages.smoke = { status: 'failed', evidenceIds: ['clean_browser-budget'], reason: 'Clean browser verification was interrupted.' } as never; } }
+    if (!verified.errors) { activity('开始在干净导出构建中重跑同一冻结浏览器计划。'); const behavior = await runBrowserPlan({ dist: path.join(workspace, 'dist'), plan: bundle.plan, evidenceDir, signal,trustedBrowserLocale:options.trustedBrowserLocale }); results = behavior.caseResults; if (behavior.interrupted) { await writeFile(path.join(evidenceDir, 'browser-budget.log'), 'Clean frozen browser validation exceeded its bounded budget or was cancelled.'); stages.smoke = { status: 'failed', evidenceIds: ['clean_browser-budget'], reason: 'Clean browser verification was interrupted.' } as never; } }
     after = inventoryHash(await fingerprints(workspace, 'source/')); const distFiles = await fingerprints(path.join(workspace, 'dist'), 'dist/'); distHash = inventoryHash(distFiles);
   } catch (error) {
     if(error instanceof StopUnconfirmedError)throw error;

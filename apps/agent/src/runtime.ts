@@ -1,3 +1,7 @@
+import {canonicalDeliveryJson} from '@atoms/contracts/delivery';
+import {atomicLedger} from './atomic-ledger.js';
+import {beginControllerEffect,finishControllerEffect,failureFingerprint,validateController,type RepairControllerState,type RepairStage,type StageBinding,type BudgetObservation,type StageFailure} from './repair-controller.js';
+import {fingerprints,inventoryHash} from './delivery-files.js';
 import { RequirementsCoordinationRequest, RequirementsCoordinationSnapshot, RequirementsError } from '@atoms/contracts/requirements';
 import { BudgetRecoveryRuntime, RecoveryError } from './budget-recovery.js';
 import { BudgetRecoveryError, type RecoveryExecutionRequestDto } from '@atoms/contracts/budget-recovery';
@@ -35,7 +39,7 @@ import { DeliveryExecutionRuntime } from './delivery-execution.js';
 
 type RuntimeBody = ReturnType<typeof RuntimeEvent.parse>;
 type CheckValue = ReturnType<typeof Check.parse>;
-export type RecordValue = {
+export type RecordValue = {repairController?:RepairControllerState;
   isolationGeneration?: string; isolationPending?: boolean; isolationCancelRequested?: boolean;
   usageKnown?: boolean; pendingModelRequest?: boolean; usageObservationVersion?: 'settled-request-v1';
   executionBackend?:'host_local'|'docker_linux';recovery?: RecoveryExecutionRequestDto; recoveryInitialFeedback?:string|null; delivery?: DeliveryExecutionRequestDto;
@@ -63,7 +67,7 @@ export interface AgentOptions {
   mode?: 'fake' | 'dsh'; apiKey?: string; model?: string; adapter?: ModelAdapter;
   coordinationMode?: 'fake' | 'dsh'; coordinatorAdapter?: CoordinatorAdapter;
   /** Trusted test constructors only; not wired to main/env/HTTP. */
-  trustedHostPlan?: TrustedHostPlan; trustedSourceFault?: TrustedSourceFault;
+  trustedCleanBrowserLocale?:string;trustedHostPlan?: TrustedHostPlan; trustedSourceFault?: TrustedSourceFault;
   allowControlledRegression?: boolean; generationPool?: GenerationPool; isDeliveryReserved?: (id: string) => boolean; planningAdapter?: PlanningAdapter;
 }
 
@@ -85,7 +89,7 @@ export class AgentRuntime {
     const ledger = this.ledgerPath();
     if (existsSync(ledger)) {
       for (const item of JSON.parse(readFileSync(ledger, 'utf8')) as RecordValue[]) {
-        StartExecutionRequest.parse(item.request); ExecutionSnapshot.parse(item.snapshot);
+        StartExecutionRequest.parse(item.request); ExecutionSnapshot.parse(item.snapshot);if(item.repairController)validateController(item.repairController,{requestHash:sha256(canonical(item.request)),...(item.delivery?{specHash:item.delivery.bundle.spec.hash,planHash:item.delivery.bundle.plan.hash,bindingHash:item.delivery.bundle.binding.hash,toolchainHash:sha256(canonicalDeliveryJson(item.delivery.bundle.binding.toolchain))}:{})});
         this.records.set(item.request.executionId, item);
         if (!terminal.has(item.snapshot.status) && item.snapshot.status !== 'waiting_input' && item.snapshot.status !== 'accepted') {
           // Children are owned by this process; a full restart is fenced by fresh execution directories.
@@ -112,8 +116,7 @@ export class AgentRuntime {
   private ledgerPath() { return path.join(this.options.dataDir, 'executions.json'); }
   private persist() {
     const filename = this.ledgerPath();
-    writeFileSync(filename + '.tmp', JSON.stringify([...this.records.values()]));
-    renameSync(filename + '.tmp', filename);
+    atomicLedger(filename,[...this.records.values()]);
   }
   private emit(item: RecordValue, event: RuntimeBody) {
     const seq = item.events.length + 1;
@@ -275,6 +278,12 @@ export class AgentRuntime {
       },
     };
     if (item.delivery) this.deliveryEngine!.context(item, context);
+    const budget=():BudgetObservation=>({known:item.usageKnown!==false&&!item.pendingModelRequest,used:{modelSteps:(item.delivery?.bundle.binding.planningUsage.modelSteps??0)+item.usage.modelSteps,inputTokens:item.usageKnown===false?null:(item.delivery?.bundle.binding.planningUsage.inputTokens??0)+item.usage.inputTokens,outputTokens:item.usageKnown===false?null:(item.delivery?.bundle.binding.planningUsage.outputTokens??0)+item.usage.outputTokens,activeMs:(item.delivery?.bundle.binding.planningUsage.activeMs??0)+item.activeMs+Date.now()-startedAt},remaining:{modelSteps:item.request.budget.maxModelSteps-item.usage.modelSteps,inputTokens:item.usageKnown===false?null:item.request.budget.maxInputTokens-item.usage.inputTokens,outputTokens:item.usageKnown===false?null:context.remainingOutputTokens(),activeMs:context.remainingActiveMs!()},repairUsed:item.repairRoundsUsed,repairLimit:item.request.budget.maxRepairRounds});
+    const binding=async():Promise<StageBinding>=>({sourceHash:inventoryHash(await fingerprints(workspace,'source/')),specHash:item.delivery?.bundle.spec.hash??null,planHash:item.delivery?.bundle.plan.hash??null,bindingHash:item.delivery?.bundle.binding.hash??null,toolchainHash:item.delivery?sha256(canonicalDeliveryJson(item.delivery.bundle.binding.toolchain)):null,requestHash:item.hash});
+    let effect:{id:string;stage:RepairStage}|null=null;
+    const begin=async(stage:RepairStage)=>{if(controller.signal.aborted)throw new Error('Execution aborted');if(item.delivery)effect={id:beginControllerEffect(item,stage,await binding(),budget(),()=>this.persist()),stage};};
+    const finish=async(result:Parameters<typeof finishControllerEffect>[5])=>{if(!effect)return null;const decision=finishControllerEffect(item,effect.id,effect.stage,await binding(),budget(),result,()=>this.persist());effect=null;return decision;};
+    const failure=(category:StageFailure['category'],details:unknown,evidenceRefs:string[]=[]):StageFailure=>({category,fingerprint:failureFingerprint(category,details),evidenceRefs});
     try {
       if(item.recovery&&!item.started&&Date.now()>=Date.parse(item.recovery.authorization.startBefore))throw new HttpError(409,'INVALID_REQUEST','Recovery start authorization expired before first model dispatch');
       if (this.options.executionBackend === 'docker_linux' && (!this.options.verification || !await this.options.verification.ready())) throw new HttpError(503, 'RUNTIME_UNAVAILABLE', 'Docker verification integration is not ready; host fallback is disabled');
@@ -286,7 +295,7 @@ export class AgentRuntime {
         context.report(item.request.input.kind === 'template' ? '正在准备受控 React 模板。' : '正在载入并校验上一版本源码快照。');
         await this.prepareWorkspace(item, workspace, controller.signal);
         context.report('源码工作目录已准备完成，开始整理实现计划。');
-        item.plan = item.delivery ? await this.deliveryEngine!.initialize(item, workspace) : await this.adapter.plan(context); this.persist();
+        if(item.delivery){await begin('validate_frozen');item.plan=await this.deliveryEngine!.initialize(item,workspace);await finish({outcome:'passed'});}else item.plan=await this.adapter.plan(context); this.persist();
         context.report(`计划已整理：${item.plan.summary.slice(0, 240)}\n${item.plan.tasks.slice(0, 5).map((task, index) => `${index + 1}. ${task.slice(0, 120)}`).join('\n')}`);
       }
       if (!item.planConfirmed) {
@@ -307,7 +316,10 @@ export class AgentRuntime {
         }
         this.update(item, { phase: errors ? 'repairing' : 'generating' });
         this.emit(item, { type: 'phase.changed', payload: { phase: errors ? 'repairing' : 'generating' } });
+        await begin(errors?'repair':'generate');
         const generated = await this.adapter.generate(context, item.plan, errors || item.recoveryInitialFeedback || undefined);
+        const generationDecision=await finish({outcome:typeof generated==='string'?'passed':'question'});
+        if(generationDecision?.action==='stop')throw new HttpError(422,generationDecision.reason==='usage_unknown'?'BUDGET_EXCEEDED':'VERIFICATION_FAILED',generationDecision.reason==='usage_unknown'?'模型用量未知，控制器已停止后续验证或推理。':'修复未改变源码或重复已失败源码，已停止无进展循环。');
         if(typeof generated==='string')item.recoveryInitialFeedback=null;
         if (typeof generated !== 'string') {
           if (item.ordinaryQuestions >= COORDINATION_DEFAULTS.maxOrdinaryRunQuestions) throw new HttpError(422, 'BUDGET_EXCEEDED', '执行中的问题次数已达到上限，未扩大任务预算。');
@@ -321,14 +333,24 @@ export class AgentRuntime {
         }
         summary = generated;
         this.update(item, { phase: 'verifying' });
-        const verified = item.delivery ? await this.deliveryEngine!.verify(item, workspace, context) : this.options.verification ? await this.options.verification.verifyApplication(workspace,evidence,controller.signal,check=>this.checkEvent(item,check),context.report,{executionId:id,bindingHash:item.hash,attemptId:'attempt_'+id,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()}) : await verifyApplication(workspace, evidence, controller.signal,
+        if(!item.delivery)await begin('workspace_verify');
+        const verified = item.delivery ? await this.deliveryEngine!.verify(item, workspace, context,()=>begin('workspace_verify')) : this.options.verification ? await this.options.verification.verifyApplication(workspace,evidence,controller.signal,check=>this.checkEvent(item,check),context.report,{executionId:id,bindingHash:item.hash,attemptId:'attempt_'+id,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()}) : await verifyApplication(workspace, evidence, controller.signal,
           (check) => this.emit(item, { type: 'check.completed', payload: check }), context.report);
         checks = verified.checks; errors = verified.errors;
+        const verificationCategory='failureCategory'in verified&&['code_check','required_behavior','trust'].includes(String(verified.failureCategory))?verified.failureCategory as StageFailure['category']:'infrastructure';
+        const verifyDecision=await finish(errors?{outcome:'failed',failure:failure(verificationCategory,errors,checks.flatMap(c=>c.evidenceIds||[]))}:{outcome:'passed'});
+        if(errors&&verifyDecision?.action==='stop')throw new HttpError(422,'VERIFICATION_FAILED',verifyDecision.reason==='budget'||verifyDecision.reason==='usage_unknown'?'修复预算不足或用量未知，已停止。':'验证失败且没有可用的同计划修复次数。');
         item.verificationErrors = errors; item.repairClaimed = false; this.persist();
+        if (!errors&&item.delivery){
+          await begin('export_clean');const clean=await this.deliveryEngine!.finish(item,workspace,context);errors=clean.errors;
+          const cleanDecision=await finish(errors?{outcome:'failed',failure:failure(clean.failureCategory??'infrastructure',errors,clean.evidenceRefs)}:{outcome:'passed'});
+          item.verificationErrors=errors;this.persist();
+          if(cleanDecision?.action==='stop')throw new HttpError(422,'VERIFICATION_FAILED','干净导出失败且控制器不允许继续：'+cleanDecision.reason);
+        }
         if (!errors) break;
       }
       if (errors) throw new HttpError(422, 'VERIFICATION_FAILED', '验证失败且修复次数已用完：' + errors.slice(-1000));
-      if (item.delivery) await this.deliveryEngine!.finish(item, workspace, context);
+      await begin('finalize');
       const behavior: CheckValue = { id: 'check_behavior', kind: 'behavior', name: '需求行为验收', required: false,
         status: 'not_run', summary: '最小闭环只验证类型、构建和页面加载；功能行为待人工验收。', evidenceIds: [] };
       if (!item.delivery) { checks.push(behavior); this.emit(item, { type: 'check.completed', payload: behavior }); }
@@ -353,8 +375,10 @@ export class AgentRuntime {
           ...['typecheck', 'build', 'smoke'].map((kind) => ({ id: `evidence_${kind}`, path: `evidence/${kind}.log`, kind: 'log' })),
           { id: 'evidence_screenshot', path: 'evidence/screenshot.png', kind: 'screenshot' },
         ], createdAt: now() });
+      if(item.delivery){const report=this.deliveryEngine!.report(id)!;const attempt=report.attempts.at(-1);if(!report.final||report.lifecycle!=='completed'||!['complete','partial'].includes(report.quality)||!attempt||inventoryHash(files.filter(f=>f.path.startsWith('source/')))!==attempt.sourceAfterHash||inventoryHash(files.filter(f=>f.path.startsWith('dist/')))!==attempt.distHash||report.cleanBuild?.sourceBeforeHash!==attempt.sourceAfterHash||report.cleanBuild.sourceAfterHash!==attempt.sourceAfterHash)throw new HttpError(422,'VERIFICATION_FAILED','Final candidate bytes do not match current source/clean evidence');}
       const raw = JSON.stringify(manifest); await putFile(artifactRoot, 'manifest.json', raw);
       if (controller.signal.aborted) throw new Error('Execution aborted');
+      const finalizeDecision=await finish({outcome:'passed'});if(finalizeDecision?.action==='stop')throw new HttpError(422,'VERIFICATION_FAILED','Final artifact source/fence changed');if(controller.signal.aborted)throw new Error('Execution aborted before candidate');
       item.snapshot.artifactId = artifactId;
       this.emit(item, { type: 'artifact.ready', payload: { artifactId, manifestSha256: sha256(raw) } });
       context.report('候选产物与验证证据已就绪，等待后端校验并发布版本。');
@@ -363,15 +387,16 @@ export class AgentRuntime {
     } catch (error) {
       if(error instanceof StopUnconfirmedError){item.isolationPending=true;item.isolationCancelRequested=item.snapshot.status==='cancelling';this.update(item,{status:'cancelling',pendingAttention:null});return;}
       await this.adapter.close(id).catch(() => {});
+      if (effect) {const category=item.snapshot.status==='cancelling'||this.closed?'cancelled':item.usageKnown===false||item.pendingModelRequest?'usage_unknown':controller.signal.aborted?'budget':error&&typeof error==='object'&&'controllerCategory'in error&&['infrastructure','trust','budget','replan_required'].includes(String(error.controllerCategory))?error.controllerCategory as StageFailure['category']:'trust';await finish({outcome:'failed',failure:failure(category,[],[])}).catch(()=>{});}
       if (item.usageObservationVersion === 'settled-request-v1' && item.pendingModelRequest) item.usageKnown = false;
       item.snapshot.pendingAttention = null; item.snapshot.revision++;
-      if (item.delivery) this.deliveryEngine!.fail(item, item.snapshot.status === 'cancelling' || this.closed ? 'cancelled' : 'failed', error instanceof Error ? error.message : 'Delivery execution failed', controller.signal.reason === 'budget' || (error instanceof DeliveryError && error.code === 'BUDGET_EXCEEDED') ? 'BUDGET_EXCEEDED' : undefined);
+      if (item.delivery) this.deliveryEngine!.fail(item, item.snapshot.status === 'cancelling' || this.closed ? 'cancelled' : 'failed', error instanceof Error ? error.message : 'Delivery execution failed', controller.signal.reason === 'budget' || (error instanceof DeliveryError && error.code === 'BUDGET_EXCEEDED') ? 'BUDGET_EXCEEDED' : error&&typeof error==='object'&&'controllerCategory'in error&&error.controllerCategory==='replan_required'?'PLAN_INVALID':undefined);
       if (item.snapshot.status === 'cancelling' || this.closed) {
         item.snapshot.status = 'cancelled'; if (item.delivery) this.deliveryEngine?.fail(item, 'cancelled', 'Cancelled before execution or while waiting.'); this.emit(item, { type: 'execution.cancelled', payload: {} });
       } else {
         item.snapshot.status = 'failed';
         const code = controller.signal.aborted ? 'BUDGET_EXCEEDED'
-          : error instanceof HttpError || error instanceof RecoveryError || error instanceof DeliveryError ? (ErrorCode.safeParse(error.code).success?ErrorCode.parse(error.code):'INVALID_REQUEST') : 'INTERNAL_ERROR';
+          : error&&typeof error==='object'&&'controllerCategory'in error&&error.controllerCategory==='replan_required'?'VERIFICATION_FAILED':error instanceof HttpError || error instanceof RecoveryError || error instanceof DeliveryError ? (ErrorCode.safeParse(error.code).success?ErrorCode.parse(error.code):'INVALID_REQUEST') : 'INTERNAL_ERROR';
         this.emit(item, { type: 'execution.failed', payload: { code,
           message: error instanceof Error ? error.message.slice(0, 1500) : '执行失败' } });
       }
@@ -403,6 +428,7 @@ async function jsonBody(req: IncomingMessage, limit = 100000) {
   catch { throw new HttpError(400, 'INVALID_REQUEST', 'Invalid JSON'); }
 }
 export function createAgentServer(options: AgentOptions) {
+  if(options.trustedCleanBrowserLocale&&options.mode!=='fake')throw new Error('Controlled clean browser environment is constructor-only Fake testing');
   const broker = options.executionBackend === 'docker_linux' ? new BrokerClient(options.brokerUrl || 'http://broker:4310', options.brokerToken || '') : null;
   if(options.dockerProbe&&options.mode!=='fake')throw new Error('Unready Docker probe is restricted to explicit local Fake');
   const verification = broker ? new DockerVerification(broker,{dataDir:options.dataDir,allowUnreadyProbe:options.dockerProbe}) : undefined;
@@ -414,7 +440,7 @@ export function createAgentServer(options: AgentOptions) {
   planning = new DeliveryPlanningRuntime({ dataDir: path.join(options.dataDir, 'delivery'), pool, mode: options.mode,
     apiKey: options.apiKey, model: options.model, apiUrl: options.apiInternalUrl, serviceToken: options.serviceToken,
     legacyExists: (id, runId) => runtime.records.has(id) || [...runtime.records.values()].some((item) => item.request.runId === runId), executionStarted: (id) => runtime.records.has(id), adapter: options.planningAdapter, toolchainProvider, trustedHostPlan: options.trustedHostPlan });
-  const delivery = new DeliveryExecutionRuntime(runtime, planning, { allowControlledRegression: options.allowControlledRegression, trustedSourceFault: options.trustedSourceFault }); runtime.deliveryEngine = delivery;recovery=new BudgetRecoveryRuntime(runtime,delivery,{dataDir:options.dataDir,backend:options.executionBackend,testAudit:options.recoveryAudit});
+  const delivery = new DeliveryExecutionRuntime(runtime, planning, {trustedCleanBrowserLocale:options.trustedCleanBrowserLocale, allowControlledRegression: options.allowControlledRegression, trustedSourceFault: options.trustedSourceFault }); runtime.deliveryEngine = delivery;recovery=new BudgetRecoveryRuntime(runtime,delivery,{dataDir:options.dataDir,backend:options.executionBackend,testAudit:options.recoveryAudit});
   for (const item of runtime.records.values()) if (item.delivery && ['interrupted', 'cancelled', 'failed'].includes(item.snapshot.status) && !delivery.report(item.request.executionId)) delivery.fail(item, item.snapshot.status as 'interrupted', 'Runtime restarted or execution terminated.');
   const coordinator = new CoordinatorRuntime({ ...options, mode: options.coordinationMode ?? options.mode });
   const server = createServer(async (req, res) => {

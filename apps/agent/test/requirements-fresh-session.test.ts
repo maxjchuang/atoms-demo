@@ -82,7 +82,7 @@ test('eight requirements turns and same-turn retry each use a fresh disposed SDK
     }
     const last = prompts.at(-1)!;
     assert.ok(last.includes(continuationCoordination.operation.kind === 'clarification_answer' ? continuationCoordination.operation.questionSnapshot.question : ''));
-    assert.match(last, /"answer":"深色"/);
+    assert.match(last, /"answerRef":"u0"/);assert.match(last,/"currentInput":\{"ref":"u0","text":"深色"\}/);
     assert.equal(perTurnUsage.get('turn_fresh_7')!.modelSteps, 2);
     assert.equal(perTurnUsage.get('turn_fresh_7')!.inputTokens, 30);
     assert.equal(perTurnUsage.get('turn_fresh_7')!.outputTokens, 40);

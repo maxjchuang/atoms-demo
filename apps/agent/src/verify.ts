@@ -66,7 +66,7 @@ export async function verifyApplication(workspace:string,evidenceRoot:string,sig
  await rm(await safeFile(workspace,'dist'),{recursive:true,force:true});
  const built=await checkCommand('build',[path.join(path.dirname(dependency.resolve('vite/package.json')),'bin/vite.js'),'build']);
  if(!built.success){diagnostics.push({kind:'build',category:!built.terminationSignal&&/\[vite:|RollupError|Transform failed|Could not resolve/.test(built.log)?'code_check':'infrastructure',message:built.log});return result();}
- if(signal.aborted)throw new Error('Execution aborted');activity('当前源码已生成全新构建，开始浏览器加载诊断；已有类型失败不因此变为通过。');
+ if(signal.aborted)throw new Error('Execution aborted');activity('开始浏览器加载检查：使用当前源码全新构建收集诊断；已有类型失败不因此变为通过。');
  const smoke=await smokeBrowser(path.join(workspace,'dist'),evidenceRoot,signal,options.chromiumSandbox);
  const check:CheckValue={id:'check_smoke',kind:'smoke',name:'浏览器加载检查',required:true,status:smoke.success?'passed':'failed',summary:smoke.log.slice(-1500),evidenceIds:['evidence_smoke',...(smoke.screenshot?['evidence_screenshot']:[])]};checks.push(check);report(check);
  if(!smoke.success)diagnostics.push({kind:'smoke',category:smoke.failureCategory,message:smoke.log});activity(smoke.success?'当前源码构建加载诊断通过；类型与行为门禁分别保留。':'浏览器加载检查未通过，未继续依赖它的行为诊断。');return result(smoke.success);

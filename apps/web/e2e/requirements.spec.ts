@@ -92,6 +92,23 @@ test('missing published source cannot masquerade as an empty project or executab
   await seed(page, 'missing-source'); await expect(panel(page)).toContainText('源码当前不可用，不能授权修改'); await expect(panel(page).getByRole('button', { name: '接受完整方案并创建构建' })).toHaveCount(0);
 });
 
+for (const policy of ['latest', 'exact'] as const) for (const basis of ['published', 'empty'] as const) test(`summary copy separates ${policy} dispatch from ${basis} review basis without changing authorization`, async ({ page }) => {
+  const projectId = await seed(page, basis === 'published' ? 'published' : 'three-ask');
+  if (policy === 'exact') {
+    await page.evaluate(async projectId => {
+      const key = 'atoms_web_mock_requirements', data = JSON.parse(localStorage.getItem(key)!);
+      const modulePath = '/src/requirements-api.ts'; const { requirementHash } = await import(modulePath);
+      for (const summary of data[projectId].view.pendingSummaries) { summary.proposal.basePolicy = { kind: 'exact_version', expectedBaseVersionId: summary.snapshot.base.kind === 'empty_project' ? null : summary.snapshot.base.versionId }; summary.hash = await requirementHash(summary); }
+      localStorage.setItem(key, JSON.stringify(data));
+    }, projectId);
+    await page.reload();
+  }
+  const copy = panel(page).locator('.summary-baseline-copy').first();
+  if (policy === 'latest') { await expect(copy).toContainText(basis === 'empty' ? '审阅时尚无已发布应用' : '审阅时基于已发布版本'); await expect(copy).toContainText('开始构建时使用届时最新成功版本，无则使用模板'); await expect(copy).not.toContainText('精确锁定'); }
+  else { await expect(copy).toContainText(basis === 'empty' ? '精确锁定当前尚无已发布版本的状态' : '精确锁定已发布版本'); await expect(copy).toContainText('基线变化须重新审阅'); await expect(copy).not.toContainText('开始构建时使用届时最新成功版本'); }
+  expect(await latestRun(page, projectId)).toBeNull(); expect((await stats(page, projectId)).acceptPosts).toBe(0);
+});
+
 test('published base is explicit and corrupt authority fails closed instead of restoring old accept', async ({ page }) => {
   await seed(page, 'published'); await expect(panel(page)).toContainText('基于已发布版本'); await expect(panel(page)).toContainText('源码可用'); await expect(panel(page)).not.toContainText('尚无已发布应用或源码');
   await seed(page, 'corrupt'); await expect(panel(page).getByRole('alert')).toContainText('指纹不一致'); await expect(panel(page).getByRole('button', { name: '接受完整方案并创建构建' })).toHaveCount(0); await expect(page.getByRole('button', { name: '接受提案并创建构建', exact: true })).toBeDisabled();

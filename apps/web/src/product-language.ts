@@ -1,5 +1,6 @@
 /** Presentation only. Original messages, source files and downloadable evidence stay unchanged. */
-export function assistantText(text: string): string {
+export function assistantText(text: string, isFinalReply = false): string {
+  if (isFinalReply) return text;
   return text
     .replace(/\bWorker\b/gi, '程序员')
     .replace(/\bRouter\b/g, '项目负责人')

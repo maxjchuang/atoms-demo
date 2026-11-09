@@ -26,11 +26,14 @@ cd /Users/max/Projects/github/atoms-demo-ngrok
 ./atoms code info --code-file "$HOME/.atoms-m3/intel-public/experience-code-projects10-20261109"
 ./atoms code reset --code-file "$HOME/.atoms-m3/intel-public/experience-code-projects10-20261109"
 ./atoms code reset --code-file /absolute/private/code.txt --builds 15
+./atoms code extend --code-file /absolute/private/code.txt --until '2026-11-15T23:59:59.999+08:00'
 ```
 
 `new` 和 `reset` 的 `--builds` 默认 10，可选 1–100。**重置的是剩余额度**：已用 2 次后重置 10 次，已用仍为 2，有效总额度为 12。历史 Run、报告、版本和用量不删除。重置不延长有效期、不恢复已撤销体验码，也不改变项目上限。过期码不能重置，`code info` 仍可显示失效状态，需要继续体验时创建新码。新码使用现有部署的项目上限（当前为 10）；当前部署最多累计创建 10 个身份。有效期最长 86400 秒。
 
 新码只写入私有 0600 文件，默认在私有目录 `codes/<operationId>.txt`，终端只显示路径及脱敏统计。可用 `--code-file /absolute/private/new-code.txt` 指定仓库外的新文件。查询和重置接受的是**仅含原始体验码的私有文件**，不是交接说明；拒绝软链接和宽松权限。实际体验码通过私下方式交接，不放入 Git 或公共日志。
+
+`code extend` 只延长指定体验码的有效期，必须给出带明确时区的未来时间。原体验码、额度、使用记录和项目归属不变；原签发与额度凭据保留，新增延期审计记录。只允许当前有效且未撤销的码单调延期，最晚为原签发时间后7天；已过期或撤销的码不会因此复活。新码默认及签发上限仍为24小时。会话和已签发预览链接不会自动延长，到期后重新登录或获取链接。
 
 发码、重置和备份先暂停准入、等待任务排空、确认 broker 空闲并备份；原先运行的 API 在完成后恢复。存在活动任务或等待用户输入时，脚本可能拒绝继续，不会自动取消或回答。它们不创建 Code Run，不调用模型。`code info` 为只读查询。
 

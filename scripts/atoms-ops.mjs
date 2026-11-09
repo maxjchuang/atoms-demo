@@ -10,26 +10,38 @@ export const HELP=`Usage: ./atoms <command> [options]
   status | details       Read sanitized deployment and readiness status
   code new [--builds N] [--ttl-seconds N] [--code-file PATH]
   code reset --code-file PATH [--builds N]
+  code extend --code-file PATH --until ISO_WITH_TIMEZONE
   code info --code-file PATH
   backup | config | help
 Options: --config FILE --dry-run --operation-id ID
 Code new/reset default to 10 remaining builds (1..100). Reset preserves used/history.
 TTL defaults to 86400 seconds, maximum 86400. Code files are private; code text is never printed.
+Extend requires an explicit future ISO timestamp with timezone; it changes expiry only.
 Keep the printed operation ID to resume the same operation without another quota reset.
 No operation creates a CodeRun or invokes a model. Readiness uses existing proof, not a new OS certification.`;
 export function parseArgs(argv){
-  const words=[],flags={};const boolean=new Set(['--dry-run','--all']);const valued=new Set(['--config','--operation-id','--code-file','--builds','--ttl-seconds']);
+  const words=[],flags={};const boolean=new Set(['--dry-run','--all']);const valued=new Set(['--config','--operation-id','--code-file','--builds','--ttl-seconds','--until']);
   for(let n=0;n<argv.length;n++){const a=argv[n];if(a==='--help'||a==='-h')return{command:'help',options:{}};if(a.startsWith('-')){if(Object.hasOwn(flags,a))throw Error('Duplicate option '+a);if(boolean.has(a))flags[a]=true;else if(valued.has(a)){if(!argv[n+1]||argv[n+1].startsWith('--'))throw Error('Missing value for '+a);flags[a]=argv[++n];}else throw Error('Unknown option '+a);}else words.push(a);}
   if(!words.length)words.push('help');if(words[0]==='code'&&words[1]==='create')words[1]='new';const command=words.join(' ');
-  if(!['help','config','start','stop','restart','status','details','code new','code reset','code info','backup'].includes(command))throw Error('Unknown command; use ./atoms help');
-  const allowed=new Set(['--config']);if(['start','stop','restart','code new','code reset','backup'].includes(command)){allowed.add('--dry-run');allowed.add('--operation-id');}if(['stop','restart'].includes(command))allowed.add('--all');if(command.startsWith('code '))allowed.add('--code-file');if(['code new','code reset'].includes(command))allowed.add('--builds');if(command==='code new')allowed.add('--ttl-seconds');for(const key of Object.keys(flags))if(!allowed.has(key))throw Error(key+' is not valid for '+command);
+  if(!['help','config','start','stop','restart','status','details','code new','code reset','code extend','code info','backup'].includes(command))throw Error('Unknown command; use ./atoms help');
+  const allowed=new Set(['--config']);if(['start','stop','restart','code new','code reset','code extend','backup'].includes(command)){allowed.add('--dry-run');allowed.add('--operation-id');}if(['stop','restart'].includes(command))allowed.add('--all');if(command.startsWith('code '))allowed.add('--code-file');if(['code new','code reset'].includes(command))allowed.add('--builds');if(command==='code new')allowed.add('--ttl-seconds');if(command==='code extend')allowed.add('--until');for(const key of Object.keys(flags))if(!allowed.has(key))throw Error(key+' is not valid for '+command);
   const integer=(name,fallback,max)=>{const raw=flags[name];if(raw===undefined)return fallback;if(!/^[1-9][0-9]*$/.test(raw)||Number(raw)>max)throw Error(name+' must be an integer from 1 to '+max);return Number(raw);};
   const options={all:!!flags['--all'],dryRun:!!flags['--dry-run'],configFile:flags['--config'],operationId:flags['--operation-id'],codeFile:flags['--code-file']?resolve(flags['--code-file']):undefined};
   if(['code new','code reset'].includes(command))options.builds=integer('--builds',10,100);
   if(command==='code new')options.ttlSeconds=integer('--ttl-seconds',86400,86400);
-  if(['code reset','code info'].includes(command)&&!options.codeFile)throw Error('--code-file is required');
+  if(['code reset','code extend','code info'].includes(command)&&!options.codeFile)throw Error('--code-file is required');
+  if(command==='code extend')options.until=normalizeUntil(flags['--until']);
   if(options.operationId!==undefined)operationId(options.operationId);
   return{command,options};
+}
+export function normalizeUntil(value){
+  const match=typeof value==='string'&&/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(?:Z|[+-](\d{2}):(\d{2}))$/.exec(value);
+  if(!match)throw Error('--until requires an ISO timestamp with explicit timezone, e.g. 2026-11-15T23:59:59.999+08:00');
+  const [,year,month,day,hour,minute,second,zoneHour,zoneMinute]=match;
+  const y=Number(year),m=Number(month),d=Number(day),leap=y%4===0&&(y%100!==0||y%400===0),days=[31,leap?29:28,31,30,31,30,31,31,30,31,30,31];
+  const time=Date.parse(value);
+  if(m<1||m>12||d<1||d>days[m-1]||Number(hour)>23||Number(minute)>59||Number(second)>59||Number(zoneHour??0)>23||Number(zoneMinute??0)>59||!Number.isFinite(time)||time<=Date.now())throw Error('--until must be a valid future timestamp');
+  return new Date(time).toISOString();
 }
 export async function main(argv=process.argv.slice(2),{runtimeFactory,output=console.log,errorOutput=console.error}={}){
   let parsed;try{parsed=parseArgs(argv);}catch(error){errorOutput(error.message);return 1;}
@@ -47,7 +59,7 @@ export async function main(argv=process.argv.slice(2),{runtimeFactory,output=con
     const env=fixedDockerEnvironment(settings);for(const k of ['DOCKER_HOST','DOCKER_CONTEXT','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH','DOCKER_CONFIG','DOCKER_API_VERSION','DOCKER_TLS','BUILDX_BUILDER'])delete process.env[k];process.env.DOCKER_CONTEXT=env.DOCKER_CONTEXT;
     const factory=runtimeFactory??(await import('./atoms-ops-runtime.mjs')).createRuntime;
     const runtime=await factory(settings);
-    const parameters={command,all:options.all,codeFile:options.codeFile??null,builds:options.builds??null,ttlSeconds:options.ttlSeconds??null,settings};
+    const parameters={command,all:options.all,codeFile:options.codeFile??null,builds:options.builds??null,ttlSeconds:options.ttlSeconds??null,settings,...(command==='code extend'?{until:options.until}:{})};
     stage=mutation?'journal_open':'read_status';
     activeJournal=mutation?await openJournal(settings,options.operationId,parameters):undefined;
     stage=mutation?'operation':command==='code info'?'read_code_info':'read_status';
@@ -57,7 +69,7 @@ export async function main(argv=process.argv.slice(2),{runtimeFactory,output=con
     const categories={ENOENT:'REQUIRED_PATH_OR_EXECUTABLE_MISSING',EACCES:'ACCESS_DENIED',EPERM:'ACCESS_DENIED',ECONNREFUSED:'CONNECTION_REFUSED',ETIMEDOUT:'CONNECTION_TIMEOUT',ERR_MODULE_NOT_FOUND:'RUNTIME_MODULE_UNAVAILABLE'};
     const errorCode=Object.hasOwn(categories,error?.code??'')?categories[error.code]:error instanceof SyntaxError?'MANAGEMENT_DATA_INVALID':'OPERATION_FAILED';
     const phase=activeJournal?.record.phase;
-    const journalPhase=['created','backup','provision','reset','completed'].includes(phase)?phase:undefined;
+    const journalPhase=['created','backup','provision','reset','extend','completed'].includes(phase)?phase:undefined;
     errorOutput(JSON.stringify({error:'Operation failed; no automatic retry or force was performed.',errorCode,stage,journalPhase,dockerContext:settings.dockerContext,project:settings.project,operationId:options.operationId??null,recoveryRequired:!!error?.recoveryRequired,hints:['Check ./atoms config.',`Check Docker availability with: docker --context ${settings.dockerContext} info.`,...(mutation?[`Inspect private operation records in ${join(settings.privateDir,'ops-journal')}; resume only the same operation ID with identical parameters.`]:['Check configured privateDir and its owned 0700 permissions.'])]}));return 1;
   }
 }

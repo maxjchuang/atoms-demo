@@ -1,0 +1,22 @@
+/** Stopped/drained, code-scoped expiry extension; no quota, session or publication rewrite. */
+import{join}from'node:path';import{createHash}from'node:crypto';import{Id}from'@atoms/contracts';import{Store,type PublicCodeExpiryExtension}from'./store.js';import{acquirePublicWriter}from'./public-admin.js';import{assertPublicDataNamespace,type PublicDeployment}from'./public-profile.js';import{publicCodeQuotaDetails}from'./public-quota.js';import{assertProvisionedPublicState}from'./public-provisioning.js';
+function ensure(v:unknown,message:string):asserts v{if(!v)throw Error(message);}const sha=(v:string)=>createHash('sha256').update(v).digest('hex');
+export interface PublicCodeExtensionRequest{kind:'extend-public-code-expiry';operationId:string;codeId:string;expiresAt:string}
+export function parsePublicCodeExtensionRequest(input:unknown):PublicCodeExtensionRequest{
+ ensure(input&&typeof input==='object'&&!Array.isArray(input),'Explicit code expiry extension request required');const r=input as PublicCodeExtensionRequest;ensure(Object.keys(r).sort().join(',')===['kind','operationId','codeId','expiresAt'].sort().join(','),'Unknown public expiry extension fields');Id.parse(r.codeId);
+ ensure(r.kind==='extend-public-code-expiry'&&typeof r.operationId==='string'&&/^[A-Za-z0-9_-]{8,64}$/.test(r.operationId)&&typeof r.expiresAt==='string'&&Number.isFinite(Date.parse(r.expiresAt))&&new Date(r.expiresAt).toISOString()===r.expiresAt,'Explicit operation and canonical UTC ISO expiry required');return r;
+}
+export function offlineExtendPublicCode(dataDir:string,deployment:PublicDeployment,input:unknown,rawCode:string,authorized=false){
+ ensure(authorized,'Separate public code extension authorization guard required');const request=parsePublicCodeExtensionRequest(input);assertPublicDataNamespace(dataDir,deployment);const release=acquirePublicWriter(dataDir);let store:Store|undefined;
+ try{
+  store=new Store(join(dataDir,'api.sqlite'));const details=publicCodeQuotaDetails(dataDir,deployment,store.state,rawCode);ensure(details.codeId===request.codeId,'Protected target code does not match the explicitly selected identity');
+  ensure(store.state.runs.every(r=>['succeeded','failed','cancelled','interrupted'].includes(r.dto.status))&&store.state.coordination.turns.every(t=>['completed','failed','cancelled','interrupted'].includes(t.dto.status))&&details.reserved===0,'Code extension requires drained Run/Turn work');
+  const existing=store.state.publicCodeExpiryExtensions?.find(r=>r.operationId===request.operationId);if(existing){ensure(existing.codeId===request.codeId&&existing.expiresAt===request.expiresAt,'Extension operation already belongs to another target/request');return{changed:false,replayed:true,receipt:existing,details};}
+  ensure(details.active,'Only active nonrevoked public codes may be extended');ensure(![...(store.state.publicProvisions??[]),...(store.state.publicQuotaAuthorizations??[]),...(store.state.publicQuotaResets??[])].some(r=>r.operationId===request.operationId),'Extension operation already belongs to another audit ledger');
+  const code=store.state.codes.find(c=>c.id===request.codeId)!,now=Date.now(),until=Date.parse(request.expiresAt);ensure(until>now&&until>Date.parse(code.expiresAt)&&until<=Date.parse(code.publicIssuedAt!)+7*86400000,'Expiry must monotonically extend into the future within seven days of original issuance');
+  const{codes,sessions,publicProvisions,publicQuotaAuthorizations,publicQuotaResets,publicCodeExpiryExtensions,idempotency,...history}=store.state;
+  const receipt:PublicCodeExpiryExtension={kind:'public-code-expiry-extension',operationId:request.operationId,dataNamespaceId:deployment.dataNamespaceId,codeId:code.id,issuedAt:code.publicIssuedAt!,previousExpiresAt:code.expiresAt,expiresAt:request.expiresAt,authorizedAt:new Date(now).toISOString(),preserved:{projects:history.projects.length,runs:history.runs.length,versions:history.versions.length,messages:history.messages.length,events:history.events.length,started:history.runs.filter(r=>r.started).length},historySha256:sha(JSON.stringify(history))};
+  store.transaction(()=>{code.expiresAt=request.expiresAt;(store!.state.publicCodeExpiryExtensions??=[]).push(receipt);assertProvisionedPublicState(store!.state,deployment);publicCodeQuotaDetails(dataDir,deployment,store!.state,rawCode);});
+  return{changed:true,replayed:false,receipt,details:publicCodeQuotaDetails(dataDir,deployment,store.state,rawCode)};
+ }finally{store?.close();release();}
+}

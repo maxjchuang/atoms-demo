@@ -51,12 +51,13 @@ export async function openJournal(settings,id,parameters){
   return {record,save,async step(name,fn){if(Object.hasOwn(record.steps,name))return record.steps[name];record.phase=name;await save();const result=publicOutput(await fn())??null;record.steps[name]=result;await save();return result;}};
 }
 export function mutationPlan(command,options={}){
-  return {command,...options,dryRun:true,modelCalls:0,codeRunsCreated:0,steps:command==='code new'?['drain','brokerIdle','backup','provision','reset remaining='+options.builds,'restore previously running API']:command==='code reset'?['drain','brokerIdle','backup','lookup codeId','reset remaining='+options.builds,'restore previously running API']:command==='stop'?['drain','brokerIdle','stopCore',...(options.all?['stopTunnels']:[])]:command==='restart'?['drain','brokerIdle','stopCore',...(options.all?['stopTunnels']:[]),'startCoreWithoutApi','verifyIsolation','ensureTunnels','startApi']:['startCoreWithoutApi','verifyIsolation','ensureTunnels','startApi']};
+  return {command,...options,dryRun:true,modelCalls:0,codeRunsCreated:0,steps:command==='code new'?['drain','brokerIdle','backup','provision','reset remaining='+options.builds,'restore previously running API']:command==='code reset'?['drain','brokerIdle','backup','lookup codeId','reset remaining='+options.builds,'restore previously running API']:command==='code extend'?['drain','brokerIdle','backup','lookup codeId','extend expiresAt='+options.until,'restore previously running API','read current details']:command==='stop'?['drain','brokerIdle','stopCore',...(options.all?['stopTunnels']:[])]:command==='restart'?['drain','brokerIdle','stopCore',...(options.all?['stopTunnels']:[]),'startCoreWithoutApi','verifyIsolation','ensureTunnels','startApi']:['startCoreWithoutApi','verifyIsolation','ensureTunnels','startApi']};
 }
 export async function runOperation(runtime,settings,command,options={},journal){
   if(command==='status'||command==='details')return publicOutput(await runtime.status({details:command==='details'}));
   if(command==='code info')return publicOutput(await runtime.codeDetails(options.codeFile));
   if(journal?.record.completed){
+    if(command==='code extend')return publicOutput({operationId:options.operationId,replayed:true,requestedExpiresAt:options.until,codeFile:options.codeFile,current:await runtime.codeDetails(options.codeFile),modelCalls:0,codeRunsCreated:0});
     if(command==='code new'||command==='code reset')return publicOutput({operationId:options.operationId,replayed:true,requestedRemaining:options.builds,codeFile:options.codeFile,current:await runtime.codeDetails(options.codeFile),modelCalls:0,codeRunsCreated:0});
     return publicOutput({operationId:options.operationId,replayed:true,originalResult:journal.record.result,current:await runtime.status({details:false})});
   }
@@ -72,7 +73,7 @@ export async function runOperation(runtime,settings,command,options={},journal){
     if(options.all)await runtime.stopTunnels();
     if(command==='restart')await start();
     result={stopped:command==='stop',restarted:command==='restart',tunnelsRetained:!options.all};
-  }else if(command==='code new'||command==='code reset'||command==='backup'){
+  }else if(command==='code new'||command==='code reset'||command==='code extend'||command==='backup'){
     if(journal&&!Object.hasOwn(journal.record,'apiWasRunning')){journal.record.apiWasRunning=!!before.apiRunning;await journal.save();}
     const restore=journal?journal.record.apiWasRunning:!!before.apiRunning;
     let drained=false;
@@ -83,11 +84,16 @@ export async function runOperation(runtime,settings,command,options={},journal){
       else{
         if(command==='code new')await step('provision',()=>runtime.provision({operationId:options.operationId+'_issue',file:options.codeFile,ttlSeconds:options.ttlSeconds}));
         const info=await runtime.codeDetails(options.codeFile);if(typeof info.codeId!=='string'||!info.codeId)throw Error('Code identifier unavailable');
-        await step('reset',()=>runtime.reset({operationId:options.operationId+'_reset',codeId:info.codeId,file:options.codeFile,remaining:options.builds}));
-        result={operationId:options.operationId,codeFile:options.codeFile,codeId:info.codeId,requestedRemaining:options.builds};
+        if(command==='code extend'){
+          await step('extend',()=>runtime.extend({operationId:options.operationId+'_extend',codeId:info.codeId,file:options.codeFile,expiresAt:options.until}));
+          result={operationId:options.operationId,codeFile:options.codeFile,codeId:info.codeId,requestedExpiresAt:options.until};
+        }else{
+          await step('reset',()=>runtime.reset({operationId:options.operationId+'_reset',codeId:info.codeId,file:options.codeFile,remaining:options.builds}));
+          result={operationId:options.operationId,codeFile:options.codeFile,codeId:info.codeId,requestedRemaining:options.builds};
+        }
       }
       if(restore)await recover();
-      if(command==='code new'||command==='code reset')result.current=publicOutput(await runtime.codeDetails(options.codeFile));
+      if(command==='code new'||command==='code reset'||command==='code extend')result.current=publicOutput(await runtime.codeDetails(options.codeFile));
     }catch(error){
       if(journal){journal.record.failed=true;journal.record.recoveryRequired=!!error.recoveryRequired;await journal.save();}
       if(drained&&restore&&!error.recoveryRequired)try{await recover();}catch{error.recoveryRequired=true;if(journal){journal.record.recoveryRequired=true;await journal.save();}}

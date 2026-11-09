@@ -45,6 +45,11 @@ export interface PublicQuotaReset {
  observedUsed:number;observedReserved:0;codeExpiresAt:string;authorizedAt:string;
  preserved:{projects:number;runs:number;versions:number;messages:number;events:number;started:number};historySha256:string;
 }
+export interface PublicCodeExpiryExtension {
+ kind:'public-code-expiry-extension';operationId:string;dataNamespaceId:string;codeId:string;
+ issuedAt:string;previousExpiresAt:string;expiresAt:string;authorizedAt:string;
+ preserved:{projects:number;runs:number;versions:number;messages:number;events:number;started:number};historySha256:string;
+}
 export interface PublicProvisionReceipt {
  kind:'new-public-identity';operationId:string;dataNamespaceId:string;codeId:string;
  projectLimit:10;runLimit:3;maxIdentities:10;issuedAt:string;expiresAt:string;
@@ -55,7 +60,7 @@ export interface BudgetRecoveryOrigin {view?:ReturnType<typeof import('@atoms/co
 export interface BudgetRecoveryState {origins:Record<string,BudgetRecoveryOrigin>;successors:Record<string,{runId:string;operationId:string;codeId:string;requestHash:string}>;keys:Record<string,{requestHash:string;runId:string;operationId:string}>}
 export interface State { budgetRecovery?:BudgetRecoveryState; codes: Code[]; sessions: SessionRecord[]; projects: ProjectRecord[]; runs: RunRecord[];
   versions: VersionRecord[]; messages: MessageRecord[]; events: ProjectEventDto[]; sourceEvents: AgentEventDto[];
-  idempotency: Record<string, IdempotentResult>; coordination: CoordinationState;publicProvisions?:PublicProvisionReceipt[];publicQuotaAuthorizations?:PublicQuotaAuthorization[];publicQuotaResets?:PublicQuotaReset[] }
+  idempotency: Record<string, IdempotentResult>; coordination: CoordinationState;publicProvisions?:PublicProvisionReceipt[];publicQuotaAuthorizations?:PublicQuotaAuthorization[];publicQuotaResets?:PublicQuotaReset[];publicCodeExpiryExtensions?:PublicCodeExpiryExtension[] }
 const empty = (): State => ({ codes: [], sessions: [], projects: [], runs: [], versions: [], messages: [], events: [], sourceEvents: [], idempotency: {}, coordination: emptyCoordination() });
 
 /** Single API process owns this SQLite database. State changes are atomic snapshots. */

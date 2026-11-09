@@ -1,3 +1,4 @@
+import{assertPublicCodeExpiryExtensions,originalPublicCodeExpiry}from'./public-code-expiry.js';
 /** Guarded offline issuance of additional public identities; never rewrites Run usage/history. */
 import{mkdirSync,writeFileSync,readFileSync,lstatSync,existsSync}from'node:fs';
 import{join,dirname,isAbsolute}from'node:path';import{randomBytes,createHash}from'node:crypto';
@@ -9,6 +10,7 @@ const sha=(value:string)=>createHash('sha256').update(value).digest('hex');
 const operation=(value:unknown)=>typeof value==='string'&&/^[A-Za-z0-9_-]{8,64}$/.test(value);
 const stamp=(value:unknown)=>typeof value==='string'&&Number.isFinite(Date.parse(value));
 export function assertProvisionedPublicState(state:State,deployment:PublicDeployment){
+ assertPublicCodeExpiryExtensions(state,deployment);
  const receipts=state.publicProvisions??[];ensure(Array.isArray(receipts),'Public provisioning audit must be an array');
  ensure(state.codes.length<=PUBLIC_MAX_IDENTITIES&&state.codes.length<=(receipts.length?receipts.length+1:1),'Public identities require guarded issuance receipts');
  ensure(new Set(state.codes.map(c=>c.id)).size===state.codes.length&&new Set(state.codes.map(c=>c.hash)).size===state.codes.length,'Public identity IDs and hashes must be unique');
@@ -17,14 +19,14 @@ export function assertProvisionedPublicState(state:State,deployment:PublicDeploy
  for(let i=0;i<receipts.length;i++){
   const r=receipts[i],code=state.codes[i+1];
   ensure(r&&typeof r==='object'&&r.kind==='new-public-identity'&&operation(r.operationId)&&!operations.has(r.operationId),'Public provisioning receipt is invalid or duplicated');operations.add(r.operationId);
-  ensure(r.dataNamespaceId===deployment.dataNamespaceId&&r.codeId===code.id&&r.projectLimit===10&&r.runLimit===3&&r.maxIdentities===10&&r.issuedAt===code.publicIssuedAt&&r.expiresAt===code.expiresAt,'Public provisioning receipt identity/limits mismatch');
+  ensure(r.dataNamespaceId===deployment.dataNamespaceId&&r.codeId===code.id&&r.projectLimit===10&&r.runLimit===3&&r.maxIdentities===10&&r.issuedAt===code.publicIssuedAt&&r.expiresAt===originalPublicCodeExpiry(state,code),'Public provisioning receipt identity/limits mismatch');
   ensure(JSON.stringify(r.previousCodeIds)===JSON.stringify(state.codes.slice(0,i+1).map(c=>c.id)),'Public provisioning audit chain mismatch');
   ensure(Array.isArray(r.projectLimitChanges)&&r.projectLimitChanges.length===i+1&&r.projectLimitChanges.every((c,j)=>c.codeId===r.previousCodeIds[j]&&[1,10].includes(c.from)&&c.to===10),'Public project-limit audit invalid');
   ensure(r.preserved&&Object.values(r.preserved).every(v=>Number.isSafeInteger(v)&&v>=0)&&/^[a-f0-9]{64}$/.test(r.historySha256),'Public history preservation audit invalid');
  }
  for(const code of state.codes){
   Id.parse(code.id);ensure(/^[a-f0-9]{64}$/.test(code.hash)&&typeof code.revoked==='boolean'&&stamp(code.publicIssuedAt)&&stamp(code.expiresAt),'Public identity was not provisioned');
-  const ttl=Date.parse(code.expiresAt)-Date.parse(code.publicIssuedAt!);
+  const ttl=Date.parse(originalPublicCodeExpiry(state,code))-Date.parse(code.publicIssuedAt!);
   ensure(ttl>0&&ttl<=86400000&&code.runLimit===3&&code.projectLimit===(receipts.length?10:1),'Public identity baseline limits/TTL invalid');
   ensure(state.projects.filter(p=>p.codeId===code.id).length<=code.projectLimit,'Public per-identity project cap exceeded');
  }

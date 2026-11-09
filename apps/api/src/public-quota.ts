@@ -1,3 +1,4 @@
+import{assertPublicCodeExpiryExtensions,matchesPublicCodeAuditExpiry}from'./public-code-expiry.js';
 /** Private code-scoped total-limit authorization. Baselines/history remain immutable. */
 import{join}from'node:path';import{DatabaseSync}from'node:sqlite';import{createHash}from'node:crypto';
 import{Id}from'@atoms/contracts';import{Store,type State,type Code,type PublicQuotaAuthorization,type PublicQuotaReset}from'./store.js';
@@ -12,13 +13,13 @@ export function parsePublicQuotaRequest(input:unknown):PublicQuotaRequest{
  ensure(v.kind==='authorize-public-code-total-limit'&&op(v.operationId)&&v.totalLimit===10,'Only explicit existing-code total-limit10 authorization supported');return v;
 }
 export function assertPublicQuotaAuthorizations(state:State,deployment:PublicDeployment){
- assertPublicQuotaResets(state,deployment);
+ assertPublicCodeExpiryExtensions(state,deployment);assertPublicQuotaResets(state,deployment);
  const entries=state.publicQuotaAuthorizations??[];ensure(Array.isArray(entries)&&entries.length<=state.codes.length,'Public quota audit ledger invalid');const codes=new Set<string>(),operations=new Set<string>();
  for(const r of entries){
   ensure(r&&typeof r==='object'&&Object.keys(r).sort().join(',')===['kind','operationId','dataNamespaceId','codeId','baselineRunLimit','previousEffectiveRunLimit','added','effectiveRunLimit','observedUsed','observedReserved','codeExpiresAt','authorizedAt','preserved','historySha256'].sort().join(','),'Unexpected public quota receipt fields');
   const code=state.codes.find(c=>c.id===r.codeId);ensure(code&&code.runLimit===3&&r.kind==='public-code-total-limit'&&op(r.operationId)&&!codes.has(r.codeId)&&!operations.has(r.operationId)&&r.dataNamespaceId===deployment.dataNamespaceId,'Public quota receipt owner/namespace/operation mismatch');codes.add(r.codeId);operations.add(r.operationId);
   ensure(r.baselineRunLimit===3&&r.effectiveRunLimit===10&&Number.isInteger(r.previousEffectiveRunLimit)&&r.previousEffectiveRunLimit>=3&&r.previousEffectiveRunLimit<=6&&r.added===10-r.previousEffectiveRunLimit,'Public quota total/delta out of bounds');
-  ensure(Number.isInteger(r.observedUsed)&&r.observedUsed>=0&&r.observedUsed<=r.previousEffectiveRunLimit&&r.observedReserved===0&&r.codeExpiresAt===code.expiresAt&&Number.isFinite(Date.parse(r.authorizedAt)),'Public quota usage/expiry audit invalid');
+  ensure(Number.isInteger(r.observedUsed)&&r.observedUsed>=0&&r.observedUsed<=r.previousEffectiveRunLimit&&r.observedReserved===0&&matchesPublicCodeAuditExpiry(state,code,r.codeExpiresAt,r.authorizedAt)&&Number.isFinite(Date.parse(r.authorizedAt)),'Public quota usage/expiry audit invalid');
   ensure(r.preserved&&Object.keys(r.preserved).sort().join(',')===['projects','runs','versions','messages','events','started'].sort().join(',')&&Object.values(r.preserved).every(v=>Number.isSafeInteger(v)&&v>=0)&&/^[a-f0-9]{64}$/.test(r.historySha256),'Public quota history audit invalid');
  }
 }
@@ -59,13 +60,13 @@ export function assertPublicQuotaResets(state:State,deployment:PublicDeployment)
   ensure(r&&typeof r==='object'&&Object.keys(r).sort().join(',')===['kind','operationId','dataNamespaceId','codeId','requestedRemaining','previousEffectiveRunLimit','effectiveRunLimit','observedUsed','observedReserved','codeExpiresAt','authorizedAt','preserved','historySha256'].sort().join(','),'Unexpected remaining reset receipt fields');
   const code=state.codes.find(c=>c.id===r.codeId);ensure(code&&r.kind==='public-code-remaining-reset'&&op(r.operationId)&&!operations.has(r.operationId)&&!state.publicQuotaAuthorizations?.some(a=>a.operationId===r.operationId)&&r.dataNamespaceId===deployment.dataNamespaceId,'Remaining reset owner/namespace/operation mismatch');operations.add(r.operationId);
   ensure(Number.isSafeInteger(r.requestedRemaining)&&r.requestedRemaining>=1&&r.requestedRemaining<=100&&Number.isSafeInteger(r.previousEffectiveRunLimit)&&r.previousEffectiveRunLimit>=0&&Number.isSafeInteger(r.observedUsed)&&r.observedUsed>=(used.get(code.id)??0)&&r.observedUsed<=r.previousEffectiveRunLimit&&Number.isSafeInteger(r.effectiveRunLimit)&&r.effectiveRunLimit===r.observedUsed+r.requestedRemaining&&r.observedReserved===0,'Remaining reset total/usage invalid');ensure(!priorTotal.has(code.id)||r.previousEffectiveRunLimit===priorTotal.get(code.id),'Remaining reset audit chain invalid');used.set(code.id,r.observedUsed);priorTotal.set(code.id,r.effectiveRunLimit);
-  ensure(r.codeExpiresAt===code.expiresAt&&Number.isFinite(Date.parse(r.authorizedAt))&&r.preserved&&Object.keys(r.preserved).sort().join(',')===['projects','runs','versions','messages','events','started'].sort().join(',')&&Object.values(r.preserved).every(v=>Number.isSafeInteger(v)&&v>=0)&&/^[a-f0-9]{64}$/.test(r.historySha256),'Remaining reset expiry/history audit invalid');
+  ensure(matchesPublicCodeAuditExpiry(state,code,r.codeExpiresAt,r.authorizedAt)&&Number.isFinite(Date.parse(r.authorizedAt))&&r.preserved&&Object.keys(r.preserved).sort().join(',')===['projects','runs','versions','messages','events','started'].sort().join(',')&&Object.values(r.preserved).every(v=>Number.isSafeInteger(v)&&v>=0)&&/^[a-f0-9]{64}$/.test(r.historySha256),'Remaining reset expiry/history audit invalid');
  }
 }
 export function publicCodeQuotaDetails(dataDir:string,deployment:PublicDeployment,state:State,rawCode:string){
  ensure(/^[A-Za-z0-9_-]{43}$/.test(rawCode),'Private target code input invalid');assertProvisionedPublicState(state,deployment);assertPublicQuotaAuthorizations(state,deployment);
  const code=state.codes.find(c=>c.hash===sha(rawCode));ensure(code,'Protected target code does not match an identity');const u=usage(state,code.id),effective=effectivePublicRunLimit(dataDir,deployment,state,code);
- return{codeId:code.id,active:!code.revoked&&Date.parse(code.expiresAt)>Date.now(),expiresAt:code.expiresAt,projectLimit:code.projectLimit,projectsUsed:state.projects.filter(p=>p.codeId===code.id).length,used:u.runsUsed,reserved:u.runsReserved,effective,remaining:Math.max(0,effective-u.runsUsed-u.runsReserved),receiptIds:{provision:state.publicProvisions?.filter(r=>r.codeId===code.id).map(r=>r.operationId)??[],total:state.publicQuotaAuthorizations?.filter(r=>r.codeId===code.id).map(r=>r.operationId)??[],reset:state.publicQuotaResets?.filter(r=>r.codeId===code.id).map(r=>r.operationId)??[]}};
+ return{codeId:code.id,active:!code.revoked&&Date.parse(code.expiresAt)>Date.now(),expiresAt:code.expiresAt,projectLimit:code.projectLimit,projectsUsed:state.projects.filter(p=>p.codeId===code.id).length,used:u.runsUsed,reserved:u.runsReserved,effective,remaining:Math.max(0,effective-u.runsUsed-u.runsReserved),receiptIds:{expiry:state.publicCodeExpiryExtensions?.filter(r=>r.codeId===code.id).map(r=>r.operationId)??[],provision:state.publicProvisions?.filter(r=>r.codeId===code.id).map(r=>r.operationId)??[],total:state.publicQuotaAuthorizations?.filter(r=>r.codeId===code.id).map(r=>r.operationId)??[],reset:state.publicQuotaResets?.filter(r=>r.codeId===code.id).map(r=>r.operationId)??[]}};
 }
 /** Read-only SQLite snapshot; safe while API owns its writer lock. Never creates a DB. */
 export function inspectPublicCodeQuota(dataDir:string,deployment:PublicDeployment,rawCode:string){

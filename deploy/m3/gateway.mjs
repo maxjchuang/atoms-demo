@@ -2,7 +2,6 @@ import http from 'node:http';
 import {readFile,stat} from 'node:fs/promises';
 import {existsSync} from 'node:fs';
 import {resolve,join,extname} from 'node:path';
-import {isIP} from 'node:net';
 import {pathToFileURL} from 'node:url';
 const hop=new Set(['connection','proxy-connection','keep-alive','transfer-encoding','upgrade','te','trailer','proxy-authorization','authorization','x-forwarded-for','x-forwarded-host','x-forwarded-proto','cf-connecting-ip']);
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json','.svg':'image/svg+xml','.png':'image/png','.ico':'image/x-icon','.woff2':'font/woff2'};
@@ -25,7 +24,8 @@ export function createGateway({role,manifestFile,upstream,webDir,pausedFile}){
     if(pausedFile&&existsSync(pausedFile)&&!['GET','HEAD','DELETE'].includes(req.method)&&path!=='/api/v1/sessions'&&!/^\/api\/v1\/runs\/[^/]+\/(?:cancel|answers)$/.test(path)&&!/^\/api\/sharing\/v1\/projects\/[^/]+\/resolve$/.test(path))return deny(503,'Admission paused for drain');
     if(Number(req.headers['content-length']??0)>65536)return deny(413,'Request too large');
     const headers={};for(const [key,value]of Object.entries(req.headers))if(value!==undefined&&!hop.has(key)&&!(role==='preview'&&key==='cookie'))headers[key]=value;
-    headers.host=expected.host;headers['x-forwarded-host']=expected.host;headers['x-forwarded-proto']='https';const cf=req.headers['cf-connecting-ip'];headers['x-forwarded-for']=typeof cf==='string'&&isIP(cf)?cf:(req.socket.remoteAddress??'127.0.0.1');
+    headers.host=expected.host;headers['x-forwarded-host']=expected.host;headers['x-forwarded-proto']='https';// Connector-independent: caller-controlled forwarding headers cannot establish identity.
+    headers['x-forwarded-for']=req.socket.remoteAddress??'127.0.0.1';
     let size=0;const forwarded=http.request({hostname:target.hostname,port:target.port,method:req.method,path:raw,headers,timeout:15000},response=>{
      const output={};for(const [key,value]of Object.entries(response.headers))if(value!==undefined&&!hop.has(key)&&!(role==='preview'&&key==='set-cookie'))output[key]=value;output['cache-control']='private, no-store';output['x-content-type-options']='nosniff';output['referrer-policy']='no-referrer';res.writeHead(response.statusCode??502,output);response.pipe(res);
     });forwarded.on('timeout',()=>forwarded.destroy());forwarded.on('error',()=>{if(!res.headersSent)deny(502,'Upstream unavailable');else res.destroy();});req.on('data',chunk=>{size+=chunk.length;if(size>65536){forwarded.destroy();if(!res.headersSent)deny(413,'Request too large');}});req.pipe(forwarded);return;

@@ -19,3 +19,10 @@
 ## 限制
 
 压缩视图不包含全部历史报告长描述或失败原因，详细诊断仍需查看宿主原报告；本次没有新增模型读取报告工具。稳定前缀只改善可复用条件，项目状态变化仍会改变快照；不保证缓存命中率。既有累计输入预算仍可能因完整需求或多次读取耗尽，本次不宣称解决所有超预算场景。
+
+## 本次验证结果（2026-11-09）
+
+- 独立集成工作树 `feat/context-projection`：`pnpm --filter @atoms/agent check` 通过。
+- `coordinator-prompt`、`requirements-fresh-session`、`requirements-runtime`、`coordination` 四组测试合计 20/20 通过；使用 mock/fake，不发起付费模型请求。
+- 本机 `localhost:5180` 已更新；Web、API、Agent 健康检查均返回 200，API/Agent ready=true。重启前无活动构建/协调消息，SQLite 已备份；重启后保留 3 个项目、7 次构建、3 个版本。
+- 未重放原用户失败任务；真实模型生成质量与缓存命中改善尚待正常使用验证。

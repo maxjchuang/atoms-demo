@@ -23,7 +23,7 @@ import { registerCoordination } from './coordination.js';
 
 export interface ApiOptions {
   dataDir: string; agentUrl: string; serviceToken: string; previewSecret: string; previewOrigin: string;
-  publicProfile?:PublicProfile;trustedProxy?:string[];allowedOrigins?: string[]; secureCookies?: boolean; demoCode?: string; pollMs?: number; autoSchedule?: boolean;
+  publicProfile?:PublicProfile;trustedProxy?:string[];allowedOrigins?: string[]; secureCookies?: boolean; demoCode?: string; demoProjectLimit?:number; pollMs?: number; autoSchedule?: boolean;
   legacyRequirementsFixture?:boolean;deliveryBudget?:Partial<ReturnType<typeof Budget.parse>>;legacyFixtureMode?:boolean; deliveryToolchainId?:string;deliveryToolchain?:ReturnType<typeof ToolchainDescriptor.parse>;deliveryPlanningMode?:'host_profile'|'model_proposed';deliveryProfileHint?:{id:string;hash:string};
   coordinationMessageLimit?:number;coordinationMessagesPerMinute?:number;
 }
@@ -53,6 +53,8 @@ const safeSecretEqual = (a: string, b: string) => {
 };
 
 export async function createApi(options: ApiOptions) {
+  const demoProjectLimit=options.demoProjectLimit??10;
+  if(!Number.isSafeInteger(demoProjectLimit)||demoProjectLimit<1)throw new Error('demoProjectLimit must be a positive safe integer');
   const deliveryBudget=Budget.parse({maxWallTimeMs:900000,maxWaitingInputMs:86400000,maxRepairRounds:2,maxModelSteps:8,maxInputTokens:65536,maxOutputTokens:24576,maxArtifactBytes:20971520,...options.deliveryBudget});
   const dataDir = resolve(options.dataDir);
   if(options.publicProfile){const profile=options.publicProfile;assertPublicDataNamespace(dataDir,parsePublicDeployment(profile.deployment()));if(options.demoCode||options.legacyFixtureMode||options.legacyRequirementsFixture||options.serviceToken.length<43||options.previewSecret.length<43)throw new Error('Public profile rejects demo seeding, legacy fallback or weak internal secrets');if((profile.sessionTtlSeconds??3600)<1||(profile.sessionTtlSeconds??3600)>3600||(profile.previewTtlSeconds??900)<1||(profile.previewTtlSeconds??900)>900)throw new Error('Public session/capability TTL out of bounds');}
@@ -590,7 +592,12 @@ export async function createApi(options: ApiOptions) {
     const record: Code = { id: id('code'), hash: hash(code), expiresAt: new Date(Date.now() + 604800000).toISOString(), revoked: false, ...limits };
     store.state.codes.push(record); return record.id;
   });
-  if (options.demoCode) seedCode(options.demoCode);
+  if (options.demoCode) {
+    seedCode(options.demoCode,{projectLimit:demoProjectLimit,runLimit:10});
+    // Only the configured local bootstrap identity follows its startup setting.
+    // Generic seedCode stays idempotent, and no usage or other code fields change.
+    store.transaction(()=>{store.state.codes.find(code=>code.hash===hash(options.demoCode!))!.projectLimit=demoProjectLimit;});
+  }
   delivery=registerDelivery({app,store,dataDir,agentUrl:options.agentUrl,serviceToken:options.serviceToken,toolchainId:options.deliveryToolchainId??'toolchain_react_v1',toolchain:options.deliveryToolchain,planningMode:options.deliveryPlanningMode,profileHint:options.deliveryProfileHint,requirementScope:record=>requirements?.acceptedScope(record)??null,id,now,hash,fail,authorize,ownRun,ownProject,ownVersion,updateRun,finish,
     message(record,content,time=now()){const message={id:id('message'),projectId:record.dto.projectId,runId:record.dto.id,role:'assistant' as const,status:'complete' as const,content,createdAt:time};store.state.messages.push(message);emit(message.projectId,message.runId,{type:'message.updated',payload:message},time);}});
   budgetRecovery=registerBudgetRecovery({scopeBusy:projectId=>hasPendingRequirementIntent(store,projectId),scopeCompatible:run=>{const base=store.state.versions.find(v=>v.dto.id===run.dto.baseVersionId);return (!requirements||requirements.scopeCompatible(run))&&run.request?.mandate.projectMemory===[coordination?.projectMemory(run.dto.projectId),base?.dto.summary].filter(Boolean).join('\n').slice(0,20000);},closing:()=>closed,app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,hash,id,now,fail,authorize,ownRun,ownProject,sessionDto,createRun:createRunCore,updateRun});

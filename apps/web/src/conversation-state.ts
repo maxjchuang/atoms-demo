@@ -85,13 +85,17 @@ export function proposalMessageAnchor(proposal: ChangeProposalDto, turns: Coordi
   return messages.some(message => message.id === turn.userMessageId) ? turn.userMessageId : null;
 }
 
-export function conversationSegments(messages: ConversationMessageDto[], protectedMessages: ReadonlySet<string> = new Set()): ({ kind: 'message'; message: ConversationMessageDto } | { kind: 'execution'; messages: ConversationMessageDto[] })[] {
-  const segments: ({ kind: 'message'; message: ConversationMessageDto } | { kind: 'execution'; messages: ConversationMessageDto[] })[] = [];
+export function conversationSegments(messages: ConversationMessageDto[], protectedMessages: ReadonlySet<string> = new Set(), turns: CoordinationTurnDto[] = []): ({ kind: 'message'; message: ConversationMessageDto } | { kind: 'execution' | 'coordination'; messages: ConversationMessageDto[] })[] {
+  const segments: ({ kind: 'message'; message: ConversationMessageDto } | { kind: 'execution' | 'coordination'; messages: ConversationMessageDto[] })[] = [];
   for (const message of messages) {
-    if (protectedMessages.has(message.id) || message.role === 'user' || !['worker', 'system', 'legacy_assistant'].includes(message.actor)) { segments.push({ kind: 'message', message }); continue; }
-    const previous = segments.at(-1);
-    if (message.runId && previous?.kind === 'execution' && previous.messages[0].runId === message.runId) previous.messages.push(message);
-    else segments.push({ kind: 'execution', messages: [message] });
+    const turn = message.coordinationTurnId ? turns.find(value => value.id === message.coordinationTurnId && value.projectId === message.projectId) : undefined;
+    const progress = message.role === 'assistant' && message.actor === 'coordinator' && turn && message.id !== turn.assistantMessageId;
+    if (protectedMessages.has(message.id) || message.role === 'user' || !progress && !['worker', 'system', 'legacy_assistant'].includes(message.actor)) { segments.push({ kind: 'message', message }); continue; }
+    const kind = progress ? 'coordination' : 'execution', previous = segments.at(-1);
+    const sameSource = previous && previous.kind === kind && (kind === 'coordination' ? previous.messages[0].coordinationTurnId === message.coordinationTurnId : !!message.runId && previous.messages[0].runId === message.runId);
+    if (sameSource) previous.messages.push(message);
+    else segments.push({ kind, messages: [message] });
   }
   return segments;
 }
+export function messageExcerpt(content: string, limit = 240) { return content.length > 360 ? content.slice(0, limit) + '…' : content; }

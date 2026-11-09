@@ -80,7 +80,9 @@ export function registerCoordination(host:CoordinationHost) {
   };
   const quota=(codeId:string)=>{
     const turns=state().turns.filter(t=>t.codeId===codeId);
-    return {limit:host.messageLimit??DEFAULTS.messageLimit,reserved:turns.filter(t=>!t.started&&!terminal(t.dto.status)).length,used:turns.filter(t=>t.started).length};
+    const limit=host.messageLimit??store.state.codes.find(code=>code.id===codeId)?.coordinationMessageLimit??DEFAULTS.messageLimit;
+    if(!Number.isSafeInteger(limit)||limit<1)fail(409,'CONFLICT','体验码对话限额配置无效，请联系宿主检查；未创建新任务');
+    return {limit,reserved:turns.filter(t=>!t.started&&!terminal(t.dto.status)).length,used:turns.filter(t=>t.started).length};
   };
   const ownedTurn=(request:FastifyRequest)=>{
     const session=host.authorize(request);const turn=state().turns.find(t=>t.dto.id===String((request.params as {turnId:string}).turnId)&&t.codeId===session.codeId);

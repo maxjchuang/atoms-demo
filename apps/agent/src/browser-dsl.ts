@@ -124,7 +124,7 @@ export async function runBrowserPlan(options: { dist: string; plan: BrowserTestP
         }
       } catch (error) {
         const index = Math.min(ordinal, planned.steps.length - 1); states[index].status = 'failed';
-        const entry=planned.steps[index];if('target'in entry)try{observed={...observed,...await boundedNodes(locator(page,entry.target))};}catch{observed.observationUnavailable=true;}
+        const entry=planned.steps[index];if('target'in entry)try{const selected=locator(page,entry.target);observed={...observed,...await boundedNodes(selected)};if(observed.matchCount===1&&['click','check'].includes(entry.op)){const r=await selected.boundingBox();if(r){const point={x:r.x+r.width/2,y:r.y+r.height/2};observed.actionCenter={...point,hit:await page.evaluate(p=>{const e=document.elementFromPoint(p.x,p.y);return e?{tag:e.tagName.toLowerCase(),role:(e.getAttribute('role')||'').slice(0,64),testId:(e.getAttribute('data-testid')||'').slice(0,96)}:null},point)};}}}catch{observed.observationUnavailable=true;}
         failed = { stepId: entry.id, message: clip(error instanceof Error?error.message:'Browser validation failed',512), expected:boundBrowserObservation({frozenStep:entry}),actual:boundBrowserObservation({...observed,...(lastDrag?{lastDrag}:{})}) };
         log.push(JSON.stringify({ stepId: failed.stepId, status: 'failed', message: failed.message,expected:failed.expected,actual:failed.actual }));
       }

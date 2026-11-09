@@ -6,7 +6,8 @@ const selected=nativeImageInputs(JSON.parse(checked(await docker(['info','--form
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');const context=await mkdtemp(path.join(os.tmpdir(),'atoms-v03-image-'));
 for(const file of ['Dockerfile.job','job-package.json','watchdog.c','watchdog-probe.c','job.ts'])await cp(path.join(root,'docker',file),path.join(context,file));
 await (await import('node:fs/promises')).mkdir(path.join(context,'template'));for(const [file,text]of Object.entries((await trustedTemplate()).files)){await (await import('node:fs/promises')).mkdir(path.dirname(path.join(context,'template',file)),{recursive:true});await writeFile(path.join(context,'template',file),text);}await cp(path.join(root,'../../packages/contracts'),path.join(context,'contracts'),{recursive:true,filter:src=>!src.includes('/node_modules')&&!src.includes('/test')});
-await (await import('node:fs/promises')).mkdir(path.join(context,'verifier')); for(const file of ['browser-dsl.ts','verify.ts','files.ts','source-policy.ts','delivery-files.ts'])await cp(path.join(root,'src',file),path.join(context,'verifier',file));
+const verifierFiles=['browser-dsl.ts','geometry-contract.ts','verify.ts','files.ts','source-policy.ts','delivery-files.ts'];
+await (await import('node:fs/promises')).mkdir(path.join(context,'verifier')); for(const file of verifierFiles)await cp(path.join(root,'src',file),path.join(context,'verifier',file));
 await writeFile(path.join(context,'verifier/package.json'),JSON.stringify({type:'module'}));
 await cp(path.join(root,'docker/job-lock.yaml'),path.join(context,'job-lock.yaml'));
 await writeFile(path.join(context,'build-platform.json'),JSON.stringify(selected));

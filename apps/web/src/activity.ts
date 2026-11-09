@@ -1,3 +1,4 @@
+import { assistantText } from './product-language';
 import type { ProjectEventDto, RunDto } from '@atoms/contracts';
 import { isTerminal, phaseLabels, statusLabels } from './state';
 
@@ -66,8 +67,8 @@ export function summarizeActivity(run: RunDto, events: ProjectEventDto[]) {
   const message = (event: ProjectEventDto, messageId: string, text: string) => {
     if (completedMessages.has(messageId)) return;
     completedMessages.add(messageId);
-    const clean = text.trim();
-    if (clean) add(event, 'message', clean.length <= 100 ? clean : 'Agent 更新了执行说明', clean.length > 100 ? clean.slice(0, 1200) : undefined);
+    const clean = assistantText(text.trim());
+    if (clean) add(event, 'message', clean.length <= 100 ? clean : 'Atoms 更新了进展说明', clean.length > 100 ? clean.slice(0, 1200) : undefined);
   };
   for (const event of events) {
     if (event.runId !== run.id) continue;
@@ -79,7 +80,7 @@ export function summarizeActivity(run: RunDto, events: ProjectEventDto[]) {
       }
       phase(event, body.payload.phase);
     } else if (body.type === 'version.published') {
-      add(event, 'delivery', '版本已发布，可以预览', body.payload.version.summary);
+      add(event, 'delivery', '版本已发布，可以预览', assistantText(body.payload.version.summary));
     } else if (body.type === 'message.updated' && body.payload.role === 'assistant' && body.payload.status === 'complete') {
       message(event, body.payload.id, body.payload.content);
     } else if (body.type === 'activity.recorded') {

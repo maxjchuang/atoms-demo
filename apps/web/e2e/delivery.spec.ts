@@ -33,11 +33,11 @@ test('complete report, safe evidence, actual archive hash download and quality i
   await panel(page).evaluate(element => { element.scrollTop = 0; }); await mkdir('review-artifacts/m2', { recursive: true }); await page.screenshot({ path: 'review-artifacts/m2/complete-mock.png', fullPage: true });
 });
 for (const scenario of ['partial', 'optional-failure', 'manual', 'not-run']) test(`${scenario} publishes automatically with exact visible gaps and required preserved`, async ({ page }) => {
-  await seed(page, scenario); const summary = page.getByTestId('delivery-summary').first(); await expect(summary).toContainText('部分交付'); await expect(summary.locator('.delivery-gaps')).toBeVisible();
-  await expect(summary).toContainText(scenario === 'optional-failure' ? '可选' : '必需'); await expect(summary).toContainText(scenario === 'partial' ? '当前无法验证' : scenario === 'manual' ? '需人工判断' : scenario === 'not-run' ? '未运行' : '失败');
+  await seed(page, scenario); const summary = page.getByTestId('delivery-summary').first(); await expect(summary).toContainText('部分交付'); await expect(summary.locator('.delivery-gaps')).toHaveCount(0); await expect(summary).toContainText('项待确认');
   await expect(page.getByRole('button', { name: /接受部分/ })).toHaveCount(0);
   if (scenario === 'partial') { await page.screenshot({ path: 'review-artifacts/m2/partial-preview-1440-mock.png' }); await page.setViewportSize({ width: 1366, height: 768 }); await expect(summary).toBeInViewport(); await page.screenshot({ path: 'review-artifacts/m2/partial-preview-1366-mock.png' }); await page.setViewportSize({ width: 1440, height: 1000 }); }
   await report(page); await expect(panel(page)).toContainText('此版本已发布');
+  await expect(panel(page)).toContainText(scenario === 'optional-failure' ? '可选' : '必需'); await expect(panel(page)).toContainText(scenario === 'partial' ? '当前无法验证' : scenario === 'manual' ? '需人工判断' : scenario === 'not-run' ? '未运行' : '失败');
   if (scenario === 'partial') await page.screenshot({ path: 'review-artifacts/m2/partial-mock.png', fullPage: true });
 });
 
@@ -131,11 +131,10 @@ for (const scenario of ['projection-mixed', 'projection-auto']) for (const viewp
   await page.setViewportSize(viewport); await seed(page, scenario); const summary = page.getByTestId('delivery-summary').first();
   await expect(summary).toContainText(scenario === 'projection-mixed' ? '部分交付' : '约定验收完成');
   if (scenario === 'projection-mixed') {
-    await expect(summary.locator('.concrete-gaps > li')).toHaveCount(3);
-    await expect(summary.locator('.concrete-gaps > li').first()).toContainText('Required human verification subitem');
-    await expect(summary.locator('.concrete-gaps')).toContainText('Human must review this concrete required subitem.');
+    await expect(summary.locator('.concrete-gaps > li')).toHaveCount(0);
+    await expect(summary).toContainText('3 项待确认');
+    await expect(summary).toContainText('需人工判断');
     expect(await summary.innerText()).not.toMatch(/criterion_leaf|Host-owned aggregate/);
-    await expect(summary).toContainText('已通过的自动子项不受影响');
   }
   await page.screenshot({ path: `review-artifacts/m2/${scenario}-preview-${viewport.width}-mock.png` });
   await report(page); await expect(panel(page).locator('.criterion-row')).toHaveCount(8);

@@ -1,12 +1,16 @@
 import { ArtifactManifest } from '@atoms/contracts';
 import {
-  RouterResult, type StartCoordinationRequestDto, type RouterResultDto,
+  ProjectMemoryUpdate, RouterResult, type StartCoordinationRequestDto, type RouterResultDto,
   type CoordinationExecutionSnapshotDto,
 } from '@atoms/contracts/conversation';
 import { sha256 } from './files.js';
 
 export class CoordinationError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) { super(message); }
+}
+export class CoordinatorStructureError extends CoordinationError {
+ readonly feedback; readonly issues;
+ constructor(path:(string|number)[],code='invalid_structure',aliases:Record<string,string[]>={}) {super(400,'INVALID_REQUEST','协调结果结构校验未通过，字段：'+path.map((p,i)=>typeof p==='number'?`[${p}]`:(i?'.':'')+p).join('')+'；请修正字段或澄清要求，未执行操作。');this.feedback={kind:'coordinator_structure' as const,issues:[{code,path,refs:[]}],rule:'Regenerate the complete result with valid objects and typed lists. Do not drop invalid items, fabricate source quotes or permissions, or change ledger authority. Known reference aliases: '+JSON.stringify(aliases)};this.issues=this.feedback.issues;}
 }
 export const canonicalJson = (value: unknown): string => JSON.stringify(value, (_key, data) =>
   data && typeof data === 'object' && !Array.isArray(data)
@@ -102,7 +106,7 @@ export function buildAliases(request: StartCoordinationRequestDto, excludedTurns
 }
 export type SemanticDecision = Record<string, unknown> & { kind: string };
 const string = (value: unknown, label: string): string => {
-  if (typeof value !== 'string' || !value.trim() || value.length > 12000) throw new CoordinationError(400, 'INVALID_REQUEST', `Invalid coordinator ${label}`);
+  if (typeof value !== 'string' || !value.trim() || value.length > 12000) throw new CoordinatorStructureError([label.replace(/ /g,'_')],'invalid_string');
   return value;
 };
 const records = (value: unknown): Record<string, unknown>[] => {
@@ -114,6 +118,8 @@ const records = (value: unknown): Record<string, unknown>[] => {
 };
 export function settleDecision(request: StartCoordinationRequestDto, raw: SemanticDecision, sources: SourceRead[], excludedTurns: ReadonlySet<string> = new Set()): RouterResultDto {
   const aliases = buildAliases(request, excludedTurns);
+  const known={run:aliases.runs.map(x=>x.alias),version:aliases.versions.map(x=>x.alias),available_action:aliases.actions.map(x=>x.alias),decision:aliases.decisions.map(x=>x.alias)};
+  for(const field of ['references','evidence','memoryUpdates','acceptance','options']as const){const list=raw[field];if(list===undefined)continue;if(!Array.isArray(list)||list.length>20)throw new CoordinatorStructureError([field],'invalid_list',known);const bad=list.findIndex(v=>!v||typeof v!=='object'||Array.isArray(v));if(bad>=0)throw new CoordinatorStructureError([field,bad],'invalid_object',known);for(const [i,v]of list.entries()){if(!v||typeof v!=='object'||Array.isArray(v))throw new CoordinatorStructureError([field,i],'invalid_object',known);const item=v as Record<string,unknown>;for(const key of field==='memoryUpdates'?['kind','message','quote']:field==='evidence'?['message','quote']:field==='acceptance'?['description']:field==='options'?['label']:['kind'])if(typeof item[key]!=='string'||!String(item[key]).trim())throw new CoordinatorStructureError([field,i,key],'invalid_string',known);if(field==='memoryUpdates'&&!ProjectMemoryUpdate.shape.kind.options.includes(item.kind as any))throw new CoordinatorStructureError([field,i,'kind'],'invalid_memory_kind',known);if(field==='references'){const kind=String(item.kind);if(kind==='file'){if(typeof item.path!=='string'||!item.path.trim())throw new CoordinatorStructureError([field,i,'path'],'invalid_string',known);}else{if(!Object.hasOwn(known,kind))throw new CoordinatorStructureError([field,i,'kind'],'invalid_reference_kind',known);if(!(known[kind as keyof typeof known] as string[]).includes(String(item.ref)))throw new CoordinatorStructureError([field,i,'ref'],'unknown_reference_alias',known);}}}}
   const find = <T extends { alias: string }>(list: T[], alias: unknown, label: string) => {
     const item = list.find((entry) => entry.alias === alias);
     if (!item) throw new CoordinationError(400, 'INVALID_REQUEST', `Unknown ${label} reference`);

@@ -32,7 +32,7 @@ export function routerExceptionDiagnostic(turnId: string, stage: string, error: 
             name?: string;
         };
     };
-    const errorClass = ['ZodError', 'CoordinationError', 'StructuredOutputError', 'TypeError', 'SyntaxError', 'Error'].includes(e?.constructor?.name || '') ? e.constructor!.name : 'UnknownError';
+    const errorClass = ['ZodError', 'CoordinatorStructureError', 'CoordinationError', 'StructuredOutputError', 'TypeError', 'SyntaxError', 'Error'].includes(e?.constructor?.name || '') ? e.constructor!.name : 'UnknownError';
     const issues = Array.isArray(e?.issues) ? e.issues.slice(0, 20).map(i => ({ code: ['custom', 'invalid_type', 'invalid_enum_value', 'unrecognized_keys', 'invalid_union', 'invalid_union_discriminator', 'too_small', 'too_big', 'invalid_string'].includes(String(i.code)) ? i.code : 'schema_issue', path: Array.isArray(i.path) ? i.path.slice(0, 12).map(p => typeof p === 'number' && Number.isSafeInteger(p) ? p : typeof p === 'string' && issueFields.has(p) ? p : '<field>') : [] })) : [];
     return { time: new Date().toISOString(), turnId, stage, errorClass, issueCount: Array.isArray(e?.issues) ? e.issues.length : 0, issues };
 }

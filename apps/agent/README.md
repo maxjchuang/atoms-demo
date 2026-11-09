@@ -213,3 +213,5 @@ ATOMS_REAL_REFLECTION=1 node --env-file=.env --import tsx apps/agent/src/smoke-r
 ```
 
 Each call caps effective input8192/output1000/one step and prints a fresh evidence directory, numeric usage, classification and source-before/after hashes. Model conclusions are advisory, not proof that a test or implementation is correct. No automatic replacement task or plan mutation occurs.
+
+Planning recipes still receive at most one correction within the existing Prepare budget. After that correction, only locally attributable automation/observation failures may become explicit `manual` coverage with a reason. Valid criteria/cases remain automated; all original descriptions, required flags and Seed mappings remain authoritative. This can produce partial verification, never a passed claim for untested features. Invalid criterion/source mappings, trust, JSON and engineering checks remain hard gates. The private `automation-manual-fallback.json` records raw/projected hashes and per-criterion diagnostic reasons; original proposals remain preserved.

@@ -113,9 +113,10 @@ export class DshPlanningAdapter implements PlanningAdapter {
       if (context.signal.aborted) throw new Error('Planning aborted');
       const raw = parseModelJson({ text: result.finalResponse, finishReason: result.finishReason }, 'delivery-planning') as Record<string, unknown>;
       const isRecipe = raw !== null && typeof raw === 'object' && 'formatVersion' in raw;
-      let expanded:unknown=raw;
-      try { if(isRecipe) expanded=compilePlanningRecipes(raw); }
+      let fallbackReceipt:import('./planning-recipes.js').RecipeFallbackReceipt|undefined;let expanded:unknown=raw;
+      try { if(isRecipe) expanded=compilePlanningRecipes(raw,context.formatFeedback?{automationFallback:{request:context.request,sources:semanticSources,onReceipt:receipt=>{fallbackReceipt=receipt;}}}:undefined); }
       catch(error) { if(error instanceof ModelPlanSchemaError) await savePlanningProposal(home,context.formatFeedback?1:0,raw,undefined,error.issues); throw error; }
+      if(fallbackReceipt)await writeFile(path.join(home,'automation-manual-fallback.json'),JSON.stringify(fallbackReceipt),{flag:'wx',mode:0o600});
       const preflight=inspectPlanningCandidate(expanded,semanticSources);let compiled:ReturnType<typeof mapModelPlan>|undefined;let compilationIssues:import('./planning-format.js').SafePlanIssue[]=[];try{compiled=mapModelPlan(expanded,context.request);}catch(e){if(!(e instanceof ModelPlanSchemaError))throw e;compilationIssues=e.issues;}const finalReceipt = compiled ? reviewPlanSemantics(compiled.plan, semanticSources) : undefined;
       const finalIssues = finalReceipt?.issues.map(issue => {
         const caseIndex = compiled!.plan.cases.findIndex(test => test.id === issue.caseId);

@@ -1,6 +1,7 @@
+import {reviewPlanSemantics,type SemanticSource} from './planning-semantics.js';
 /** Private model IR. It conveys test intent, never authority or executable model code. */
 import { BrowserStep, DELIVERY_LIMITS, LocatorSpec, canonicalDeliveryJson, type PrepareDeliveryPlanRequestDto } from '@atoms/contracts/delivery';
-import { ModelPlanSchemaError, type SafePlanIssue } from './planning-format.js';
+import { declareDerivedCriteria, mapModelPlan, ModelPlanSchemaError, type SafePlanIssue } from './planning-format.js';
 import { sha256 } from './files.js';
 export const RECIPE_VERSION = 'planning-recipes-v1' as const;
 type Obj = Record<string, unknown>;
@@ -54,7 +55,7 @@ function compileAction(value: unknown, at: (string | number)[]) {
     const candidate = { ...rest, op: action === 'drag' ? 'drag_by' : action, ...('target' in a ? { target: loc(a.target, [...at, 'target']) } : {}), id: 'step_recipe_check', timeoutMs: 5000 };
     const parsed = BrowserStep.safeParse(candidate);
     if (!parsed.success)
-        fail(at, 'Action arguments must obey the unchanged shared DSL.');
+        throw new ModelPlanSchemaError(parsed.error.issues.map(issue=>({code:issue.code,path:[...at,...issue.path],requirement:issue.code==='invalid_enum_value'&&'options'in issue?'Allowed values: '+JSON.stringify(issue.options):'Action '+String(a.action)+' requires valid '+issue.path.join('.')+'; '+(issue.code==='invalid_type'&&'expected'in issue?'expected '+String(issue.expected):issue.code)})));
     const { id, timeoutMs, ...step } = parsed.data;
     return step;
 }
@@ -175,7 +176,10 @@ export function inspectRecipeFields(raw: unknown): SafePlanIssue[] {
     }
     return [...unique.values()].slice(0, 120);
 }
-export function compilePlanningRecipes(raw: unknown) {
+export type RecipeFallbackReceipt={policy:'automation-manual-after-one-correction-v1';rawHash:string;projectedHash:string;entries:{ref:string;reason:string;issues:SafePlanIssue[]}[]};
+export function compilePlanningRecipes(raw: unknown, options?:{automationFallback:{request:PrepareDeliveryPlanRequestDto;sources:SemanticSource[];onReceipt:(receipt:RecipeFallbackReceipt)=>void}}):{criteria:Obj[];cases:Obj[];coverage:Obj[]} {
+    if(options)return compileWithManualFallback(raw,options.automationFallback);
+
     const preliminary = inspectRecipeFields(raw);
     if (preliminary.length)
         throw new ModelPlanSchemaError(preliminary);
@@ -251,6 +255,22 @@ export function compilePlanningRecipes(raw: unknown) {
     if (cases.reduce((n, c) => n + (c.steps as unknown[]).length, 0) > DELIVERY_LIMITS.maxSteps)
         fail(['criteria'], 'Expanded recipes exceed the shared total step budget.');
     return { criteria, cases, coverage };
+}
+function compileWithManualFallback(raw:unknown,policy:{request:PrepareDeliveryPlanRequestDto;sources:SemanticSource[];onReceipt:(r:RecipeFallbackReceipt)=>void}){
+ const root=obj(raw,['formatVersion','criteria'],[]);if(root.formatVersion!==RECIPE_VERSION)fail(['formatVersion'],'Unsupported internal planning recipe version.');
+ const values=list(root.criteria,DELIVERY_LIMITS.maxCriteria,['criteria']);
+ const core=values.map((v,i)=>{const c=obj(v,['ref','description','sourceSeedRefs','verification'],['criteria',i]);return{ref:c.ref,description:c.description,sourceSeedRefs:c.sourceSeedRefs};});
+ // Authority and complete Seed mapping are checked BEFORE any verification fallback.
+ declareDerivedCriteria(core,policy.request);
+ const projected=structuredClone(root);const criteria=projected.criteria as Obj[];const entries:RecipeFallbackReceipt['entries']=[];
+ const manual=(i:number,issues:SafePlanIssue[])=>{const c=criteria[i];if(!c||c.verification&&typeof c.verification==='object'&&(c.verification as Obj).method!=='automated')throw new ModelPlanSchemaError(issues);const reason='自动验收在一次纠正后仍无法可靠建立；功能要求及必需性保持原样，当前待人工验收。具体原因：'+issues.slice(0,4).map(x=>x.path.join('.')+': '+x.requirement).join('; ');c.verification={method:'manual',reason:reason.slice(0,3500)};entries.push({ref:String(c.ref),reason:reason.slice(0,3500),issues});};
+ const issues=inspectRecipeFields(raw);const groups=new Map<number,SafePlanIssue[]>();
+ for(const issue of issues){const i=issue.path[1];if(issue.path[0]!=='criteria'||typeof i!=='number'||issue.path[2]!=='verification'||issue.path[3]!=='recipes'||issue.requirement.includes('Only documented recipe fields')||issue.requirement.includes('no code, URLs'))throw new ModelPlanSchemaError(issues);groups.set(i,[...(groups.get(i)??[]),issue]);}
+ for(const [i,list]of groups)manual(i,list);
+ let expanded=compilePlanningRecipes(projected);const mapped=mapModelPlan(expanded,policy.request);const semantic=reviewPlanSemantics(mapped.plan,policy.sources);
+ const semanticGroups=new Map<number,SafePlanIssue[]>();for(const issue of semantic.issues){const caseIndex=mapped.plan.cases.findIndex(c=>c.id===issue.caseId);const refs=(expanded.cases[caseIndex]?.criterionRefs??[])as string[];if(!refs.length)throw new Error('Semantic fallback lacks criterion binding');for(const ref of refs){const i=criteria.findIndex(c=>c.ref===ref);if(i<0)throw new Error('Semantic fallback lacks criterion source');semanticGroups.set(i,[...(semanticGroups.get(i)??[]),{code:issue.code,path:['cases',caseIndex,'steps',mapped.plan.cases[caseIndex].steps.findIndex(s=>s.id===issue.stepId)],requirement:issue.detail}]);}}
+ for(const [i,list]of semanticGroups)manual(i,list);if(semanticGroups.size)expanded=compilePlanningRecipes(projected);
+ policy.onReceipt({policy:'automation-manual-after-one-correction-v1',rawHash:sha256(canonicalDeliveryJson(raw)),projectedHash:sha256(canonicalDeliveryJson(projected)),entries});return expanded;
 }
 export function recipeSyntaxExample() { const example = { formatVersion: RECIPE_VERSION, criteria: [{ ref: 'r0', description: 'Syntax-only static control subitem; not the authorized product', sourceSeedRefs: ['s0'], verification: { method: 'automated', recipes: [{ kind: 'initial_controls', targets: [{ role: 'button', name: 'Example action' }] }] } }] }; compilePlanningRecipes(example); return example; }
 /** Complete action syntax data, checked by the same compiler used for model input. */

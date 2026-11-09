@@ -509,7 +509,7 @@ export async function createApi(options: ApiOptions) {
         if (cancelling) finish(record, 'cancelled');
         else { updateRun(record, { status: 'running', phase: 'publishing', pendingAttention: null, pendingAnswer: null }); artifactToPublish = event.payload.artifactId; }
       }
-      if (event.type === 'execution.failed') finish(record, cancelling ? 'cancelled' : 'failed', cancelling ? undefined : event.payload.code, event.payload.message);
+      if (event.type === 'execution.failed') finish(record, cancelling ? 'cancelled' : 'failed', cancelling ? undefined : event.payload.code, record.delivery?delivery.failureSummary(record)??event.payload.message:event.payload.message);
       if (event.type === 'execution.cancelled') finish(record, 'cancelled');
       if (event.type === 'execution.interrupted') finish(record, cancelling ? 'cancelled' : 'interrupted', cancelling ? undefined : 'EXECUTION_INTERRUPTED', event.payload.reason);
       record.sourceSeq = source.sourceSeq;

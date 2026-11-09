@@ -224,3 +224,11 @@ pnpm --filter @atoms/web exec node --import tsx scripts/check-sharing-external.m
 - 定向浏览器回归在独立 Mock 端口运行，不触发真实服务或模型。`e2e/usability.spec.ts` 覆盖输入法/键盘、失败+部分交付双摘要、完成数与 1440/1366/390px 布局；截图及几何记录在 `review-artifacts/usability/`。
 
 本次 main 集成复验：全仓类型检查、Web 生产构建、102 项契约测试、67 项前端单测通过；浏览器回归使用独立 Mock 服务，不调用真实模型。
+
+## 源码语法高亮（2026-11-09）
+
+代码页按文件后缀高亮 TSX、TypeScript、JavaScript、JSX、CSS、JSON、HTML/SVG、Markdown、YAML 和 shell；模块及样式仅在查看代码时加载。分词结果通过 React 文本节点展示，不使用原始 HTML 注入，用户源码中的标签与脚本不执行，也不改写字符和空白。
+
+未知类型保留纯文本。超过 100,000 字符的文件显示说明并保留完整原文，避免同步分词和大量节点拖慢界面；切换回普通文件时恢复高亮。代码保持原有只读、键盘滚动和区域内横向滚动。
+
+验证：全仓类型检查、Web 构建、102 项契约测试、76 项 Web 单测及 4 项专项 Mock 浏览器检查通过。专项检查包括真实 token 颜色、文件类型切换、HTML 脚本不执行、未知/长文件逐字保留和 1366/390px 无页面横向溢出。截图位于 `review-artifacts/code-highlighting/`，不作为真实模型或公网部署证据。

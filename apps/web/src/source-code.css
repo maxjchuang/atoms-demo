@@ -1,0 +1,14 @@
+.source-view pre.source-code{background:#fbfbfe;color:#293547;white-space:pre;outline-offset:-3px}
+.source-code code{font:inherit;color:inherit;background:none;white-space:inherit}
+.source-code .token.comment,.source-code .token.prolog,.source-code .token.doctype,.source-code .token.cdata{color:#68758a}
+.source-code .token.punctuation{color:#566579}
+.source-code .token.keyword,.source-code .token.operator{color:#7541a8}
+.source-code .token.string,.source-code .token.char,.source-code .token.attr-value{color:#216844}
+.source-code .token.number,.source-code .token.boolean,.source-code .token.constant{color:#9b4c17}
+.source-code .token.function,.source-code .token.function-variable{color:#2458a5}
+.source-code .token.tag,.source-code .token.property,.source-code .token.symbol{color:#a33453}
+.source-code .token.attr-name,.source-code .token.class-name,.source-code .token.builtin,.source-code .token.regex{color:#86560d}
+.source-code .token.selector,.source-code .token.important{color:#7655a3}
+.source-code .token.bold,.source-code .token.important{font-weight:600}
+.source-code .token.italic{font-style:italic}
+.source-highlight-note{margin:0;padding:8px 16px;border-bottom:1px solid #e8e3ef;background:#faf7ef;color:#806b3f;font-size:12px;line-height:20px;flex-shrink:0}

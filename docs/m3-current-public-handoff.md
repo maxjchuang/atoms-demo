@@ -40,6 +40,8 @@
 
 升级前另观察到 17:08:16 的修改 Run `run_699d6b75fd006ee577b8` 在准备计划阶段 failed/PLANNING_FAILED，未 started、未新增 Version；保留该真实失败，不改写为通过。升级前备份和升级后均为 1 项目 / 2 Run / 1 Version / used1，仍剩 2 次构建。它与双入口访问成功是不同事实。
 
+只读诊断确认该修改失败来自遗漏 `API_INTERNAL_URL`：Agent 默认请求自己容器的 `127.0.0.1:3001`，版本输入 manifest 返回 ECONNREFUSED；正确的 `http://api:3001` 返回 200 且 manifest SHA 匹配，失败用量全部为 0。部署修复 `d63f93a8095aa9ad0c83eaefe335a33be82adb2b` 设置固定内部地址，配置回归 7/7 通过，API/GW 原生重建 context `07628326a55ab0071f94bd3396068925e0e02795117664bcbe10675d25e54963`。排空后正常重启使 Agent 新环境生效，仍为 dsh/docker_linux、原认证 ready 后恢复准入；三隧道身份不变、业务计数不变。主入口重启后的真实浏览器预检再次通过，证据 `primary-final-proof/`。未重试模型、未复活失败 Run；修改需求须用户重新提交。
+
 证据分别在私有 `m3-acceptance/primary-proof/`、`backup-proof/`、`dual-entry-summary.json`。当前服务端 sharing descriptor 仍为 externalVerification=unverified，未借本机预检伪造另一台物理电脑的独立验收回执。
 
 ## 运行条件与管理

@@ -2,6 +2,20 @@ import { RequirementsCoordinationSnapshot, RequirementsInterpretation, validateR
 import type { RouterResultDto } from '@atoms/contracts/conversation';
 import type { SemanticDecision } from './coordination-context.js';
 import { CoordinationError } from './coordination-context.js';
+export class RequirementMappingError extends CoordinationError {
+    readonly feedback:{kind:'requirements_mapping';issues:{code:string;path:(string|number)[];refs:string[]}[];rule:string};
+    constructor(issues:{code:string;path:(string|number)[];refs:string[]}[]){const refs=[...new Set(issues.flatMap(i=>i.refs))];super(400,'INVALID_REQUEST','完整需求/验收映射校验未通过'+(refs.length?'，缺失或无效条目：'+refs.slice(0,10).join('、'):'')+'；请补全真实映射或澄清要求，未创建构建任务。');this.feedback={kind:'requirements_mapping',issues:issues.slice(0,24),rule:'Preserve every authorized ledger entry and exact source. Supply truthful inclusion/acceptance coverage; never fabricate an edge or remove product scope to satisfy validation. If an entry cannot be meaningfully mapped, return clarify with a concrete explanation; typed scope review still requires its existing source/conflict evidence. Regenerate the full result, not a patch.'};}
+}
+function validateRawCoverage(scope:Record<string,unknown>,acceptanceCount:number,request:RequirementsCoordinationRequestDto){
+ const known=new Set(request.requirements.entries.map((_,i)=>'q'+i));if(request.currentCandidate)known.add('q_current');
+ if(!Array.isArray(scope.included)||!Array.isArray(scope.coverage))throw new RequirementMappingError([{code:'mapping_shape',path:['scope'],refs:[]}]);
+ const unknown=scope.included.filter(x=>typeof x!=='string'||!known.has(x));if(unknown.length)throw new RequirementMappingError([{code:'unknown_requirement_ref',path:['scope','included'],refs:[]}]);
+ const covered=new Set<string>(),indices=new Set<number>();const issues:{code:string;path:(string|number)[];refs:string[]}[]=[];
+ for(const [i,v]of scope.coverage.entries()){if(!v||typeof v!=='object'||!Array.isArray(v.requirements)||!Number.isSafeInteger(v.acceptanceIndex)||v.acceptanceIndex<0||v.acceptanceIndex>=acceptanceCount){issues.push({code:'coverage_shape',path:['scope','coverage',i],refs:[]});continue;}indices.add(v.acceptanceIndex);for(const ref of v.requirements){if(typeof ref!=='string'||!known.has(ref))issues.push({code:'unknown_requirement_ref',path:['scope','coverage',i,'requirements'],refs:[]});else covered.add(ref);}}
+ const missing=scope.included.filter(x=>!covered.has(x));if(missing.length)issues.push({code:'included_without_acceptance',path:['scope','coverage'],refs:missing});
+ for(let i=0;i<acceptanceCount;i++)if(!indices.has(i))issues.push({code:'acceptance_without_coverage',path:['scope','coverage',i],refs:[]});
+ if(issues.length)throw new RequirementMappingError(issues);
+}
 /** Trusted purpose is an operation, not a hint inferred from the latest message wording. */
 export function scopeReviewDirective(request: RequirementsCoordinationRequestDto): string {
     if (request.purpose.kind !== 'scope_review') return '';
@@ -25,6 +39,7 @@ export function settleRequirements(request: RequirementsCoordinationRequestDto, 
     const scope = raw.scope as Record<string, unknown> | undefined;
     if (!scope || typeof scope !== 'object' || Object.keys(scope).some(k => !['implementation', 'included', 'exclusions', 'coverage', 'kind'].includes(k)))
         throw new CoordinationError(400, 'INVALID_REQUEST', 'Complete cumulative scope interpretation is required');
+    validateRawCoverage(scope,result.acceptance.length,request);
     const find = (ref: unknown) => { if (ref === 'q_current' && request.currentCandidate)
         return request.currentCandidate.id; const index = typeof ref === 'string' && /^q\d+$/.test(ref) ? Number(ref.slice(1)) : -1; const value = request.requirements.entries[index]; if (!value)
         throw new CoordinationError(400, 'INVALID_REQUEST', 'Unknown requirement reference'); return value.id; };

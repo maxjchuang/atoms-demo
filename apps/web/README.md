@@ -232,3 +232,9 @@ pnpm --filter @atoms/web exec node --import tsx scripts/check-sharing-external.m
 未知类型保留纯文本。超过 100,000 字符的文件显示说明并保留完整原文，避免同步分词和大量节点拖慢界面；切换回普通文件时恢复高亮。代码保持原有只读、键盘滚动和区域内横向滚动。
 
 验证：全仓类型检查、Web 构建、102 项契约测试、76 项 Web 单测及 4 项专项 Mock 浏览器检查通过。专项检查包括真实 token 颜色、文件类型切换、HTML 脚本不执行、未知/长文件逐字保留和 1366/390px 无页面横向溢出。截图位于 `review-artifacts/code-highlighting/`，不作为真实模型或公网部署证据。
+
+## Budget recovery：显式换额续作
+
+共享G0后新增独立预算诊断/恢复client及失败卡，精确区分Token/步数/时长等中止、已观察下界/下一请求预留/最终结算未知。只有API eligible的真实Token中止才提供固定1次构建额度的后续段；已知错误或未审计划显示“验收计划需要重新审阅”，不允许付额沿错计划继续。旧failed/报告保留，新的后续Run从可信保存源码继续，预占与started结算分开。
+
+丢回应/刷新通过GET核对同一旧Run的successor，同请求稳定idem、不盲建新任务；scope/quote/head冲突须重读并再次明确点击。所有计划、source/stop证明和额度准入是API/Agent权威，UI不猜或绕过。独立Mock/6单元/预算14浏览器及原协调反馈回归的精确分段记录见 [Budget Web 第一批状态](BUDGET-RECOVERY-STATUS.md)。requirements完整汇总/语义新协议为下一批，当前未消费，不把最后追加当完整累计目标。

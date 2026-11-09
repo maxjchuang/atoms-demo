@@ -2,7 +2,7 @@ export type RepairReflectionValue = { category: 'implementation'|'test'|'environ
 export const RepairReflection = { parse(raw: unknown): RepairReflectionValue {
  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid read-only reflection');
  const r=raw as Record<string,unknown>; const text=(v:unknown,n:number)=>typeof v==='string'&&v.trim().length>0&&v.length<=n;
- if(Object.keys(r).sort().join(',')!=='category,question,reasons,suggestion'||!['implementation','test','environment','unclear'].includes(String(r.category))||!Array.isArray(r.reasons)||r.reasons.length<1||r.reasons.length>4||!r.reasons.every(v=>text(v,600))||!text(r.suggestion,900)||!text(r.question,500))throw new Error('Invalid read-only reflection');
+ if(Object.keys(r).sort().join(',')!=='category,question,reasons,suggestion'||!['implementation','test','environment','unclear'].includes(String(r.category))||!Array.isArray(r.reasons)||r.reasons.length<1||r.reasons.length>4||!r.reasons.every(v=>text(v,600))||!text(r.suggestion,900)||(typeof r.question!=='string'||r.question.length>500||(r.category==='unclear'&&!r.question.trim())))throw new Error('Invalid read-only reflection');
  return structuredClone(r) as RepairReflectionValue;
 } };
 export function reflectionDescription(review: RepairReflectionValue | null, reason: string) {

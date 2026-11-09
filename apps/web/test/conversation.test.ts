@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CoordinationWorkspace } from '@atoms/contracts/conversation';
 import { workspace, consultEvents, consultTurn, consultUser, consultReply, legacyConversationMessage } from '@atoms/contracts/conversation-fixtures';
-import { hydrateConversation, mergeMessages, mergeOlderMessages, applyConversationEvents, applyExecutionEvents, actorLabels, proposalMessageAnchor, conversationSegments } from '../src/conversation-state.js';
+import { hydrateConversation, mergeMessages, mergeOlderMessages, applyConversationEvents, applyExecutionEvents, actorLabels, proposalMessageAnchor, conversationSegments, messageExcerpt } from '../src/conversation-state.js';
 
 test('message IDs/revisions upsert and historySeq controls order, not event timestamp', () => {
   const first = { ...consultReply, revision: 2, content: 'newest' };
@@ -70,7 +70,9 @@ test('proposal card stays anchored to original reply regardless updated revision
 test('only consecutive same-run execution records group, never absorb later logs across a user or coordinator message', () => {
  const log=(id:string,seq:number,runId='run_a')=>({...consultReply,id,historySeq:seq,runId,actor:'worker' as const});
  const messages=[log('a',1),{...log('b',2),actor:'system' as const}, {...consultUser,historySeq:3},log('c',4),{...consultReply,historySeq:5},log('d',6),log('e',7,'run_b')];
- const grouped=conversationSegments(messages);assert.deepEqual(grouped.map(segment=>segment.kind==='execution'?segment.messages.map(message=>message.id):segment.message.id),[['a','b'],consultUser.id,['c'],consultReply.id,['d'],['e']]);
- assert.deepEqual(grouped.flatMap(segment=>segment.kind==='execution'?segment.messages:[segment.message]),messages);
+ const grouped=conversationSegments(messages);assert.deepEqual(grouped.map(segment=>segment.kind!=='message'?segment.messages.map(message=>message.id):segment.message.id),[['a','b'],consultUser.id,['c'],consultReply.id,['d'],['e']]);
+ assert.deepEqual(grouped.flatMap(segment=>segment.kind!=='message'?segment.messages:[segment.message]),messages);
  assert.equal(conversationSegments([log('protected',1)],new Set(['protected']))[0].kind,'message');
 });
+
+test('known-turn progress groups by turn without hiding final replies, protected cards or later separated progress; long text remains intact',()=>{const progress=(id:string)=>({...consultReply,id,coordinationTurnId:consultTurn.id});const final={...consultReply,id:'final_reply'};const turn={...consultTurn,assistantMessageId:final.id};const messages=[progress('p1'),progress('p2'),consultUser,progress('p3'),final];const segments=conversationSegments(messages,new Set([final.id]),[turn]);assert.deepEqual(segments.map(s=>s.kind==='message'?s.message.id:[s.kind,s.messages.map(m=>m.id)]),[['coordination',['p1','p2']],consultUser.id,['coordination',['p3']],final.id]);assert.equal(conversationSegments([progress('p1')],new Set(),[])[0].kind,'message');const text='原scope与JSON'.repeat(100);assert.ok(messageExcerpt(text).length<300);assert.equal(messages.at(-1)!.content,final.content);assert.equal(messageExcerpt('短答复'),'短答复');});

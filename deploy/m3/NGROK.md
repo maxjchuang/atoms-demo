@@ -44,7 +44,7 @@ ATOMS_ALLOW_M3_PUBLIC_TUNNELS=1 node scripts/m3-tunnels.mjs start \
 
 此处 `--transport docker` 只决定 Cloudflare 预览连接器的 transport；ngrok 工作台仍使用明确的原生客户端。原有不带 `--workbench-provider ngrok` 的双 Cloudflare 模式保留。M3 图像身份、实际隔离认证、API 停止/工作排空、部署 epoch 与签名轮换门禁仍全部执行。目标 Docker context 不满足这些条件时命令应拒绝；上述命令不是已完成的 Intel M3 部署证据。
 
-域名配置变化使用既有 `renew` 流程；`status` 输出每个角色的提供方和身份状态；`stop` 只清理受日志绑定的连接器。固定 ngrok 域名不会避免 Cloudflare 预览续期，也不能保证旧签名仍有效。
+原二连接器部署的域名配置变化使用既有 `renew` 流程；`status` 输出每个角色的提供方和身份状态；`stop` 只清理受日志绑定的连接器。三连接器主/备模式的限制见下文。固定 ngrok 域名不会避免 Cloudflare 预览续期，也不能保证旧签名仍有效。
 
 ngrok 免费域名可能显示浏览器提示页，首次需访客点击继续；请求/带宽额度及具体方案限制以账户控制台为准。本项目有轮询，请评估月度请求消耗。
 
@@ -57,3 +57,22 @@ node --test scripts/m3-ngrok.test.mjs scripts/m3-current-readonly.test.mjs \
 ```
 
 测试使用合成令牌和本机进程，不访问 ngrok、Cloudflare 或模型。网关不再把来访者 `CF-Connecting-IP` 当作可信身份，统一使用连接器对端 IP，因此经同一连接器的访客会共享 API 的 IP 限流桶；真实访客 IP 透传需后续建立提供方与来源绑定，不能简单信任任意头。
+
+## Cloudflare 主入口与固定 ngrok 备用入口同时可用
+
+私有部署 metadata 可声明 `workbenchAliases`（最多四个明确的 HTTPS origin）；`workbenchOrigin` 仍是唯一 canonical 主入口。没有配置 aliases 的旧部署保持原行为。主入口、所有备用入口和预览必须使用不同 hostname（只换端口不能隔离 host-only Cookie）；拒绝 null、重复、通配、路径、凭据及预览别名。
+
+网关和 API 分别将实际 Host 与明确允许的 origin 匹配。所有写请求的 Origin 必须与**该 Host 对应的 origin**完全相同；Cloudflare 与 ngrok 之间的跨源写请求仍拒绝。两个站点分别输入同一个体验码登录，Cookie 均为 Secure/HttpOnly/SameSite=Lax/host-only；同码访问相同项目和额度，API 不创建第二份身份配额。分享 `build_entry` 永远返回 canonical Cloudflare 主入口。
+
+API/Gateway 镜像需要重建；Agent/Broker/Job 镜像与已通过的十一项隔离 tuple 不因新增入口而改变。由操作者备份并排空、停止 API，应用新网关镜像后，可显式执行：
+
+```sh
+ATOMS_ALLOW_M3_PUBLIC_TUNNELS=1 node scripts/m3-tunnels.mjs add-cloudflare-primary \
+  --project atoms-m3-public --transport docker
+```
+
+该命令只适用于现有受日志绑定且运行中的 ngrok 工作台 + Cloudflare 预览二连接器拓扑。它重新检查现有 metadata、实际认证、镜像、网关和连接器身份，仅新增一个 Cloudflare 工作台连接器；保留现有 ngrok 与预览进程/容器及预览域名。新 canonical 域名和原 ngrok alias 通过既有离线 origins 操作提交，更新部署 epoch、撤销旧外部验收 receipt；预览域名未变就不轮换预览签名密钥，也不重置数据库、历史或额度。操作结束仍需由操作者启动 API 并做两个入口的外部浏览器验收。
+
+若 origins 写入后响应丢失，工具读取实际 metadata 核对：确认未提交时才清理新增连接器并恢复原日志；确认已提交或无法确定时，保留新旧连接器和日志并设置 `recoveryNeeded`，阻止盲目重试、停止或清理。操作者核对实际 metadata 与进程身份后方可显式恢复日志；不要删除未知连接器。
+
+升级后的三连接器拓扑**拒绝通用 `start`/`renew`，包括 stop 之后**，因为通用流程只会重建两个连接器并丢失 ngrok 备用入口。`stop` 会显式停止三个受日志绑定的连接器；如需重新部署或更换主入口，应先审查并制定保留 backup/preview 的单独流程。本次命令不自动实现未来的主入口续期或修改 ngrok 的账户域名。

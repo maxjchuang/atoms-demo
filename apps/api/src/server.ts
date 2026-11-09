@@ -14,7 +14,7 @@ import { Store, type Code, type IdempotentResult, type RunRecord, type SessionRe
 import {registerDelivery} from './delivery.js';
 import type {ToolchainDescriptor} from '@atoms/contracts/delivery';
 import {registerSharing} from './sharing.js';
-import {assertPublicDataNamespace,publicIsolationReady,parsePublicDeployment,type PublicProfile} from './public-profile.js';
+import {assertPublicDataNamespace,publicIsolationReady,parsePublicDeployment,publicWorkbenchOrigin,type PublicProfile} from './public-profile.js';
 import {acquirePublicWriter} from './public-admin.js';
 import { registerCoordination } from './coordination.js';
 
@@ -177,7 +177,7 @@ export async function createApi(options: ApiOptions) {
       if (!safeSecretEqual(String(request.headers.authorization ?? ''), `Bearer ${options.serviceToken}`)) fail(401, 'UNAUTHENTICATED', 'Internal authentication required');
       return;
     }
-    if(options.publicProfile&&request.url.startsWith('/api/')){const deployment=options.publicProfile.deployment();if(!deployment.workbenchOrigin)fail(503,'RUNTIME_UNAVAILABLE','公开入口正在初始化');if(request.headers.host!==new URL(deployment.workbenchOrigin!).host)fail(403,'FORBIDDEN','Unexpected public host');if(['POST','DELETE','PUT','PATCH'].includes(request.method)&&request.headers.origin!==deployment.workbenchOrigin)fail(403,'FORBIDDEN','Exact workbench Origin required');if(!deployment.ready&&request.method!=='GET'&&request.method!=='HEAD'&&request.method!=='DELETE')fail(503,'RUNTIME_UNAVAILABLE','公开部署正在维护');}
+    if(options.publicProfile&&request.url.startsWith('/api/')){const deployment=options.publicProfile.deployment();if(!deployment.workbenchOrigin)fail(503,'RUNTIME_UNAVAILABLE','公开入口正在初始化');const selected=publicWorkbenchOrigin(deployment,request.headers.host);if(!selected)fail(403,'FORBIDDEN','Unexpected public host');if(['POST','DELETE','PUT','PATCH'].includes(request.method)&&request.headers.origin!==selected)fail(403,'FORBIDDEN','Exact workbench Origin required');if(!deployment.ready&&request.method!=='GET'&&request.method!=='HEAD'&&request.method!=='DELETE')fail(503,'RUNTIME_UNAVAILABLE','公开部署正在维护');}
     if (request.method === 'POST' && request.url === '/api/v1/sessions') {
       const current = loginAttempts.get(request.ip);
       if (!current || Date.now() - current.since >= 60000) loginAttempts.set(request.ip, { since: Date.now(), count: 1 });

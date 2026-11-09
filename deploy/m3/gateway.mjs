@@ -15,7 +15,15 @@ export function createGateway({role,manifestFile,upstream,webDir,pausedFile}){
    if(/[\\\u0000-\u001f\u007f]/.test(path)||path.includes('//')||path.split('/').some(p=>p==='.'||p==='..')||/%2f|%5c/i.test(raw.split('?')[0]))return deny(400,'Invalid path');
    if(path==='/health'&&['GET','HEAD'].includes(req.method)){res.writeHead(200,{'Content-Type':'application/json'});return res.end('{"ready":true}');}
    const deployment=JSON.parse(await readFile(manifestFile,'utf8')),origin=role==='workbench'?deployment.workbenchOrigin:deployment.previewOrigin;
-   if(!origin)return deny(503,'Deployment bootstrap pending');const expected=new URL(origin);if(expected.protocol!=='https:'||expected.origin!==origin||req.headers.host!==expected.host)return deny(403,'Unexpected gateway host');
+   if(!origin)return deny(503,'Deployment bootstrap pending');
+   const aliases=deployment.workbenchAliases===undefined?[]:deployment.workbenchAliases;
+   if(!Array.isArray(aliases)||aliases.length>4||new Set(aliases).size!==aliases.length||aliases.some(alias=>alias===deployment.workbenchOrigin||alias===deployment.previewOrigin))return deny(503,'Invalid workbench aliases');
+   const hostnames=[deployment.workbenchOrigin,...aliases,deployment.previewOrigin].filter(value=>value!==null).map(value=>new URL(value).hostname);
+   if(new Set(hostnames).size!==hostnames.length)return deny(503,'Workbench and preview hostnames must be distinct');
+   const configured=role==='workbench'?[origin,...aliases]:[origin];
+   const origins=configured.map(value=>{const u=new URL(value);if(u.protocol!=='https:'||u.origin!==value||u.username||u.password||u.hostname.includes('*'))throw Error('Invalid configured origin');return u;});
+   const expected=origins.find(u=>u.host===req.headers.host);if(!expected)return deny(403,'Unexpected gateway host');
+   if(role==='workbench'&&['POST','DELETE','PUT','PATCH'].includes(req.method)&&req.headers.origin!==expected.origin)return deny(403,'Exact same-host workbench Origin required');
    const api=role==='workbench'&&/^\/api\/(?:v1|v2|delivery\/v1|sharing\/v1)(?:\/|$)/.test(path);
    if(path==='/internal'||path.startsWith('/internal/')||path.startsWith('/metrics')||path.startsWith('/broker')||path.startsWith('/docker')||path.startsWith('/.'))return deny(404,'Not found');
    if(role==='preview'&&(!['GET','HEAD'].includes(req.method)||!/^\/p\/[^/]+\/.+/.test(path)))return deny(404,'Not found');

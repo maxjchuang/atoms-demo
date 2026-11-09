@@ -23,3 +23,13 @@ test('allauto canonical parent results reuse the same cases; host/seed-only and 
   assert.equal(deliveryGroups(complete).derived, false); assert.equal(deliveryGroups(complete).criteria.length, complete.bundle!.spec.criteria.length);
   assert.equal(deliveryGroups(planningFailure).parents.length, 0);
 });
+
+test('invalid planning item stays a required concrete manual gap while valid automatic cases remain passed', async () => {
+  const { manualDemotionProjection: report } = await import('../src/mock/projection-reports');
+  const groups = deliveryGroups(report); assert.equal(report.quality, 'partial'); assert.equal(report.attempts[0].caseResults.length, 3);
+  assert.ok(report.attempts[0].caseResults.every(item => item.status === 'passed')); assert.equal(groups.gaps.length, 1);
+  assert.equal(groups.gaps[0].required, true); assert.equal(groups.gaps[0].coverage, 'manual'); assert.equal(groups.gaps[0].result, 'not_run');
+  assert.match(groups.gaps[0].reason, /跨窗口排序/); assert.match(groups.gaps[0].reason, /未执行不代表通过/);
+  assert.equal(groups.criteria.filter(item => criterionResult(report, item.id) === 'passed').length, 3);
+  assert.equal(criterionResult(report, groups.gaps[0].criterionId), 'not_run'); assert.ok(report.bundle!.spec.originalGoal);
+});

@@ -9,6 +9,7 @@
     "./delivery": "./src/delivery.ts", "./delivery-fixtures": "./src/delivery-fixtures.ts",
     "./delivery-projection": "./src/delivery-projection.ts", "./delivery-projection-fixtures": "./src/delivery-projection-fixtures.ts",
     "./sharing": "./src/sharing.ts", "./sharing-fixtures": "./src/sharing-fixtures.ts",
+    "./requirements": "./src/requirements.ts", "./requirements-fixtures": "./src/requirements-fixtures.ts",
     "./budget-recovery": "./src/budget-recovery.ts", "./budget-recovery-fixtures": "./src/budget-recovery-fixtures.ts",
     "./isolation": "./src/isolation.ts", "./isolation-fixtures": "./src/isolation-fixtures.ts"
   },

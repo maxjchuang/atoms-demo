@@ -33,3 +33,9 @@ pnpm exec tsx --test --test-concurrency=1 test/*.test.ts
 ```
 
 API/Agent HTTP integration, publication/quota/restart fences and any subsequent real-model verification remain supervisor acceptance gates. No automatic same-credit replan/supersession or new browser permissions were introduced.
+
+## Safe diagnostic dependency graph
+
+Known controlled-source TypeScript code errors no longer hide independently obtainable diagnostics. After trusted configuration/source checks, TS runs first. An infrastructure/global/unknown TS failure stops. A recognized source-code error remains a failed required gate, while the verifier deletes only the current candidate's old dist and attempts a fresh Vite build. Only a successful current-source build permits smoke; only usable smoke permits frozen behavior diagnosis. Failed build, cancellation, trust failure or unknown infrastructure never runs old dist. Compiler and observed case failures enter one bounded private feedback envelope (`repair-feedback-v2`); required type/build/smoke gates must all pass on the repaired current source before export/publication. Already observed required diagnostic behavior failures cannot be washed into not_run. This is a dependency graph, not blind parallel execution or a relaxed delivery policy.
+
+Generic regressions in `verification-dag.test.ts` actually produce simultaneous TS+browser faults, repair once using both observations, and pass a new independent ZIP; type failure with passing behavior still blocks. Stale-dist/build failure, infrastructure and cancellation paths stop honestly. `geometry-boundary.test.ts` and `frozen-geometry-boundary.test.ts` cover setup versus one measured effect, unchanged legacy-plan refusal with zero Worker calls, and existing drag/press/reload compatibility. These are synthetic host-tool proofs; the failed real task remains failed and is not certified by them.

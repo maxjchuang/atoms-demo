@@ -1,3 +1,4 @@
+import {assertGeometryBoundary} from './geometry-contract.js';
 import {namespaceCleanRound,cleanBehaviorFailures} from './clean-round.js';
 import { preserveAttemptSource } from './source-snapshot.js';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
@@ -60,8 +61,9 @@ export class DeliveryExecutionRuntime {
       cumulativeUsage: { activeMs: binding.planningUsage.activeMs + activeMs, modelSteps: binding.planningUsage.modelSteps + usage.modelSteps,
         inputTokens: item.usageKnown === false ? null : binding.planningUsage.inputTokens + usage.inputTokens, outputTokens: item.usageKnown === false ? null : binding.planningUsage.outputTokens + usage.outputTokens } });
   }
+  validateFrozen(item:RecordValue){assertGeometryObservationBudget(item.delivery!.bundle.plan);assertGeometryBoundary(item.delivery!.bundle.plan);}
   async initialize(item: RecordValue, workspace: string) {
-    assertGeometryObservationBudget(item.delivery!.bundle.plan);
+    this.validateFrozen(item);
     const template = await trustedTemplate(); if (!sameToolchain(item.delivery!.bundle.binding.toolchain, this.runtime.options.verification?await this.runtime.options.verification.toolchain():template.descriptor)) throw new Error('Trusted template fingerprint mismatch');
     for (const [name, content] of Object.entries(template.files)) if (!name.startsWith('src/') && name !== 'index.html') await putFile(workspace, name, content);
     return { summary: item.delivery!.bundle.seed.goal, tasks: ['实现已冻结的目标与浏览器交互约定', '真实检查并保留失败与修复证据', '精确导出并在独立目录复验'],
@@ -111,12 +113,12 @@ export class DeliveryExecutionRuntime {
     }
     await beforeVerification?.();
     const sourceBeforeHash = inventoryHash(await fingerprints(workspace, 'source/')); await preserveAttemptSource({workspace,root:path.join(this.root(item.request.executionId),'source-snapshots'),attemptIndex:index,maxAttempts:item.request.budget.maxRepairRounds+1,maxBytes:item.request.budget.maxArtifactBytes,expectedHash:sourceBeforeHash}); const startedAt = now();
-    let interruption: unknown; let browserInterrupted = false; let checked: { checks: ReturnType<typeof Check.parse>[]; errors: string | null;failureCategory?:'code_check'|'infrastructure' } = { checks: [], errors: null };
+    let interruption: unknown; let browserInterrupted = false; let checked: { checks: ReturnType<typeof Check.parse>[]; errors: string | null;failureCategory?:'code_check'|'infrastructure';diagnosticDistReady?:boolean;diagnostics?:import('./verify.js').ApplicationDiagnostic[] } = { checks: [], errors: null };
     let cases = notRunCases(bundle, 'A required application build/smoke gate failed.');
     try {
       try{await assertControlledSource(workspace);}catch(error){throw Object.assign(error instanceof Error?error:new Error('Source policy failed'),{controllerCategory:'trust'});}
-      checked = this.runtime.options.verification?await this.runtime.options.verification.verifyApplication(workspace,dir,context.signal,()=>{},context.report,{executionId:item.request.executionId,bindingHash:bundle.binding.hash,expectedToolchainId:bundle.binding.toolchain.id,attemptId,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()}):await verifyApplication(workspace, dir, context.signal, () => {}, context.report);
-      if (!checked.errors) { context.report(`开始执行冻结浏览器验收：${bundle.plan.cases.length} 个用例。`);
+      checked = this.runtime.options.verification?await this.runtime.options.verification.verifyApplication(workspace,dir,context.signal,()=>{},context.report,{executionId:item.request.executionId,bindingHash:bundle.binding.hash,expectedToolchainId:bundle.binding.toolchain.id,attemptId,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()}):await verifyApplication(workspace, dir, context.signal, () => {}, context.report,{trustedConfigFiles:(await trustedTemplate()).files});
+      if (!checked.errors||checked.failureCategory==='code_check'&&checked.diagnosticDistReady===true) { if(checked.errors)context.report('类型门禁仍失败，当前全新构建仅继续收集同源码行为诊断，不能交付。');context.report(`开始执行冻结浏览器验收：${bundle.plan.cases.length} 个用例。`);
       const browser = this.runtime.options.verification?await this.runtime.options.verification.runBrowserPlan({dist:path.join(workspace,'dist'),plan:bundle.plan,evidenceDir:dir,signal:context.signal},{executionId:item.request.executionId,bindingHash:bundle.binding.hash,expectedToolchainId:bundle.binding.toolchain.id,attemptId,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()}):await runBrowserPlan({ dist: path.join(workspace, 'dist'), plan: bundle.plan, evidenceDir: dir, signal: context.signal }); cases = browser.caseResults;
       if (browser.interrupted) { browserInterrupted = true; interruption = new DeliveryError(422, 'BUDGET_EXCEEDED', 'Frozen browser verification was interrupted by its bounded budget.'); } }
     } catch (error) { interruption = error; checked.errors = 'Verification was interrupted before all gates completed.'; await putFile(dir, 'interruption.log', checked.errors); }
@@ -126,7 +128,7 @@ export class DeliveryExecutionRuntime {
     const gates = Object.fromEntries(['typecheck', 'build', 'smoke'].map((kind) => { const actual = checked.checks.find((entry) => entry.kind === kind);
       return [kind, actual ? { status: actual.status, evidenceIds: [evidence.find((entry) => entry.path.endsWith(`/${kind}.log`))!.id], reason: actual.status === 'passed' ? null : actual.summary }
         : { status: 'not_run', evidenceIds: [], reason: 'A prior required gate failed.' }]; }));
-    const distHash = checked.errors ? null : inventoryHash(await fingerprints(path.join(workspace, 'dist'), 'dist/'));
+    const distHash = checked.checks.find(c=>c.kind==='build')?.status!=='passed' ? null : inventoryHash(await fingerprints(path.join(workspace, 'dist'), 'dist/'));
     const failedCases = cases.filter((entry) => entry.status === 'failed'); const incomplete = cases.some((entry) => entry.status === 'not_run');
     const attempt = VerificationAttempt.parse(seal({ id: attemptId, hash: '0'.repeat(64), runId: item.request.runId, executionId: item.request.executionId,
       bindingHash: bundle.binding.hash, specHash: bundle.spec.hash, planHash: bundle.plan.hash, repairRound: index,
@@ -140,7 +142,7 @@ export class DeliveryExecutionRuntime {
     const checks = checked.checks.map((check) => ({ ...check, evidenceIds: evidence.filter((entry) => check.kind === 'smoke' ? /\/(smoke.log|screenshot.png)$/.test(entry.path) : entry.path.endsWith(`/${check.kind}.log`)).map((entry) => entry.id) }));
     const requiredCases = new Set(bundle.plan.coverage.filter((coverage) => bundle.spec.criteria.find((criterion) => criterion.id === coverage.criterionId)?.required).flatMap((coverage) => coverage.caseIds));
     const requiredFailed = cases.filter((entry) => requiredCases.has(entry.caseId) && entry.status === 'failed');
-    const errors = sourceBeforeHash !== sourceAfterHash ? 'Verification changed source; immutable attempt is invalid.' : checked.errors || (requiredFailed.length ? JSON.stringify(requiredFailed.map((entry) => ({ caseId: entry.caseId, failure: entry.failure }))) : null);
+    const errors = sourceBeforeHash !== sourceAfterHash ? 'Verification changed source; immutable attempt is invalid.' : checked.errors||requiredFailed.length ? JSON.stringify({formatVersion:'repair-feedback-v2',stage:'workspace_verify',checks:checked.diagnostics??(checked.errors?[{kind:'unknown',category:checked.failureCategory??'infrastructure',message:checked.errors}]:[]),failures:requiredFailed.map(entry=>({stage:'workspace_verify',caseId:entry.caseId,failure:entry.failure}))}) : null;
     checks.push({ id: 'check_behavior', kind: 'behavior', name: '冻结行为结果（准入见交付报告）', required: false, status: cases.some((entry) => entry.status === 'failed') ? 'failed' : !cases.length || cases.some((entry) => entry.status === 'not_run') ? 'not_run' : 'passed',
       summary: `${cases.filter((entry) => entry.status === 'passed').length}/${cases.length} 自动用例通过；未覆盖声明保留在交付报告。`, evidenceIds: cases.flatMap((entry) => entry.evidenceIds) });
     context.report(`冻结浏览器验收结束：${cases.filter((entry) => entry.status === 'passed').length}/${cases.length} 用例通过；证据已绑定当前源码。`);

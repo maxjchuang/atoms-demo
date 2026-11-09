@@ -1,6 +1,6 @@
 import { recordRouterFailure } from './coordinator-diagnostics.js';
 import { RequirementsCoordinationRequest, type RequirementsCoordinationRequestDto, type RequirementsCoordinationSnapshotDto } from '@atoms/contracts/requirements';
-import { settleRequirements } from './requirements-context.js';
+import { settleRequirements,RequirementMappingError } from './requirements-context.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -148,7 +148,7 @@ export class CoordinatorRuntime {
   }
   private async process(record: CoordinatorRecord) {
     const request = record.request; const controller = new AbortController(); this.controllers.set(request.turnId, controller);
-    const timer = setTimeout(() => controller.abort('budget'), request.budget.maxWallTimeMs);
+    const startedAt=Date.now();const timer = setTimeout(() => controller.abort('budget'), request.budget.maxWallTimeMs);
     const report = (content: string) => {
       if (controller.signal.aborted || terminal.has(record.snapshot.status)) return;
       this.emit(record, { type: 'coordination.progress', payload: { messageId: `message_${randomUUID().replaceAll('-', '')}`, content } });
@@ -204,7 +204,19 @@ export class CoordinatorRuntime {
             if (!(error instanceof StructuredOutputError) || retries >= request.budget.maxStructuredRetries) throw error;
             retries++; report(`协调模型结构化结果不完整，开始有界重试（${retries}/${request.budget.maxStructuredRetries}）。`); continue;
           }
-          if (decision.kind !== 'read_sources') break;
+          if (decision.kind !== 'read_sources') {
+            if(record.requirements&&(this.adapter.mode==='dsh'||decision.scope))try{
+              failureStage='settle_decision';const preview=settleDecision(request,decision,context.sources,this.excludedTurns);const facts=record.requirements.coordination.deliveryFacts;
+              failureStage='settle_requirements';settleRequirements(record.requirements,decision,preview,{protocolVersion:'0.1.0',coordination:{...record.snapshot,result:preview,status:'completed',revision:record.snapshot.revision+1,updatedAt:now()},deliveryFactsUsed:{projectId:facts.projectId,revision:facts.revision,asOf:facts.asOf,hash:facts.hash}});
+            }catch(error){
+              if(!(error instanceof RequirementMappingError))throw error;
+              const used=record.snapshot.usage,known=used.inputTokens!==null&&used.outputTokens!==null;
+              const room=known&&used.modelSteps<request.budget.maxModelSteps&&used.inputTokens!<request.budget.maxInputTokens&&used.outputTokens!<request.budget.maxOutputTokens&&Date.now()-startedAt<request.budget.maxWallTimeMs;
+              if(retries>=Math.min(1,request.budget.maxStructuredRetries)||!room)throw error;
+              retries++;context.validationFeedback=error.feedback;report('完整需求映射缺项：'+error.feedback.issues.flatMap(i=>i.refs).join('、')+'；在同一总预算内纠正一次，不自动补映射或删除要求。');continue;
+            }
+            break;
+          }
           if (sourcePass) throw new CoordinationError(400, 'BUDGET_EXCEEDED', 'Only one bounded source-read pass is allowed');
           sourcePass = true;
           if (!Array.isArray(decision.paths) || decision.paths.some((item) => typeof item !== 'string')) throw new CoordinationError(400, 'INVALID_REQUEST', 'Invalid source selection');

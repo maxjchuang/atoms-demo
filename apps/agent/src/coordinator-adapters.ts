@@ -18,7 +18,7 @@ import { ProjectSessionFence } from './project-session-fence.js';
 import { NativeUsageAccounting, UsageAccountingError, nativeEventIdentity, type NativeTokenUsage } from './native-usage.js';
 
 export interface CoordinationModelContext {
-  requirements?:RequirementsCoordinationRequestDto; deliveryFacts?: DeliveryFactsDto; request: StartCoordinationRequestDto; signal: AbortSignal;
+  validationFeedback?:{kind:'requirements_mapping';issues:{code:string;path:(string|number)[];refs:string[]}[];rule:string};requirements?:RequirementsCoordinationRequestDto; deliveryFacts?: DeliveryFactsDto; request: StartCoordinationRequestDto; signal: AbortSignal;
   projectHome: string; stableWorkspace: string; sources: SourceRead[];
   report: (text: string) => void;
   meter: (usage: { modelSteps?: number; inputTokens?: number; outputTokens?: number }) => void;

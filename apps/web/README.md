@@ -218,4 +218,14 @@ pnpm --filter @atoms/web exec node --import tsx scripts/check-sharing-external.m
 
 共享G0后新增独立预算诊断/恢复client及失败卡，精确区分Token/步数/时长等中止、已观察下界/下一请求预留/最终结算未知。只有API eligible的真实Token中止才提供固定1次构建额度的后续段；已知错误或未审计划显示“验收计划需要重新审阅”，不允许付额沿错计划继续。旧failed/报告保留，新的后续Run从可信保存源码继续，预占与started结算分开。
 
-丢回应/刷新通过GET核对同一旧Run的successor，同请求稳定idem、不盲建新任务；scope/quote/head冲突须重读并再次明确点击。所有计划、source/stop证明和额度准入是API/Agent权威，UI不猜或绕过。独立Mock/6单元/预算14浏览器及原协调反馈回归的精确分段记录见 [Budget Web 第一批状态](BUDGET-RECOVERY-STATUS.md)。requirements完整汇总/语义新协议为下一批，当前未消费，不把最后追加当完整累计目标。
+丢回应/刷新通过GET核对同一旧Run的successor，同请求稳定idem、不盲建新任务；scope/quote/head冲突须重读并再次明确点击。所有计划、source/stop证明和额度准入是API/Agent权威，UI不猜或绕过。独立验证与主管已接受门禁见 [Budget Web 第一批状态](BUDGET-RECOVERY-STATUS.md)；完整需求为后续独立消费者批次，见下节，不以预算额度修正原语义。
+
+## Requirements：权威累计目标与明确审阅
+
+`@atoms/contracts/requirements` G0后实现独立读取/typed接受和只读review消费者。完整goal、累计验收、原始source和requested/suggested/confirmed状态、明确排除/替换、实际空/已发布源码基线默认可审；旧bound提案不能只接受最后追加。canonical snapshot/summary指纹由浏览器独立计算，hash和结构映射不等于语义或生成质量证明。
+
+“整理完整需求（填写草稿，需发送）”只填可编辑Composer，显著标注只整理已有scope、不新增/撤销产品要求；实际发送走独立typed review且固定ask/plan，零Run。草稿编辑文字含首尾空白/换行原样发送，退出可恢复普通消息路径，普通ask明确修改仍由API保存requested而不是前端猜合并/确认。预算计划需重审时引导该填稿路径，不付额沿错计划继续。
+
+typed review绑定当前项目与视图代次；发送后离开，已授权后台整理继续，但迟到回执不会拉回旧项目、清掉新草稿或改新请求busy。不匹配的整理context直接拒绝，不偷偷降为普通消息；同项目编辑出的新草稿/purpose同样保留。
+
+独立命令：`pnpm --filter @atoms/web exec tsx --test test/requirements.test.ts`、`ATOMS_MOCK_PORT=5193 pnpm --filter @atoms/web exec playwright test e2e/requirements.spec.ts`。完整122 contracts/78 Web unit、36聚合浏览器与最后定向复验、StrictMode首次失败和修正、截图及真实API/Agent待联调边界见 [Requirements Web 第二批记录](REQUIREMENTS-STATUS.md)。没有真实模型调用、用户旧3D执行/改写或公网启动。

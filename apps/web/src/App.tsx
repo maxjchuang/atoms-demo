@@ -8,6 +8,8 @@ import type { z } from 'zod';
 import { api, HttpError } from './api';
 import { DeliveryBadge, DeliveryReport, VersionDiff } from './Delivery';
 import { ShareDialog, type SharingSubject } from './Sharing';
+import { requirementsApi, reviewFor, reviewSubjectMatches } from './requirements-api';
+import type { ProjectRequirementSnapshotDto } from '@atoms/contracts/requirements';
 import type { DeliverySubject } from './delivery-api';
 import { applyEvents, isTerminal, phaseLabels, statusLabels } from './state';
 import { mergeActivityEvents, readActivityHistory, type ApiSync } from './activity';
@@ -38,6 +40,11 @@ export function App() {
   const workspaceRef = useRef<WorkspaceSnapshotDto | null>(null);
   const [versions, setVersions] = useState<VersionDto[]>([]);
   const [draft, setDraft] = useState('');
+  const draftRef = useRef(draft); draftRef.current = draft;
+  const [requirementsReview, setRequirementsReview] = useState<ProjectRequirementSnapshotDto | null>(null);
+  const requirementsReviewRef = useRef(requirementsReview); requirementsReviewRef.current = requirementsReview;
+  const reviewOperation = useRef<{ projectId: string; generation: number } | null>(null);
+  useEffect(() => { setRequirementsReview(null); if (reviewOperation.current && reviewOperation.current.projectId !== projectId) { reviewOperation.current = null; setBusy(false); } }, [projectId]);
   const [mode, setMode] = useState<'build' | 'plan'>('build');
   const [messageMode, setMessageMode] = useState<z.infer<typeof CoordinationMode>>('auto');
   const [coordination, setCoordination] = useState<ConversationView | null>(null);
@@ -123,7 +130,7 @@ export function App() {
     commitConversation(hydrateConversation(current, next));
   }, [commitConversation]);
 
-  const refreshProjects = useCallback(async () => { const result = await api.projects(); setProjects(result.items); }, []);
+  const refreshProjects = useCallback(async (canCommit: () => boolean = () => true) => { const result = await api.projects(); if (canCommit()) setProjects(result.items); }, []);
   useEffect(() => {
     let alive = true;
     void coordinationApi.session().then(async (value) => {
@@ -244,17 +251,19 @@ export function App() {
 
   const home = (next: View = 'home') => { location.hash = ''; setProjectId(null); setView(next); setDraft(''); setError(''); };
   const open = (id: string) => { location.hash = `/projects/${id}`; setProjectId(id); };
-  async function loadCurrent(id = projectId) {
-    if (!id) return;
+  async function loadCurrent(id = projectId, canCommit: () => boolean = () => true) {
+    if (!id || !canCommit()) return;
     const context = generation.current;
     const [next, history, decisions, account] = await Promise.all([
       coordinationApi.workspace(id), api.versions(id), coordinationApi.memory(id), coordinationApi.session(),
     ]);
-    if (currentProjectId() !== id) return;
+    if (currentProjectId() !== id || !canCommit()) return;
     acceptSnapshot(next); setVersions(history.items); setMemory(decisions); setSession(account.session); setMessageQuota(account.coordinationQuota);
     setSync({ status: 'ok', lastSuccessAt: Date.now() });
-    await hydrateActivity(id, next.executionEventCursor, context); await ensureLinks(id, context); await refreshProjects();
-    dispatchEvent(new Event('atoms-coordination-wake'));
+    await hydrateActivity(id, next.executionEventCursor, context); if (!canCommit()) return;
+    await ensureLinks(id, context); if (!canCommit()) return;
+    await refreshProjects(canCommit);
+    if (canCommit()) dispatchEvent(new Event('atoms-coordination-wake'));
   }
   async function loadOlder() {
     if (olderRequest.current) return olderRequest.current;
@@ -284,7 +293,25 @@ export function App() {
   }
   async function submitPrompt(prompt: string, requestedMode = mode) {
     if (!prompt.trim() || busy) return;
-    if (!session) { setPending({ prompt, mode: requestedMode, messageMode, projectId }); setLogin(true); return; }
+    if (requirementsReview) {
+      const review = requirementsReview;
+      if (!reviewSubjectMatches(review.projectId, projectId, currentProjectId())) { setError('整理上下文与当前项目不一致，请重新选择“整理完整需求”；未发送普通消息。'); return; }
+      if (!session) { setLogin(true); return; }
+      const operation = { projectId: review.projectId, generation: generation.current }; reviewOperation.current = operation;
+      const ownsView = () => reviewOperation.current === operation && generation.current === operation.generation && currentProjectId() === operation.projectId;
+      setBusy(true); setError('');
+      try {
+        await requirementsApi.review(operation.projectId, reviewFor(review, prompt));
+        if (!ownsView()) return;
+        // A newer editable draft or a changed review purpose belongs to the user,
+        // not to this acknowledgement. Never clear or downgrade that intention.
+        if (draftRef.current === prompt && requirementsReviewRef.current === review) { setDraft(''); setRequirementsReview(null); }
+        if (ownsView()) await loadCurrent(operation.projectId, ownsView);
+      } catch (failure) { if (ownsView()) { setError(errorMessage(failure)); if (failure instanceof HttpError && failure.status === 401) { setSession(null); setLogin(true); } } }
+      finally { if (reviewOperation.current === operation) { reviewOperation.current = null; setBusy(false); } }
+      return;
+    }
+    if (!session) { if (!requirementsReview) setPending({ prompt, mode: requestedMode, messageMode, projectId }); setLogin(true); return; }
     setBusy(true); setError('');
     try {
       let id = projectId;
@@ -361,7 +388,7 @@ export function App() {
         {loading && !workspace ? <div className="loading-state"><LoaderCircle className="spin"/>正在恢复你的项目…</div> : workspace && <>
           <section className="conversation-panel"><div className="conversation-heading"><div><span className="agent-avatar-small">M</span><div><strong>项目负责人</strong><small>规划 · 协调 · 交付</small></div></div><span className="online-dot">任务协调</span></div>
             {coordination && <ProjectConversation view={coordination} memory={memory} versions={versions} events={activityEvents} sync={sync} historyLoading={historyLoading} historyError={historyError} busy={busy}
-              onSubmit={submitMessage} onLoadOlder={loadOlder} onRevealMessage={revealMessage} onBudgetQuota={quota => setSession(previous => previous ? { ...previous, quota } : null)}
+              onSubmit={submitMessage} onLoadOlder={loadOlder} onRevealMessage={revealMessage} onPrepareRequirementsReview={snapshot => { if (snapshot.projectId !== projectId || currentProjectId() !== snapshot.projectId) return; setRequirementsReview(snapshot); setDraft('请基于目前记录的全部原始目标、累计要求与约束，整理一个完整方案和验收要求供我审阅；保留每条来源，先不执行。'); setMessageMode('ask'); setMode('plan'); requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.workspace-composer textarea')?.focus()); }} onBudgetQuota={quota => setSession(previous => previous ? { ...previous, quota } : null)}
               onCancelTurn={turn => action(async () => { const receipt = await coordinationApi.cancel(turn.id, turn.revision); if (receipt.disposition === 'already_dispatched') setError('该消息已创建构建任务。停止回答不会停止构建，请使用“停止构建”。'); })}
               onRetryTurn={turn => action(() => coordinationApi.retry(turn.id, turn.revision))}
               onCancelRun={run => action(() => api.cancel(run.id))}
@@ -371,7 +398,7 @@ export function App() {
               onDismissProposal={proposal => action(() => coordinationApi.dismissProposal(proposal.id, proposal.revision))}
               onDismissClarification={question => action(() => coordinationApi.dismissClarification(question.id, question.revision))}
               onCorrectMemory={text => { setMessageMode('ask'); setDraft(`更正项目约定“${text}”，仅更新项目记忆，不修改应用。新的约定是：`); document.querySelector<HTMLTextAreaElement>('.workspace-composer textarea')?.focus(); }}/>}
-            <div className="workspace-composer"><Composer compact value={draft} setValue={setDraft} mode={mode} setMode={setMode} messageMode={messageMode} setMessageMode={setMessageMode} busy={busy} onSubmit={() => void submitPrompt(draft)} placeholder={messageMode === 'ask' ? '询问现有项目；只问项目模式不会直接修改代码…' : '询问项目，或明确说明想修改的地方…'}/><small>{messageMode === 'ask' ? '只读问答；采用修改建议需要另行接受提案。' : '明确修改会独立排队，开始时使用最新成功版本。'}</small></div>
+            <div className="workspace-composer">{requirementsReview && <div className="requirements-draft-note">整理完整需求（需发送）· 仅整理与审阅，不新增/撤销产品要求，不自动构建。<button onClick={() => setRequirementsReview(null)}>返回普通消息（保留草稿）</button></div>}<Composer compact reviewMode={!!requirementsReview} value={draft} setValue={setDraft} mode={mode} setMode={setMode} messageMode={messageMode} setMessageMode={setMessageMode} busy={busy} onSubmit={() => void submitPrompt(draft)} placeholder={messageMode === 'ask' ? '询问现有项目；只问项目模式不会直接修改代码…' : '询问项目，或明确说明想修改的地方…'}/><small>{messageMode === 'ask' ? '只读问答；采用修改建议需要另行接受提案。' : '明确修改会独立排队，开始时使用最新成功版本。'}</small></div>
           </section>
           <section className="output-panel"><div className="output-toolbar"><div className="output-tabs">{([{ id: 'preview', label: '预览', Icon: Monitor }, { id: 'code', label: '代码', Icon: Code2 }, { id: 'versions', label: '版本', Icon: Layers3 }, { id: 'diff', label: '改动', Icon: FileCode2 }, { id: 'delivery', label: '交付报告', Icon: ShieldCheck }] as const).map(({ id, label, Icon }) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><Icon size={15}/>{label}</button>)}</div><div className="output-actions"><button className="share-launch" aria-label="分享当前应用" onClick={() => setSharingSubject({ projectId: workspace.project.id, versionId: currentVersion?.id ?? null, label: currentVersion ? previewVersionLabel : '尚无已发布版本' })}><Share2 size={15}/>分享</button>{tab === 'preview' && <><button title="桌面预览" aria-label="桌面预览" className={!mobilePreview ? 'active' : ''} onClick={() => setMobilePreview(false)}><Monitor size={16}/></button><button title="手机预览" aria-label="手机预览" className={mobilePreview ? 'active' : ''} onClick={() => setMobilePreview(true)}><Smartphone size={16}/></button></>}{currentVersion && <><a title="下载源码" aria-label="下载源码" href={`/api/v1/versions/${currentVersion.id}/source.zip`}><ArrowDownToLine size={16}/></a><a title="在新窗口打开" aria-label="在新窗口打开预览" href={currentVersion.previewUrl} target="_blank" rel="noreferrer"><ExternalLink size={15}/></a></>}</div></div>
             {tab === 'preview' && versionSubject && <DeliveryBadge key={versionSubject.id} subject={versionSubject} context={`当前预览 ${previewVersionLabel}${workspace.latestRun?.status !== 'succeeded' ? ' · 上次交付' : ''}`} onOpen={() => openDelivery(versionSubject)}/>}
@@ -392,14 +419,14 @@ export function App() {
   </div>;
 }
 
-function Composer({ value, setValue, mode, setMode, messageMode, setMessageMode, busy, onSubmit, placeholder, compact = false }: {
+function Composer({ value, setValue, mode, setMode, messageMode, setMessageMode, busy, onSubmit, placeholder, compact = false, reviewMode = false }: {
   value: string; setValue: (value: string) => void; mode: 'build' | 'plan'; setMode: (value: 'build' | 'plan') => void;
   messageMode: z.infer<typeof CoordinationMode>; setMessageMode: (value: z.infer<typeof CoordinationMode>) => void;
-  busy: boolean; onSubmit: () => void; placeholder: string; compact?: boolean;
+  busy: boolean; onSubmit: () => void; placeholder: string; compact?: boolean; reviewMode?: boolean;
 }) {
   return <form className={`composer ${compact ? 'compact' : ''}`} onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
     <textarea aria-label={compact ? '项目消息' : '应用需求'} maxLength={12000} value={value} onChange={(event) => setValue(event.target.value)} placeholder={placeholder} onKeyDown={(event) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); onSubmit(); } }}/>
-    <div className="composer-bottom"><span className="composer-caption"><Sparkles size={14}/>{compact ? '与你的 Agent 继续创作' : '从一句话开始，剩下的交给 Agent'}</span><div><label className="mode-select intent-select"><select aria-label="消息模式" value={messageMode} onChange={event => setMessageMode(event.target.value as z.infer<typeof CoordinationMode>)}><option value="auto">自动识别</option><option value="ask">只问项目</option><option value="build">修改应用</option></select><ChevronDown size={12}/></label><label className="mode-select"><span>{mode === 'build' ? <WandSparkles size={14}/> : <Layers3 size={14}/>}</span><select aria-label="构建策略" value={mode} onChange={(event) => setMode(event.target.value as 'build' | 'plan')}><option value="build">直接构建</option><option value="plan">先做计划</option></select><ChevronDown size={12}/></label><button className="send-button" type="submit" disabled={busy || !value.trim()} aria-label="发送消息">{busy ? <LoaderCircle className="spin" size={17}/> : <ArrowUp size={20}/>}</button></div></div>
+    <div className="composer-bottom"><span className="composer-caption"><Sparkles size={14}/>{compact ? '与你的 Agent 继续创作' : '从一句话开始，剩下的交给 Agent'}</span><div><label className="mode-select intent-select"><select aria-label="消息模式" disabled={reviewMode} value={messageMode} onChange={event => setMessageMode(event.target.value as z.infer<typeof CoordinationMode>)}><option value="auto">自动识别</option><option value="ask">只问项目</option><option value="build">修改应用</option></select><ChevronDown size={12}/></label><label className="mode-select"><span>{mode === 'build' ? <WandSparkles size={14}/> : <Layers3 size={14}/>}</span><select aria-label="构建策略" disabled={reviewMode} value={mode} onChange={(event) => setMode(event.target.value as 'build' | 'plan')}><option value="build">直接构建</option><option value="plan">先做计划</option></select><ChevronDown size={12}/></label><button className="send-button" type="submit" disabled={busy || !value.trim()} aria-label={reviewMode ? '发送整理草稿' : '发送消息'}>{busy ? <LoaderCircle className="spin" size={17}/> : <ArrowUp size={20}/>}</button></div></div>
   </form>;
 }
 

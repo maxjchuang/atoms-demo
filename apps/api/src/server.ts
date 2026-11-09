@@ -310,6 +310,7 @@ export async function createApi(options: ApiOptions) {
     return mutation(request, reply, session.id, () => {
       const attention = record.dto.pendingAttention;
       if (!attention || attention.id !== body.attentionId || attention.revision !== body.expectedRevision || record.dto.pendingAnswer) fail(409, 'STALE_REVISION', '问题已更新或回答已提交');
+      if(attention!.resolution==='replan')fail(409,'CONFLICT','此问题需要停止原任务并带回答重新规划，不能继续原冻结方案；请使用带回答重新规划入口');
       if ((body.answer.kind === 'approve_plan' && attention!.kind !== 'plan_confirmation') ||
         (body.answer.kind === 'select' && !attention!.options.some((option) => option.id === (body.answer as { optionId: string }).optionId)) ||
         (body.answer.kind === 'text' && !attention!.allowText)) fail(400, 'INVALID_REQUEST', '回答与问题不匹配');

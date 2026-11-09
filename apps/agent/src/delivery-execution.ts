@@ -1,3 +1,4 @@
+import {namespaceCleanRound,cleanBehaviorFailures} from './clean-round.js';
 import { preserveAttemptSource } from './source-snapshot.js';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -15,16 +16,16 @@ import { putFile, safeFile, sha256, listFiles } from './files.js';
 import type { TrustedSourceFault } from './controlled-repair.js';
 import { assertControlledSource } from './source-policy.js';
 import { verifyApplication } from './verify.js';
-import { runBrowserPlan } from './browser-dsl.js';
+import { runBrowserPlan,assertGeometryObservationBudget } from './browser-dsl.js';
 import { evidenceFiles, exportAndVerify, notRunCases, remapEvidenceIds } from './delivery-export.js';
 
 type Evidence = ReturnType<typeof VerificationEvidenceBinding.parse>;
 type Attempt = ReturnType<typeof VerificationAttempt.parse>;
-type State = { phase?: 'clean_export'; attempts: Attempt[]; evidence: Evidence[]; report: DeliveryReportDto | null };
+type State = {cleanRounds?:{index:number;sourceHash:string;archiveHash:string;cleanHash:string;receiptEvidenceId:string}[]; phase?: 'clean_export'; attempts: Attempt[]; evidence: Evidence[]; report: DeliveryReportDto | null };
 const now = () => new Date().toISOString();
 export class DeliveryExecutionRuntime {
   private states = new Map<string, State>();
-  constructor(readonly runtime: AgentRuntime, readonly planning: DeliveryPlanningRuntime, private options: { allowControlledRegression?: boolean; trustedSourceFault?: TrustedSourceFault }) {}
+  constructor(readonly runtime: AgentRuntime, readonly planning: DeliveryPlanningRuntime, private options: {trustedCleanBrowserLocale?:string; allowControlledRegression?: boolean; trustedSourceFault?: TrustedSourceFault }) {}
   private root(id: string) { return path.join(this.runtime.options.dataDir, 'executions', id); }
   private state(id: string) {
     let state = this.states.get(id); if (!state) {
@@ -60,6 +61,7 @@ export class DeliveryExecutionRuntime {
         inputTokens: item.usageKnown === false ? null : binding.planningUsage.inputTokens + usage.inputTokens, outputTokens: item.usageKnown === false ? null : binding.planningUsage.outputTokens + usage.outputTokens } });
   }
   async initialize(item: RecordValue, workspace: string) {
+    assertGeometryObservationBudget(item.delivery!.bundle.plan);
     const template = await trustedTemplate(); if (!sameToolchain(item.delivery!.bundle.binding.toolchain, this.runtime.options.verification?await this.runtime.options.verification.toolchain():template.descriptor)) throw new Error('Trusted template fingerprint mismatch');
     for (const [name, content] of Object.entries(template.files)) if (!name.startsWith('src/') && name !== 'index.html') await putFile(workspace, name, content);
     return { summary: item.delivery!.bundle.seed.goal, tasks: ['实现已冻结的目标与浏览器交互约定', '真实检查并保留失败与修复证据', '精确导出并在独立目录复验'],
@@ -70,7 +72,7 @@ export class DeliveryExecutionRuntime {
     context.deliveryProfileId = this.planning.get(item.delivery!.bundle.binding.preparationId).request.profileHint?.id
       || (item.delivery!.bundle.seed.goal.includes('[calculator]') && this.runtime.adapter.mode === 'fake' ? 'profile_calculator_v1' : 'profile_notes_v1');
   }
-  async verify(item: RecordValue, workspace: string, context: AdapterContext) {
+  async verify(item: RecordValue, workspace: string, context: AdapterContext,beforeVerification?:()=>Promise<void>) {
     const bundle = item.delivery!.bundle, state = this.state(item.request.executionId); const index = state.attempts.length;
     const attemptId = `attempt_${index}_${item.request.executionId}`; const relative = `attempt_${index}`;
     const dir = path.join(this.root(item.request.executionId), 'evidence', relative); await mkdir(dir, { recursive: true });
@@ -107,11 +109,12 @@ export class DeliveryExecutionRuntime {
       sourceProvenance = { kind: 'controlled_regression', baseSourceHash: base, patchHash: sha256(patch), injectedSourceHash: inventoryHash(await fingerprints(workspace, 'source/')), patchEvidenceId: `evidence_attempt_${index}_controlled-patch` };
       context.report('宿主测试显式注入了持久化受控回归；此失败不代表模型自然缺陷。');
     }
+    await beforeVerification?.();
     const sourceBeforeHash = inventoryHash(await fingerprints(workspace, 'source/')); await preserveAttemptSource({workspace,root:path.join(this.root(item.request.executionId),'source-snapshots'),attemptIndex:index,maxAttempts:item.request.budget.maxRepairRounds+1,maxBytes:item.request.budget.maxArtifactBytes,expectedHash:sourceBeforeHash}); const startedAt = now();
-    let interruption: unknown; let browserInterrupted = false; let checked: { checks: ReturnType<typeof Check.parse>[]; errors: string | null } = { checks: [], errors: null };
+    let interruption: unknown; let browserInterrupted = false; let checked: { checks: ReturnType<typeof Check.parse>[]; errors: string | null;failureCategory?:'code_check'|'infrastructure' } = { checks: [], errors: null };
     let cases = notRunCases(bundle, 'A required application build/smoke gate failed.');
     try {
-      await assertControlledSource(workspace);
+      try{await assertControlledSource(workspace);}catch(error){throw Object.assign(error instanceof Error?error:new Error('Source policy failed'),{controllerCategory:'trust'});}
       checked = this.runtime.options.verification?await this.runtime.options.verification.verifyApplication(workspace,dir,context.signal,()=>{},context.report,{executionId:item.request.executionId,bindingHash:bundle.binding.hash,expectedToolchainId:bundle.binding.toolchain.id,attemptId,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()}):await verifyApplication(workspace, dir, context.signal, () => {}, context.report);
       if (!checked.errors) { context.report(`开始执行冻结浏览器验收：${bundle.plan.cases.length} 个用例。`);
       const browser = this.runtime.options.verification?await this.runtime.options.verification.runBrowserPlan({dist:path.join(workspace,'dist'),plan:bundle.plan,evidenceDir:dir,signal:context.signal},{executionId:item.request.executionId,bindingHash:bundle.binding.hash,expectedToolchainId:bundle.binding.toolchain.id,attemptId,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()}):await runBrowserPlan({ dist: path.join(workspace, 'dist'), plan: bundle.plan, evidenceDir: dir, signal: context.signal }); cases = browser.caseResults;
@@ -133,7 +136,7 @@ export class DeliveryExecutionRuntime {
       checks: gates, caseResults: cases, startedAt, finishedAt: now() }));
     if(index>0){const previous=JSON.parse(await readFile(path.join(this.root(item.request.executionId),'source-snapshots','attempt_'+(index-1),'manifest.json'),'utf8'));const current=JSON.parse(await readFile(path.join(this.root(item.request.executionId),'source-snapshots','attempt_'+index,'manifest.json'),'utf8'));const old=new Map<string,string>(previous.files.map((f:{path:string;sha256:string})=>[f.path,f.sha256]));const next=new Map<string,string>(current.files.map((f:{path:string;sha256:string})=>[f.path,f.sha256]));const changes=[...new Set([...old.keys(),...next.keys()])].filter(p=>old.get(p)!==next.get(p)).sort().map(p=>({path:p,operation:!old.has(p)?'added':!next.has(p)?'deleted':'modified'}));context.sourceDeltaSummary={fromSourceHash:previous.sourceSnapshotHash,toSourceHash:current.sourceSnapshotHash,files:changes.slice(0,20),omittedFiles:Math.max(0,changes.length-20)};}
     state.attempts.push(attempt);context.passedCaseIds=cases.filter(c=>c.status==='passed').map(c=>c.caseId); this.persist(item.request.executionId); this.makeReport(item, 'running', null);
-    if (interruption) throw interruption;
+    if (interruption){if(context.signal.aborted||interruption instanceof (await import('./isolation/client.js')).StopUnconfirmedError)throw interruption;throw Object.assign(interruption instanceof Error?interruption:new Error('Verification failed'),{controllerCategory:(interruption as {controllerCategory?:string}).controllerCategory??(browserInterrupted?'budget':'infrastructure')});}
     const checks = checked.checks.map((check) => ({ ...check, evidenceIds: evidence.filter((entry) => check.kind === 'smoke' ? /\/(smoke.log|screenshot.png)$/.test(entry.path) : entry.path.endsWith(`/${check.kind}.log`)).map((entry) => entry.id) }));
     const requiredCases = new Set(bundle.plan.coverage.filter((coverage) => bundle.spec.criteria.find((criterion) => criterion.id === coverage.criterionId)?.required).flatMap((coverage) => coverage.caseIds));
     const requiredFailed = cases.filter((entry) => requiredCases.has(entry.caseId) && entry.status === 'failed');
@@ -142,7 +145,7 @@ export class DeliveryExecutionRuntime {
       summary: `${cases.filter((entry) => entry.status === 'passed').length}/${cases.length} 自动用例通过；未覆盖声明保留在交付报告。`, evidenceIds: cases.flatMap((entry) => entry.evidenceIds) });
     context.report(`冻结浏览器验收结束：${cases.filter((entry) => entry.status === 'passed').length}/${cases.length} 用例通过；证据已绑定当前源码。`);
     for (const check of checks) this.runtime.checkEvent(item, check);
-    return { checks, errors };
+    return { checks, errors,failureCategory:errors?(sourceBeforeHash!==sourceAfterHash?'trust' as const:checked.errors?(checked.failureCategory??'infrastructure'):'required_behavior' as const):undefined };
   }
   private makeReport(item: RecordValue, lifecycle: DeliveryReportDto['lifecycle'], failure: DeliveryReportDto['failure'], exported: DeliveryReportDto['exportManifest'] = null, clean: DeliveryReportDto['cleanBuild'] = null) {
     const state = this.state(item.request.executionId); const report: DeliveryReportDataDto = { protocolVersion: '0.1.0', id: `delivery_${item.request.runId}`, hash: '0'.repeat(64), revision: (state.report?.revision || 0) + 1,
@@ -153,27 +156,42 @@ export class DeliveryExecutionRuntime {
     report.quality = deriveDeliveryQuality(report); report.gaps = deriveCriterionGaps(report); state.report = DeliveryReport.parse(seal(report)); this.persist(item.request.executionId); return state.report;
   }
   async finish(item: RecordValue, workspace: string, context: AdapterContext) {
-    const state = this.state(item.request.executionId); state.phase = 'clean_export'; this.persist(item.request.executionId); context.report('开始打包精确源码 ZIP，并在独立目录进行冻结安装与复验。');
-    const result = await exportAndVerify({ workspace, root: path.join(this.root(item.request.executionId), 'delivery'), bundle: item.delivery!.bundle, signal: context.signal, activity: context.report, ...(this.runtime.options.verification?{isolatedClean:(options:Parameters<import('./delivery-export.js').IsolatedClean>[0])=>this.runtime.options.verification!.cleanArchive(options,{executionId:item.request.executionId,bindingHash:item.delivery!.bundle.binding.hash,expectedToolchainId:item.delivery!.bundle.binding.toolchain.id,attemptId:'clean_'+item.request.executionId,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()})}:{}) });
-    state.evidence.push(...result.evidence);
-    for (const file of await listFiles(path.join(this.root(item.request.executionId), 'delivery/evidence'))) {
-      await putFile(path.join(this.root(item.request.executionId), 'evidence'), file, await readFile(await safeFile(path.join(this.root(item.request.executionId), 'delivery/evidence'), file)));
+    const state=this.state(item.request.executionId),bundle=item.delivery!.bundle;state.phase='clean_export';state.cleanRounds??=[];
+    const round=state.cleanRounds.length;if(round>item.request.budget.maxRepairRounds)throw new DeliveryError(422,'BUDGET_EXCEEDED','Clean-round budget exhausted');
+    const roundRoot=path.join(this.root(item.request.executionId),'delivery','round_'+round);await mkdir(path.dirname(roundRoot),{recursive:true});await mkdir(roundRoot,{recursive:false});
+    this.persist(item.request.executionId);context.report(`开始第${round+1}轮精确源码 ZIP 独立安装与冻结复验；保留前轮证据。`);
+    const result=await exportAndVerify({workspace,root:roundRoot,bundle,signal:context.signal,activity:context.report,trustedBrowserLocale:this.options.trustedCleanBrowserLocale,...(this.runtime.options.verification?{isolatedClean:(options:Parameters<import('./delivery-export.js').IsolatedClean>[0])=>this.runtime.options.verification!.cleanArchive(options,{executionId:item.request.executionId,bindingHash:bundle.binding.hash,expectedToolchainId:bundle.binding.toolchain.id,attemptId:'clean_'+round+'_'+item.request.executionId,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()})}:{})});
+    const namespaced=namespaceCleanRound(result.clean,result.evidence,round);const evidenceRoot=path.join(this.root(item.request.executionId),'evidence');
+    for(const original of result.evidence){const target=namespaced.evidence.find(e=>e.id==='clean_round_'+round+'_'+original.id)!;const bytes=await readFile(await safeFile(roundRoot,original.path));await putFile(this.root(item.request.executionId),target.path,bytes);}
+    // Legacy latest aliases are not historical descriptors; all audited paths are round-specific.
+    for(const file of await listFiles(path.join(roundRoot,'evidence')))await putFile(evidenceRoot,file,await readFile(await safeFile(path.join(roundRoot,'evidence'),file)));
+    await putFile(path.join(this.root(item.request.executionId),'delivery'),'source.zip',result.archive);
+    const prefix=namespaced.prefix;const receipt=canonicalDeliveryJson({version:1,round,bindingHash:bundle.binding.hash,specHash:bundle.spec.hash,planHash:bundle.plan.hash,sourceSnapshotHash:result.exported.sourceSnapshotHash,exportManifest:result.exported,cleanBuild:namespaced.clean,controlledEnvironment:this.options.trustedCleanBrowserLocale?{kind:'trusted_test_locale',locale:this.options.trustedCleanBrowserLocale}:null});
+    const extras=[{name:'round-report.json',bytes:Buffer.from(receipt),kind:'report' as const,mediaType:'application/json' as const},{name:'source.zip',bytes:result.archive,kind:'trace' as const,mediaType:'application/zip' as const}];
+    for(const extra of extras){const p='evidence/'+prefix+'/'+extra.name;await putFile(this.root(item.request.executionId),p,extra.bytes);namespaced.evidence.push({id:prefix+'_'+extra.name.replaceAll('.','_'),path:p,sha256:sha256(extra.bytes),bytes:extra.bytes.length,kind:extra.kind,mediaType:extra.mediaType,scope:'clean_export',attemptId:null,sourceSnapshotHash:result.exported.sourceSnapshotHash,specHash:bundle.spec.hash,planHash:bundle.plan.hash});}
+    state.evidence.push(...namespaced.evidence);state.cleanRounds.push({index:round,sourceHash:result.exported.sourceSnapshotHash,archiveHash:result.exported.archive.sha256,cleanHash:namespaced.clean.hash,receiptEvidenceId:prefix+'_round-report_json'});this.persist(item.request.executionId);
+    if(context.signal.aborted){this.makeReport(item,context.signal.reason==='budget'?'failed':'cancelled',{code:context.signal.reason==='budget'?'BUDGET_EXCEEDED':'CANCELLED',message:'Clean export stopped before completion.',retryable:false},result.exported,namespaced.clean);throw new Error('Export stopped');}
+    const failures=cleanBehaviorFailures(namespaced.clean,result.exported,bundle);
+    if(failures?.length&&context.usageIsKnown?.()!==false){
+      this.makeReport(item,'running',null,result.exported,namespaced.clean);state.phase=undefined;this.persist(item.request.executionId);
+      context.passedCaseIds=namespaced.clean.caseResults.filter(c=>c.status==='passed').map(c=>c.caseId);
+      context.report(`干净导出第${round+1}轮有${failures.length}项必需行为失败，交由统一控制器判定剩余同计划修复额度；未发布候选。`);
+      return{errors:JSON.stringify(failures.map(c=>({stage:'clean_verify',caseId:c.caseId,failure:c.failure}))),failureCategory:'clean_behavior' as const,evidenceRefs:failures.flatMap(c=>c.evidenceIds)};
     }
-    if (context.signal.aborted) { this.makeReport(item, context.signal.reason === 'budget' ? 'failed' : 'cancelled', { code: context.signal.reason === 'budget' ? 'BUDGET_EXCEEDED' : 'CANCELLED', message: 'Clean export stopped before completion.', retryable: false }, result.exported, result.clean); throw new Error('Export stopped'); }
-    const report = this.makeReport(item, 'completed', null, result.exported, result.clean);
-    await putFile(path.join(this.root(item.request.executionId), 'evidence'), 'delivery-report.json', JSON.stringify(report));
-    if (report.quality === 'blocked') { this.makeReport(item, 'failed', { code: 'EXPORT_FAILED', message: 'Frozen verification or independent clean export failed.', retryable: false }, result.exported, result.clean); throw new DeliveryError(422, 'VERIFICATION_FAILED', 'Frozen verification or independent clean export failed; report retained.'); }
-    context.report(`交付报告为 ${report.quality}；${report.gaps.length} 项缺口。候选发布仍由后端决定。`);
+    const report=this.makeReport(item,'completed',null,result.exported,namespaced.clean);
+    await putFile(evidenceRoot,'delivery-report.json',JSON.stringify(report));
+    if(report.quality==='blocked'){this.makeReport(item,'failed',{code:'EXPORT_FAILED',message:'Frozen verification or independent clean export failed.',retryable:false},result.exported,namespaced.clean);return{errors:'Clean export infrastructure, integrity, incomplete verification or trust gate failed.',failureCategory:'infrastructure' as const,evidenceRefs:namespaced.evidence.map(e=>e.id)};}
+    state.phase=undefined;this.persist(item.request.executionId);context.report(`交付报告为 ${report.quality}；${report.gaps.length} 项缺口。候选发布仍由后端决定。`);return{errors:null,failureCategory:undefined,evidenceRefs:namespaced.evidence.map(e=>e.id)};
   }
-  fail(item: RecordValue, lifecycle: 'failed' | 'cancelled' | 'interrupted', message: string, code: 'BUDGET_EXCEEDED' | 'REQUIRED_BEHAVIOR_FAILED' = 'REQUIRED_BEHAVIOR_FAILED') {
+  fail(item: RecordValue, lifecycle: 'failed' | 'cancelled' | 'interrupted', message: string, code: 'BUDGET_EXCEEDED' | 'REQUIRED_BEHAVIOR_FAILED'|'PLAN_INVALID' = 'REQUIRED_BEHAVIOR_FAILED') {
     const state = this.state(item.request.executionId);
     if (state.report?.quality === 'blocked' && state.report.final) return;
-    this.makeReport(item, lifecycle, { code: lifecycle === 'cancelled' ? 'CANCELLED' : lifecycle === 'interrupted' ? 'EXECUTION_INTERRUPTED' : code, message: message.slice(0, 2000) || 'Delivery failed.', retryable: false });
+    this.makeReport(item, lifecycle, { code: lifecycle === 'cancelled' ? 'CANCELLED' : lifecycle === 'interrupted' ? 'EXECUTION_INTERRUPTED' : code, message: message.slice(0, 2000) || 'Delivery failed.', retryable: false },state.report?.exportManifest??null,state.report?.cleanBuild??null);
   }
   report(id: string) { this.snapshot(id); return this.state(id).report; }
   evidence(id: string, evidenceId: string) { const report = this.report(id); const entry = report?.evidence.find((file) => file.id === evidenceId);
     if (!entry) throw new DeliveryError(404, 'NOT_FOUND', 'Delivery evidence not found'); return readFile(path.join(this.root(id), entry.path)); }
   export(id: string, archiveId: string) { const report = this.report(id); if (report?.exportManifest?.archive.id !== archiveId) throw new DeliveryError(404, 'NOT_FOUND', 'Archive not found');
     return readFile(path.join(this.root(id), 'delivery/source.zip')); }
-  artifactEvidence(id: string) { return this.report(id)?.evidence.map(({ id, path, kind }) => ({ id, path, kind: kind === 'screenshot' ? 'screenshot' : kind === 'trace' ? 'trace' : 'log' })) || []; }
+  artifactEvidence(id: string) { return this.report(id)?.evidence.filter(file=>file.kind!=='trace').map(({ id, path, kind }) => ({ id, path, kind: kind === 'screenshot' ? 'screenshot' : kind === 'report'?'report':'log' })) || []; }
 }

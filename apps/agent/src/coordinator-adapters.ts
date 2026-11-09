@@ -1,3 +1,4 @@
+import { saveRouterProposal } from './coordinator-diagnostics.js';
 import { requirementsPrompt, scopeReviewDirective } from './requirements-context.js';
 import type { RequirementsCoordinationRequestDto } from '@atoms/contracts/requirements';
 import { DSH_NATIVE_READONLY_ENV } from './dsh-native-env.js';
@@ -203,6 +204,7 @@ export class DshCoordinatorAdapter implements CoordinatorAdapter {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw) || typeof (raw as { kind?: unknown }).kind !== 'string') {
         throw new CoordinationError(400, 'INVALID_REQUEST', 'Project Router returned an invalid semantic result');
       }
+      await saveRouterProposal(context.projectHome,context.request.turnId,raw,context.request.budget.maxModelSteps);
       return raw as SemanticDecision;
     } finally {
       await appendFile(path.join(context.projectHome, 'token-accounting.jsonl'), JSON.stringify({

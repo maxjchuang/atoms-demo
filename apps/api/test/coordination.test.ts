@@ -12,12 +12,12 @@ import {startCoordination as canonicalVector} from '@atoms/contracts/conversatio
 import {createFakeRuntime} from '../src/fake-runtime.js';
 import {addFakeCoordinator,fakeChange,fakeConsult,contextUsedFor} from '../src/fake-coordinator.js';
 
-async function fixture(options:{limit?:number;rate?:number}={}){
+async function fixture(options:{limit?:number;rate?:number;defaultLimit?:boolean}={}){
   const directory=await mkdtemp(join(tmpdir(),'atoms-coordination-test-'));
   const runtime=createFakeRuntime('coordination-test-token');const coordinator=addFakeCoordinator(runtime.app);
   const address=await runtime.app.listen({host:'127.0.0.1',port:0});
   const config={legacyFixtureMode:true,dataDir:directory,agentUrl:address,serviceToken:'coordination-test-token',previewSecret:'coordination-preview-secret',previewOrigin:'http://127.0.0.1:3002',
-    allowedOrigins:['http://localhost:5183'],autoSchedule:false,coordinationMessageLimit:options.limit??50,coordinationMessagesPerMinute:options.rate??200};
+    allowedOrigins:['http://localhost:5183'],autoSchedule:false,coordinationMessageLimit:options.defaultLimit?undefined:options.limit??50,coordinationMessagesPerMinute:options.rate??200};
   let service=await createApi(config);service.seedCode('coordination-demo-2026',{projectLimit:5,runLimit:10});let cookie='';
   const request=async(method:'GET'|'POST'|'DELETE',route:string,body?:unknown,key=randomUUID())=>{
     const reply=await service.app.inject({method,url:route,headers:{origin:'http://localhost:5183',...(cookie?{cookie}:{}),
@@ -417,4 +417,12 @@ test('replan-only reflection survives waiting/restart, rejects ordinary answers 
   // A late original execution completion cannot publish or restart cancelled work.
   f.runtime.complete(run.executionId);await f.service.tick();assert.equal((await f.request('GET',`/api/v1/runs/${run.id}`)).data.status,'cancelled');assert.equal((await f.request('GET',`/api/v1/projects/${project.id}/versions`)).data.items.length,0);assert.equal(f.runtime.startCalls,1);assert.equal(f.service.store.state.runs.filter(r=>r.dto.projectId===project.id).length,1);const quota=(await f.request('GET','/api/v1/session')).data.quota;assert.equal(quota.runsUsed,1);assert.equal(quota.runsReserved,0);const workspace=await f.workspace(project.id);assert.equal(workspace.messages.filter(m=>m.id===sent.data.userMessage.id).length,1);assert.equal(workspace.messages.find(m=>m.id===sent.data.userMessage.id)!.content,content);
  }finally{await f.close();}
+});
+
+
+test('private per-code conversation limits preserve lifetime usage and history across restart, isolate identities and never override an explicit host cap',async()=>{
+ const f=await fixture({defaultLimit:true});try{await f.login();const p=await f.project(),code=f.service.store.state.codes.find(c=>c.hash===hash('coordination-demo-2026'))!;assert.equal((await f.request('GET','/api/v2/session')).data.coordinationQuota.limit,50);f.service.store.transaction(()=>{code.coordinationMessageLimit=2;});for(let i=0;i<2;i++){await f.submit(p.id,'合成只读咨询 '+i,'ask');await f.service.tickCoordination();}assert.equal((await f.request('GET','/api/v2/session')).data.coordinationQuota.used,2);assert.equal((await f.request('POST',`/api/v2/projects/${p.id}/messages`,{input:{kind:'text',content:'不应受理'},mode:'ask'})).status,403);const before=structuredClone(f.service.store.state);f.service.store.transaction(()=>{f.service.store.state.codes.find(c=>c.id===code.id)!.coordinationMessageLimit=52;});await f.restart();const expected=structuredClone(before);expected.codes.find(c=>c.id===code.id)!.coordinationMessageLimit=52;assert.deepEqual(f.service.store.state,expected);const reset=(await f.request('GET','/api/v2/session')).data.coordinationQuota;assert.deepEqual(reset,{limit:52,used:2,reserved:0});assert.equal(reset.limit-reset.used-reset.reserved,50);await f.submit(p.id,'新的咨询仍只增加真实已用量','ask');await f.service.tickCoordination();assert.equal((await f.request('GET','/api/v2/session')).data.coordinationQuota.used,3);
+ f.service.seedCode('quota-second-owner');await f.login('quota-second-owner');assert.deepEqual((await f.request('GET','/api/v2/session')).data.coordinationQuota,{limit:50,used:0,reserved:0});for(const invalid of[0,-1,1.5,Number.MAX_SAFE_INTEGER+1]){f.service.store.transaction(()=>{f.service.store.state.codes.find(c=>c.hash===hash('quota-second-owner'))!.coordinationMessageLimit=invalid;});assert.equal((await f.request('GET','/api/v2/session')).status,409);}assert.equal(f.service.store.state.runs.length,0);assert.equal((await f.request('GET','/api/v1/session')).data.quota.runsUsed,0);
+ }finally{await f.close();}
+ const explicit=await fixture({limit:15});try{await explicit.login();explicit.service.store.transaction(()=>{explicit.service.store.state.codes[0].coordinationMessageLimit=500;});assert.equal((await explicit.request('GET','/api/v2/session')).data.coordinationQuota.limit,15);await explicit.restart();assert.equal((await explicit.request('GET','/api/v2/session')).data.coordinationQuota.limit,15);explicit.service.store.transaction(()=>{explicit.service.store.state.codes[0].coordinationMessageLimit=-1;});assert.equal((await explicit.request('GET','/api/v2/session')).data.coordinationQuota.limit,15);}finally{await explicit.close();}
 });

@@ -6,7 +6,7 @@ import type { AgentEventDto, ArtifactManifestDto, ProjectDto, ProjectEventDto, R
 import type { ConversationMessageDto, CoordinationTurnDto, StartCoordinationRequestDto, ConversationEventDto,
   ChangeProposalDto, ClarificationDto, ProjectMemoryViewDto, RouterResultDto } from '@atoms/contracts/conversation';
 
-export interface Code { id: string; hash: string; expiresAt: string; projectLimit: number; runLimit: number; revoked: boolean;publicIssuedAt?:string }
+export interface Code { id: string; hash: string; expiresAt: string; projectLimit: number; runLimit: number; coordinationMessageLimit?:number; revoked: boolean;publicIssuedAt?:string }
 export interface SessionRecord { id: string; codeId: string; tokenHash: string; expiresAt: string }
 export interface ProjectRecord { dto: ProjectDto; codeId: string }
 export interface RunRecord { dto: RunDto; prompt: string; codeId: string; started: boolean; sourceSeq: number;

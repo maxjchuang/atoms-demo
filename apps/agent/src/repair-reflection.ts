@@ -6,5 +6,5 @@ export const RepairReflection = { parse(raw: unknown): RepairReflectionValue {
  return structuredClone(r) as RepairReflectionValue;
 } };
 export function reflectionDescription(review: RepairReflectionValue | null, reason: string) {
- return (review ? `只读复盘（${({implementation:'实现方案',test:'验收测试',environment:'运行环境',unclear:'信息不足'})[review.category]}）：\n${review.reasons.join('\n')}\n建议：${review.suggestion}\n问题：${review.question}` : `自动修复已停止：${reason}。请补充期望表现或选择重新规划。`) + '\n原源码和冻结验收未修改，不再追加原任务修复。请使用带回答重新规划；确认新方案后执行需要新的构建额度。';
+ return (review ? `只读复盘（${({implementation:'实现方案',test:'验收测试',environment:'运行环境',unclear:'信息不足'})[review.category]}）：\n${review.reasons.join('\n')}\n建议：${review.suggestion}\n问题：${review.category==='unclear'?review.question:'请确认是否采用上述建议重新规划，或补充你期望的实际表现'}` : `自动修复已停止：${reason}。请补充期望表现或选择重新规划。`) + '\n原源码和冻结验收未修改，不再追加原任务修复。请使用带回答重新规划；确认新方案后执行需要新的构建额度。';
 }

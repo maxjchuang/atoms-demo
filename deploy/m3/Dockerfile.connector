@@ -1,0 +1,14 @@
+# Native daemon-selected official Node base supplies only public CA roots.
+ARG NODE_BASE=docker.io/library/node:26.5.0-bookworm-slim@sha256:9e5d714311940c098479ec352029af6df1d9a2dc4269b29373c616f51640dd67
+FROM ${NODE_BASE} AS certificates
+RUN node -e "require('node:fs').writeFileSync('/ca-certificates.crt',require('node:tls').rootCertificates.join(String.fromCharCode(10))+String.fromCharCode(10))"
+FROM scratch
+ARG CONNECTOR_SHA
+ARG SOURCE_CONTEXT
+LABEL atoms.owner="atoms-v03" atoms.role="tunnel-connector" org.opencontainers.image.source="https://github.com/cloudflare/cloudflared" org.opencontainers.image.version="2026.10.7" atoms.binary-sha256=$CONNECTOR_SHA atoms.context-sha256=$SOURCE_CONTEXT
+COPY --from=certificates /ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --chmod=0555 cloudflared-linux /usr/local/bin/cloudflared
+USER 65532:65532
+ENV HOME=/tmp SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENTRYPOINT ["/usr/local/bin/cloudflared"]
+CMD ["--version"]

@@ -125,4 +125,24 @@ M2 仍依赖受信内部验证器，hash 证明一致性而非远程执行证明
 
 主管真实 UI 门禁入口仍受双 guard 控制；`--verify-web-readonly --no-web` 在加载根 `.env`、启动服务或创建任务前拒绝。最新 Fake 完整运行与真实 reviewed-exact 续跑均实际包含只读浏览器门禁，生成/协调额度与 sealed 状态不变；续跑 API+Runtime 严格重启亦通过。默认 dry-run/预检读取临时 0700 DB/WAL/SHM 副本，避免 SQLite readOnly 触碰原 SHM mtime；全树备份校验仍包含 SHM/mtime/opaque bytes，不忽略差异。编排工具 22 项由主管独立通过，不混入 API 55 项。
 
-以上为隔离 worktree/临时数据证据；M2 App 尚未升级用户 live，主仓当前仅合入共享 `a1c7c23`。三次 partial 仍保留人工缺口，未宣称任意模型输出/自然语言语义或所有失败修复 variant 均已验证。M3 OS/网络隔离、Docker、双隧道与公网验收未开始。
+以上保留 M2 隔离验证历史；主管随后已安全合并升级本机 live，并补齐一次独立受控故障的真实 DSH 修复门禁，见 [M2 状态](../../docs/m2-delivery-status.md)。三次 partial 仍保留人工缺口，不扩大为任意模型输出或所有失败修复均已验证。M3 实施中，OS/双隧道/实际公网尚待独立门禁。
+
+## M3 API 独立门禁（公网部署尚未验收）
+
+`ATOMS_PUBLIC_DEMO=1` 启用独立 public profile，要求显式 `API_DATA_DIR`、`M3_DEPLOYMENT_FILE` 和 `ATOMS_SERVICE_TOKEN_FILE`/`PREVIEW_SECRET_FILE`（文件不可供group/world读）。拒绝固定demo seed、legacy执行回退、弱secret、无fresh namespace marker的旧数据；不触碰 live/review-real。配置文件仅含canonical双HTTPS origins、独立epoch/namespace与expected isolation tuple/外部receipt，不含secret。
+
+API消费冻结 sharing 0.1，与旧 DTO 不混用。共享descriptor URL-free，复制点击重新resolve、固定版本/epoch、cap最多900秒且受code expiry限制；build入口仅根登录页，不含code。响应带sharing header及no-store。host配置可用不等于外部receipt verified；模型不能提供URL/永久可用宣称，structured sharing_help继续零模型宿主回答。
+
+发码/撤销只用 `src/public-admin-main.ts` 的**stopped/drained离线入口**，需 `M3_ADMIN_OFFLINE=1`；后续宿主脚本还检查Compose API已停，运行API writer lease存在则拒绝SQLite写。不会在运行中的in-memory state背后改DB，不新增公共admin端点。初始化只接受空目录，issue仅空namespace，不覆写已有code文件/身份/额度；CSPRNG32bytes码、current-owner0600文件、0700父目录，24h以内、1项目/3Run。session<=1h且不晚于code；公开协调限15消息、6/分钟，登录IP/code限流。撤销/expiry使现有session与preview bearer失效；排队/活跃任务通过权威cancel对账，未确认停止不释放锁、不退已用次数。
+
+新代码任务准入/派发需认证的实时 `/internal/isolation/v1/capabilities` header/body与当前expected toolchain/image/policy/cache/probe/platform全部匹配；host_local、unknown、不匹配或不可达均拒绝。API不访问Docker socket/broker、不把synthetic readiness fixture当实际OS证明。公开Origin/Host必须精确；可信proxy IP只由`M3_TRUST_PROXY`指定，不能trust所有X-Forwarded头。
+
+实现线已通过API check/build、63/63（旧55+public8）：共享解析/零业务写、receipt/epoch、cap轮换/旧403、originHost、隔离tuple gate、强码/TTL/单项目、离线writer拒写、stopped revoke与真实3秒expiry、登录限流、拒旧namespace。测试是独立HTTP Fake/隔离fixtures，无provider或公网；Docker/context/gateway/broker与外部双隧道门禁另待主管实际验收。
+
+主管独立通过本阶段API check、63/63全包和build。自然语言仍由M1 Router判断；零模型宿主帮助只针对既有typed sharing_help/status或deployment_help解析，不新增关键词路由。expiry复用所有非终态的既有取消对账/fence；HTTP Fake并不替代Docker整job停止证据。
+
+M1 Router 独立通道保留：自然语言 ask/咨询/进度不依赖 job OS proof，仍受身份、体验码TTL、协调预算与限流约束。auto 变更可保存有界排队意图，但无当前匹配 proof 不派 Prepare/Worker、不计生成 used；恢复继续原队列，不重跑 Router。普通 healthy job busy 不应撤销隔离证明，实际 busy/ask/queued 的 Docker 联调另由主管验收。
+
+上述独立Router补修由主管另行通过API check与public10/10定向回归；前一完整63项与本次10项不相加声称完整65项重跑。
+
+Public visitor handoff is a host-only, separately guarded post-acceptance operation (`pnpm m3:handoff --plan`). It preserves baseline-three and real lifetime usage, adds at most three to leave three remaining, and loads an immutable private audit ledger into the one common Run quota. It requires stopped/drained ownership, backup, a current published subject and actual external browser evidence. There is no public admin route, rotation, automatic grant or model call. See [M3 operations](M3-OPERATIONS-STAGE2.md) for the exact evidence and operator gate; implementation does not mean the public grant has been executed.

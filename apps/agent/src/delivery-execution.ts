@@ -1,3 +1,4 @@
+import { preserveAttemptSource } from './source-snapshot.js';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -42,7 +43,7 @@ export class DeliveryExecutionRuntime {
     for (const value of [wrapper.bundle.seed, wrapper.bundle.spec, wrapper.bundle.plan, wrapper.bundle.binding]) {
       try { assertSealed(value); } catch { throw new DeliveryError(400, 'BINDING_MISMATCH', 'Frozen object fingerprint mismatch'); }
     }
-    if (!sameToolchain(wrapper.bundle.binding.toolchain, (await trustedTemplate()).descriptor)) throw new DeliveryError(409, 'BINDING_MISMATCH', 'Trusted toolchain changed since planning');
+    if (!sameToolchain(wrapper.bundle.binding.toolchain, this.runtime.options.verification?await this.runtime.options.verification.toolchain():(await trustedTemplate()).descriptor)) throw new DeliveryError(409, 'BINDING_MISMATCH', 'Trusted toolchain changed since planning');
     const previous = this.runtime.records.get(id);
     if (previous && (!previous.delivery || canonicalDeliveryJson(previous.delivery) !== canonicalDeliveryJson(wrapper))) throw new DeliveryError(409, 'CONFLICT', 'Immutable execution wrapper changed');
     const result = this.runtime.start(wrapper.execution, id, wrapper); return { created: result.created, snapshot: this.snapshot(id) };
@@ -59,13 +60,13 @@ export class DeliveryExecutionRuntime {
         inputTokens: item.usageKnown === false ? null : binding.planningUsage.inputTokens + usage.inputTokens, outputTokens: item.usageKnown === false ? null : binding.planningUsage.outputTokens + usage.outputTokens } });
   }
   async initialize(item: RecordValue, workspace: string) {
-    const template = await trustedTemplate(); if (!sameToolchain(item.delivery!.bundle.binding.toolchain, template.descriptor)) throw new Error('Trusted template fingerprint mismatch');
+    const template = await trustedTemplate(); if (!sameToolchain(item.delivery!.bundle.binding.toolchain, this.runtime.options.verification?await this.runtime.options.verification.toolchain():template.descriptor)) throw new Error('Trusted template fingerprint mismatch');
     for (const [name, content] of Object.entries(template.files)) if (!name.startsWith('src/') && name !== 'index.html') await putFile(workspace, name, content);
     return { summary: item.delivery!.bundle.seed.goal, tasks: ['实现已冻结的目标与浏览器交互约定', '真实检查并保留失败与修复证据', '精确导出并在独立目录复验'],
       acceptance: item.delivery!.bundle.spec.criteria.map((criterion) => ({ id: criterion.id, description: criterion.description })) };
   }
   context(item: RecordValue, context: AdapterContext) {
-    context.frozenTestPlan = item.delivery!.bundle.plan;
+    context.frozenTestPlan = item.delivery!.bundle.plan;context.frozenSpecification=item.delivery!.bundle.spec;
     context.deliveryProfileId = this.planning.get(item.delivery!.bundle.binding.preparationId).request.profileHint?.id
       || (item.delivery!.bundle.seed.goal.includes('[calculator]') && this.runtime.adapter.mode === 'fake' ? 'profile_calculator_v1' : 'profile_notes_v1');
   }
@@ -106,14 +107,14 @@ export class DeliveryExecutionRuntime {
       sourceProvenance = { kind: 'controlled_regression', baseSourceHash: base, patchHash: sha256(patch), injectedSourceHash: inventoryHash(await fingerprints(workspace, 'source/')), patchEvidenceId: `evidence_attempt_${index}_controlled-patch` };
       context.report('宿主测试显式注入了持久化受控回归；此失败不代表模型自然缺陷。');
     }
-    const sourceBeforeHash = inventoryHash(await fingerprints(workspace, 'source/')); const startedAt = now();
+    const sourceBeforeHash = inventoryHash(await fingerprints(workspace, 'source/')); await preserveAttemptSource({workspace,root:path.join(this.root(item.request.executionId),'source-snapshots'),attemptIndex:index,maxAttempts:item.request.budget.maxRepairRounds+1,maxBytes:item.request.budget.maxArtifactBytes,expectedHash:sourceBeforeHash}); const startedAt = now();
     let interruption: unknown; let browserInterrupted = false; let checked: { checks: ReturnType<typeof Check.parse>[]; errors: string | null } = { checks: [], errors: null };
     let cases = notRunCases(bundle, 'A required application build/smoke gate failed.');
     try {
       await assertControlledSource(workspace);
-      checked = await verifyApplication(workspace, dir, context.signal, () => {}, context.report);
+      checked = this.runtime.options.verification?await this.runtime.options.verification.verifyApplication(workspace,dir,context.signal,()=>{},context.report,{executionId:item.request.executionId,bindingHash:bundle.binding.hash,expectedToolchainId:bundle.binding.toolchain.id,attemptId,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()}):await verifyApplication(workspace, dir, context.signal, () => {}, context.report);
       if (!checked.errors) { context.report(`开始执行冻结浏览器验收：${bundle.plan.cases.length} 个用例。`);
-      const browser = await runBrowserPlan({ dist: path.join(workspace, 'dist'), plan: bundle.plan, evidenceDir: dir, signal: context.signal }); cases = browser.caseResults;
+      const browser = this.runtime.options.verification?await this.runtime.options.verification.runBrowserPlan({dist:path.join(workspace,'dist'),plan:bundle.plan,evidenceDir:dir,signal:context.signal},{executionId:item.request.executionId,bindingHash:bundle.binding.hash,expectedToolchainId:bundle.binding.toolchain.id,attemptId,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()}):await runBrowserPlan({ dist: path.join(workspace, 'dist'), plan: bundle.plan, evidenceDir: dir, signal: context.signal }); cases = browser.caseResults;
       if (browser.interrupted) { browserInterrupted = true; interruption = new DeliveryError(422, 'BUDGET_EXCEEDED', 'Frozen browser verification was interrupted by its bounded budget.'); } }
     } catch (error) { interruption = error; checked.errors = 'Verification was interrupted before all gates completed.'; await putFile(dir, 'interruption.log', checked.errors); }
     const sourceAfterHash = inventoryHash(await fingerprints(workspace, 'source/'));
@@ -152,7 +153,7 @@ export class DeliveryExecutionRuntime {
   }
   async finish(item: RecordValue, workspace: string, context: AdapterContext) {
     const state = this.state(item.request.executionId); state.phase = 'clean_export'; this.persist(item.request.executionId); context.report('开始打包精确源码 ZIP，并在独立目录进行冻结安装与复验。');
-    const result = await exportAndVerify({ workspace, root: path.join(this.root(item.request.executionId), 'delivery'), bundle: item.delivery!.bundle, signal: context.signal, activity: context.report });
+    const result = await exportAndVerify({ workspace, root: path.join(this.root(item.request.executionId), 'delivery'), bundle: item.delivery!.bundle, signal: context.signal, activity: context.report, ...(this.runtime.options.verification?{isolatedClean:(options:Parameters<import('./delivery-export.js').IsolatedClean>[0])=>this.runtime.options.verification!.cleanArchive(options,{executionId:item.request.executionId,bindingHash:item.delivery!.bundle.binding.hash,expectedToolchainId:item.delivery!.bundle.binding.toolchain.id,attemptId:'clean_'+item.request.executionId,generation:item.isolationGeneration!,remainingMs:context.remainingActiveMs!()})}:{}) });
     state.evidence.push(...result.evidence);
     for (const file of await listFiles(path.join(this.root(item.request.executionId), 'delivery/evidence'))) {
       await putFile(path.join(this.root(item.request.executionId), 'evidence'), file, await readFile(await safeFile(path.join(this.root(item.request.executionId), 'delivery/evidence'), file)));

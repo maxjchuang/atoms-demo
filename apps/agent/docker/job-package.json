@@ -1,0 +1,1 @@
+{"name":"atoms-v03-job-tools","private":true,"type":"module","packageManager":"pnpm@10.33.0","dependencies":{"playwright":"1.56.1","tsx":"4.20.6","fflate":"0.8.2","zod":"3.25.76"}}

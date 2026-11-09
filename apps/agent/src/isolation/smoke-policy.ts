@@ -1,0 +1,12 @@
+import {mkdtemp,writeFile}from'node:fs/promises';import os from'node:os';import path from'node:path';import{fileURLToPath}from'node:url';import{randomUUID}from'node:crypto';import assert from'node:assert/strict';
+import{docker,checked}from'./docker-command.js';import{nativeImageInputs}from'./platform.js';
+const dockerDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../docker');
+const selected=nativeImageInputs(JSON.parse(checked(await docker(['info','--format','{{json .}}']))));
+const image='atoms-v03-probe:policy-v1';const name='atoms-v03-probe-'+randomUUID().slice(0,12);const dir=await mkdtemp(path.join(os.tmpdir(),'atoms-v03-policy-'));
+try{
+ checked(await docker(['build','--platform',selected.platform,'--build-arg',`NODE_BASE=${selected.nodeBase}`,'-f',path.join(dockerDir,'Dockerfile.probe'),'-t',image,dockerDir],{timeoutMs:180000,maxBytes:1048576}));
+ const create=['create','--name',name,'--label','atoms.owner=atoms-v03','--label','atoms.role=probe','--network','none','--ipc','private','--read-only','--user','10001:10001','--cap-drop','ALL','--security-opt','no-new-privileges:true','--cpus','1.5','--memory','2g','--memory-swap','2g','--pids-limit','128','--ulimit','nofile=1024:1024','--log-driver','none','--tmpfs','/job:rw,nosuid,nodev,size=1073741824,nr_inodes=65536,uid=10001,gid=10001','--tmpfs','/tmp:rw,nosuid,nodev,noexec,size=134217728,uid=10001,gid=10001',image];
+ checked(await docker(create));const inspect=JSON.parse(checked(await docker(['inspect',name])))[0];const cfg=inspect.HostConfig;assert.equal(cfg.NetworkMode,'none');assert.equal(cfg.LogConfig.Type,'none');assert.equal(cfg.ReadonlyRootfs,true);assert.equal(inspect.Config.User,'10001:10001');assert.equal(cfg.Memory,2147483648);assert.equal(cfg.PidsLimit,128);assert.equal(cfg.NanoCpus,1500000000);assert.ok(!cfg.Binds?.length);
+ const run=await docker(['start','-a',name],{timeoutMs:20000});const result=JSON.parse(run.stdout.trim());assert.equal(run.code,0);assert.equal(result.memoryMax,'2147483648');assert.equal(result.swapMax,'0');assert.equal(result.pidsMax,'128');assert.equal(result.cpuMax,'150000 100000');
+ await writeFile(path.join(dir,'probe.json'),JSON.stringify({image,imageId:inspect.Image,config:{network:cfg.NetworkMode,logDriver:cfg.LogConfig.Type,memory:cfg.Memory,pids:cfg.PidsLimit,readOnly:cfg.ReadonlyRootfs,tmpfs:cfg.Tmpfs},result},null,2));console.log(JSON.stringify({passed:true,dir,result}));
+}finally{await docker(['rm','-f',name]).catch(()=>{});}

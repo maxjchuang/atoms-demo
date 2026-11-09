@@ -6,12 +6,12 @@ import type { AgentEventDto, ArtifactManifestDto, ProjectDto, ProjectEventDto, R
 import type { ConversationMessageDto, CoordinationTurnDto, StartCoordinationRequestDto, ConversationEventDto,
   ChangeProposalDto, ClarificationDto, ProjectMemoryViewDto, RouterResultDto } from '@atoms/contracts/conversation';
 
-export interface Code { id: string; hash: string; expiresAt: string; projectLimit: number; runLimit: number; revoked: boolean }
+export interface Code { id: string; hash: string; expiresAt: string; projectLimit: number; runLimit: number; revoked: boolean;publicIssuedAt?:string }
 export interface SessionRecord { id: string; codeId: string; tokenHash: string; expiresAt: string }
 export interface ProjectRecord { dto: ProjectDto; codeId: string }
 export interface RunRecord { dto: RunDto; prompt: string; codeId: string; started: boolean; sourceSeq: number;
   request?: StartExecutionDto; manifestHash?: string; answerCommand?: object; cancelCommand?: object;
-  runtimeDisconnected?: boolean; originTurnId?: string; sourceMessageId?: string; proposalId?: string;
+  isolationWaiting?:boolean; runtimeDisconnected?: boolean; originTurnId?: string; sourceMessageId?: string; proposalId?: string;
   exactBaseVersionId?: string | null; delivery?: DeliveryRecord }
 export interface DeliveryRecord {
   stage:'preparing'|'executing'; preparationId:string; planningSeq:number;
@@ -32,9 +32,27 @@ export interface VersionRecord { dto: VersionDto; artifactId: string; manifest: 
 export interface MessageRecord { id: string; projectId: string; runId: string | null; role: 'user'|'assistant';
   status: 'streaming'|'complete'; content: string; createdAt: string }
 export interface IdempotentResult { hash: string; status: number; body?: unknown; cookie?: string }
+export interface PublicQuotaAuthorization {
+ kind:'public-code-total-limit';operationId:string;dataNamespaceId:string;codeId:string;
+ baselineRunLimit:3;previousEffectiveRunLimit:number;added:number;effectiveRunLimit:10;
+ observedUsed:number;observedReserved:0;codeExpiresAt:string;authorizedAt:string;
+ preserved:{projects:number;runs:number;versions:number;messages:number;events:number;started:number};historySha256:string;
+}
+export interface PublicQuotaReset {
+ kind:'public-code-remaining-reset';operationId:string;dataNamespaceId:string;codeId:string;
+ requestedRemaining:number;previousEffectiveRunLimit:number;effectiveRunLimit:number;
+ observedUsed:number;observedReserved:0;codeExpiresAt:string;authorizedAt:string;
+ preserved:{projects:number;runs:number;versions:number;messages:number;events:number;started:number};historySha256:string;
+}
+export interface PublicProvisionReceipt {
+ kind:'new-public-identity';operationId:string;dataNamespaceId:string;codeId:string;
+ projectLimit:10;runLimit:3;maxIdentities:10;issuedAt:string;expiresAt:string;
+ previousCodeIds:string[];projectLimitChanges:{codeId:string;from:number;to:10}[];
+ preserved:{projects:number;runs:number;versions:number;messages:number;events:number;started:number};historySha256:string;
+}
 export interface State { codes: Code[]; sessions: SessionRecord[]; projects: ProjectRecord[]; runs: RunRecord[];
   versions: VersionRecord[]; messages: MessageRecord[]; events: ProjectEventDto[]; sourceEvents: AgentEventDto[];
-  idempotency: Record<string, IdempotentResult>; coordination: CoordinationState }
+  idempotency: Record<string, IdempotentResult>; coordination: CoordinationState;publicProvisions?:PublicProvisionReceipt[];publicQuotaAuthorizations?:PublicQuotaAuthorization[];publicQuotaResets?:PublicQuotaReset[] }
 const empty = (): State => ({ codes: [], sessions: [], projects: [], runs: [], versions: [], messages: [], events: [], sourceEvents: [], idempotency: {}, coordination: emptyCoordination() });
 
 /** Single API process owns this SQLite database. State changes are atomic snapshots. */

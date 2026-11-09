@@ -1,3 +1,5 @@
+import {assertProvisionedPublicState} from './public-provisioning.js';
+import {assertPublicQuotaAuthorizations,effectivePublicRunLimit} from './public-quota.js';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
@@ -12,11 +14,14 @@ import {
 import { Store, type Code, type IdempotentResult, type RunRecord, type SessionRecord, type VersionRecord } from './store.js';
 import {registerDelivery} from './delivery.js';
 import type {ToolchainDescriptor} from '@atoms/contracts/delivery';
+import {registerSharing} from './sharing.js';
+import {assertPublicDataNamespace,publicIsolationReady,parsePublicDeployment,publicWorkbenchOrigin,type PublicProfile} from './public-profile.js';
+import {acquirePublicWriter} from './public-admin.js';
 import { registerCoordination } from './coordination.js';
 
 export interface ApiOptions {
   dataDir: string; agentUrl: string; serviceToken: string; previewSecret: string; previewOrigin: string;
-  allowedOrigins?: string[]; secureCookies?: boolean; demoCode?: string; pollMs?: number; autoSchedule?: boolean;
+  publicProfile?:PublicProfile;trustedProxy?:string[];allowedOrigins?: string[]; secureCookies?: boolean; demoCode?: string; pollMs?: number; autoSchedule?: boolean;
   deliveryBudget?:Partial<ReturnType<typeof Budget.parse>>;legacyFixtureMode?:boolean; deliveryToolchainId?:string;deliveryToolchain?:ReturnType<typeof ToolchainDescriptor.parse>;deliveryPlanningMode?:'host_profile'|'model_proposed';deliveryProfileHint?:{id:string;hash:string};
   coordinationMessageLimit?:number;coordinationMessagesPerMinute?:number;
 }
@@ -48,16 +53,25 @@ const safeSecretEqual = (a: string, b: string) => {
 export async function createApi(options: ApiOptions) {
   const deliveryBudget=Budget.parse({maxWallTimeMs:900000,maxWaitingInputMs:86400000,maxRepairRounds:2,maxModelSteps:8,maxInputTokens:65536,maxOutputTokens:24576,maxArtifactBytes:20971520,...options.deliveryBudget});
   const dataDir = resolve(options.dataDir);
+  if(options.publicProfile){const profile=options.publicProfile;assertPublicDataNamespace(dataDir,parsePublicDeployment(profile.deployment()));if(options.demoCode||options.legacyFixtureMode||options.serviceToken.length<43||options.previewSecret.length<43)throw new Error('Public profile rejects demo seeding, legacy fallback or weak internal secrets');if((profile.sessionTtlSeconds??3600)<1||(profile.sessionTtlSeconds??3600)>3600||(profile.previewTtlSeconds??900)<1||(profile.previewTtlSeconds??900)>900)throw new Error('Public session/capability TTL out of bounds');}
+  const releasePublicWriter=options.publicProfile?acquirePublicWriter(dataDir):()=>{};
   await mkdir(join(dataDir, 'versions'), { recursive: true });
   const store = new Store(join(dataDir, 'api.sqlite'));
-  const app = Fastify({ logger: false, bodyLimit: 65536 });
+  if(options.publicProfile){try{assertProvisionedPublicState(store.state,parsePublicDeployment(options.publicProfile.deployment()));}catch(error){store.close();releasePublicWriter();throw error;}}
+  const publicEffectiveLimits=new Map<string,number>();
+  if(options.publicProfile){try{const deployment=parsePublicDeployment(options.publicProfile.deployment());assertPublicQuotaAuthorizations(store.state,deployment);for(const code of store.state.codes)publicEffectiveLimits.set(code.id,effectivePublicRunLimit(dataDir,deployment,store.state,code));}catch(error){store.close();releasePublicWriter();throw error;}}
+  const effectiveRunLimit=(code:Code)=>options.publicProfile?(publicEffectiveLimits.get(code.id)??code.runLimit):code.runLimit;
+  const app = Fastify({ logger: false, bodyLimit: 65536,trustProxy:options.publicProfile?(options.trustedProxy??[]):false });
   const preview = Fastify({ logger: false, routerOptions: { maxParamLength: 4096 } });
   let busy = false; let closed = false;
+  let sharing:ReturnType<typeof registerSharing>;
+  const publicReady=async()=>{if(!options.publicProfile)return true;try{const d=parsePublicDeployment(options.publicProfile.deployment());if(d.expectedIsolation?.toolchainId!==(options.deliveryToolchainId??'toolchain_react_v1'))return false;return await publicIsolationReady(options.agentUrl,options.serviceToken,options.publicProfile);}catch{return false;}};
+  const codeActive=(codeId:string)=>{const c=store.state.codes.find(c=>c.id===codeId);return !!c&&!c.revoked&&Date.parse(c.expiresAt)>Date.now();};
   let delivery:ReturnType<typeof registerDelivery>;
   let coordination:ReturnType<typeof registerCoordination>|undefined;
   const loginAttempts = new Map<string, { since: number; count: number }>();
   const authHeaders = { authorization: `Bearer ${options.serviceToken}`, 'X-Atoms-Protocol-Version': PROTOCOL_VERSION, 'content-type': 'application/json' };
-  const cookie = (token: string, clear = false) => `atoms_session=${clear ? '' : token}; Path=/; HttpOnly; SameSite=Lax${options.secureCookies ? '; Secure' : ''}; Max-Age=${clear ? 0 : 604800}`;
+  const cookie = (token: string, clear = false, maxAge=604800) => `atoms_session=${clear ? '' : token}; Path=/; HttpOnly; SameSite=Lax${options.secureCookies||options.publicProfile ? '; Secure' : ''}; Max-Age=${clear ? 0 : maxAge}`;
   const emit = (projectId: string, runId: string | null, event: ProjectEventDto['event'], occurredAt = now()) => {
     const seq = store.state.events.filter((entry) => entry.projectId === projectId).at(-1)?.seq ?? 0;
     store.state.events.push({ protocolVersion: PROTOCOL_VERSION, projectId, runId, seq: seq + 1, occurredAt, event: structuredClone(event) });
@@ -89,7 +103,7 @@ export async function createApi(options: ApiOptions) {
   const codeFor = (session: SessionRecord) => store.state.codes.find((entry) => entry.id === session.codeId)!;
   const sessionDto = (session: SessionRecord) => {
     const code = codeFor(session); const records = store.state.runs.filter((entry) => entry.codeId === code.id);
-    return { id: session.id, expiresAt: session.expiresAt, quota: { projectLimit: code.projectLimit, runLimit: code.runLimit,
+    return { id: session.id, expiresAt: session.expiresAt, quota: { projectLimit: code.projectLimit, runLimit: effectiveRunLimit(code),
       projectsUsed: store.state.projects.filter((entry) => entry.codeId === code.id).length,
       runsReserved: records.filter((entry) => !entry.started && !terminal(entry.dto.status)).length,
       runsUsed: records.filter((entry) => entry.started).length } };
@@ -137,7 +151,7 @@ export async function createApi(options: ApiOptions) {
   const signedPreview = (versionId: string, expiresAt: string) => {
     const payload = Buffer.from(JSON.stringify({ versionId, exp: Date.parse(expiresAt) })).toString('base64url');
     const signature = createHmac('sha256', options.previewSecret).update(payload).digest('base64url');
-    return `${options.previewOrigin.replace(/\/$/, '')}/p/${payload}.${signature}/index.html`;
+    return `${(options.publicProfile?.deployment().previewOrigin??options.previewOrigin).replace(/\/$/, '')}/p/${payload}.${signature}/index.html`;
   };
   const freshVersion = (record: VersionRecord) => {
     const expiresAtMs = Date.parse(record.dto.previewExpiresAt);
@@ -146,7 +160,8 @@ export async function createApi(options: ApiOptions) {
     if (!Number.isFinite(expiresAtMs) || expiresAtMs - Date.now() < 60000
       || record.dto.previewUrl !== signedPreview(record.dto.id, record.dto.previewExpiresAt)) {
       // URL cache metadata only; no business revision/event changes.
-      const expiresAt = new Date(Math.ceil((Date.now() + 7200000) / 60000) * 60000).toISOString();
+      const owner=store.state.projects.find(p=>p.dto.id===record.dto.projectId);const code=owner&&store.state.codes.find(c=>c.id===owner.codeId);const limit=options.publicProfile?Math.min(Date.now()+(options.publicProfile.previewTtlSeconds??900)*1000,Date.parse(code?.expiresAt??'')):Math.ceil((Date.now()+7200000)/60000)*60000;
+      const expiresAt=new Date(limit).toISOString();
       record.dto = { ...record.dto, previewExpiresAt: expiresAt, previewUrl: signedPreview(record.dto.id, expiresAt) };
     }
     return record.dto;
@@ -158,25 +173,28 @@ export async function createApi(options: ApiOptions) {
 
   app.addHook('onRequest', async (request, reply) => {
     reply.header('X-Atoms-Protocol-Version', PROTOCOL_VERSION).header('X-Content-Type-Options', 'nosniff');
+    if(options.publicProfile)reply.header('Cache-Control','private, no-store');
     if (request.url.startsWith('/internal/')) {
       if (!safeSecretEqual(String(request.headers.authorization ?? ''), `Bearer ${options.serviceToken}`)) fail(401, 'UNAUTHENTICATED', 'Internal authentication required');
       return;
     }
+    if(options.publicProfile&&request.url.startsWith('/api/')){const deployment=options.publicProfile.deployment();if(!deployment.workbenchOrigin)fail(503,'RUNTIME_UNAVAILABLE','公开入口正在初始化');const selected=publicWorkbenchOrigin(deployment,request.headers.host);if(!selected)fail(403,'FORBIDDEN','Unexpected public host');if(['POST','DELETE','PUT','PATCH'].includes(request.method)&&request.headers.origin!==selected)fail(403,'FORBIDDEN','Exact workbench Origin required');if(!deployment.ready&&request.method!=='GET'&&request.method!=='HEAD'&&request.method!=='DELETE')fail(503,'RUNTIME_UNAVAILABLE','公开部署正在维护');}
     if (request.method === 'POST' && request.url === '/api/v1/sessions') {
       const current = loginAttempts.get(request.ip);
       if (!current || Date.now() - current.since >= 60000) loginAttempts.set(request.ip, { since: Date.now(), count: 1 });
       else {
         current.count++;
-        if (current.count > 20) { reply.header('Retry-After', '60'); fail(429, 'RATE_LIMITED', '体验码请求过于频繁，请稍后再试'); }
+        if (current.count > (options.publicProfile?5:20)) { reply.header('Retry-After', '60'); fail(429, 'RATE_LIMITED', '体验码请求过于频繁，请稍后再试'); }
       }
     }
     if (['POST', 'DELETE', 'PUT', 'PATCH'].includes(request.method)) {
       const origin = request.headers.origin;
       const permitted = options.allowedOrigins ?? [];
-      const ownOrigin = `${options.secureCookies ? 'https' : 'http'}://${request.headers.host}`;
+      const ownOrigin = `${options.secureCookies||options.publicProfile ? 'https' : 'http'}://${request.headers.host}`;
       if ((origin && origin !== ownOrigin && !permitted.includes(origin)) || (!origin && request.headers['sec-fetch-site'] === 'cross-site')) fail(403, 'FORBIDDEN', 'Cross-origin mutation denied');
     }
   });
+  app.addHook('preHandler',async request=>{if(!options.publicProfile||request.method!=='POST'||!/(?:\/runs|\/accept)$/.test(request.url))return;authorize(request);const input=(request.body as {input?:{kind?:string}}|undefined)?.input;if(request.url.endsWith('/messages')&&['status','sharing_help'].includes(input?.kind??''))return;if(!await publicReady())fail(503,'RUNTIME_UNAVAILABLE','隔离执行环境尚未通过当前策略验收');});
   app.setErrorHandler((error, _request, reply) => {
     const known = error instanceof HttpError;
     const validation = (error as Error).name === 'ZodError' || (error as { statusCode?: number }).statusCode === 400;
@@ -189,12 +207,13 @@ export async function createApi(options: ApiOptions) {
   app.get('/health', async () => ({ ready: true, protocolVersion: PROTOCOL_VERSION }));
   app.post('/api/v1/sessions', (request, reply) => {
     const body = RedeemCodeRequest.parse(request.body); const codeHash = hash(body.code);
+    if(options.publicProfile){const key='code:'+codeHash,current=loginAttempts.get(key);if(!current||Date.now()-current.since>=60000)loginAttempts.set(key,{since:Date.now(),count:1});else if(++current.count>5){reply.header('Retry-After','60');fail(429,'RATE_LIMITED','体验码登录过于频繁');}}
     return mutation(request, reply, `code_${codeHash}`, () => {
       const code = store.state.codes.find((entry) => entry.hash === codeHash && !entry.revoked && Date.parse(entry.expiresAt) > Date.now());
       if (!code) fail(401, 'UNAUTHENTICATED', '体验码无效或已过期');
       const token = randomBytes(32).toString('base64url');
-      const session = { id: id('session'), codeId: code!.id, tokenHash: hash(token), expiresAt: new Date(Date.now() + 604800000).toISOString() };
-      store.state.sessions.push(session); return { status: 201, body: sessionDto(session), cookie: cookie(token) };
+      const session = { id: id('session'), codeId: code!.id, tokenHash: hash(token), expiresAt: new Date(options.publicProfile?Math.min(Date.now()+(options.publicProfile.sessionTtlSeconds??3600)*1000,Date.parse(code!.expiresAt)):Date.now()+604800000).toISOString() };
+      store.state.sessions.push(session); return { status: 201, body: sessionDto(session), cookie: cookie(token,false,options.publicProfile?Math.max(0,Math.floor((Date.parse(session.expiresAt)-Date.now())/1000)):604800) };
     });
   });
   app.get('/api/v1/session', (request) => sessionDto(authorize(request)));
@@ -259,9 +278,9 @@ export async function createApi(options: ApiOptions) {
       const existing=metadata&&store.state.runs.find(r=>r.originTurnId===metadata.originTurnId&&r.dto.projectId===projectId);
       if(existing)return existing;
     CreateRunRequest.parse({prompt,mode});
-      const code=store.state.codes.find(c=>c.id===codeId)!;
+      const code=store.state.codes.find(c=>c.id===codeId)!;if(options.publicProfile&&!codeActive(codeId))fail(403,'FORBIDDEN','体验码已失效，未创建新任务');
       const records=store.state.runs.filter(r=>r.codeId===codeId);
-      if(records.filter(r=>r.started||!terminal(r.dto.status)).length>=code.runLimit)fail(403,'QUOTA_EXCEEDED','生成额度已用完');
+      if(records.filter(r=>r.started||!terminal(r.dto.status)).length>=effectiveRunLimit(code))fail(403,'QUOTA_EXCEEDED','生成额度已用完');
       const run = Run.parse({ id: id('run'), projectId, revision: 1, status: 'queued', phase: null,
         mode, baseVersionId: null, resultVersionId: null, executionId: null, pendingAttention: null,
         pendingAnswer: null, checks: [], createdAt: now(), updatedAt: now(), error: null });
@@ -318,7 +337,7 @@ export async function createApi(options: ApiOptions) {
     await delivery.restoreCheck(original);
     return mutation(request, reply, session.id, () => {
       if (project.dto.revision !== body.expectedProjectRevision || project.dto.activeRunId) fail(409, 'CONFLICT', '项目状态已变化或任务仍在执行');
-      const versionId = id('version'); const expiresAt = new Date(Date.now() + 7200000).toISOString();
+      const versionId = id('version'); const expiresAt = new Date(options.publicProfile?Math.min(Date.now()+(options.publicProfile.previewTtlSeconds??900)*1000,Date.parse(store.state.codes.find(c=>c.id===project.codeId)?.expiresAt??'')):Date.now()+7200000).toISOString();
       const dto: VersionDto = { ...original.dto, id: versionId, parentVersionId: project.dto.currentVersionId,
         restoredFromVersionId: original.dto.id, runId: null, summary: `恢复：${original.dto.summary}`, createdAt: now(),
         previewExpiresAt: expiresAt, previewUrl: signedPreview(versionId, expiresAt) };
@@ -371,6 +390,7 @@ export async function createApi(options: ApiOptions) {
   });
 
   const mediaType = (path: string) => ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2' }[extname(path)] ?? 'application/octet-stream');
+  preview.addHook('onRequest',async(_request,reply)=>{if(options.publicProfile)reply.header('Cache-Control','private, no-store');});
   preview.get('/p/:token/*', async (request, reply) => {
     const token = param(request, 'token'); const [payload, signature] = token.split('.');
     const expected = createHmac('sha256', options.previewSecret).update(payload ?? '').digest('base64url');
@@ -380,6 +400,7 @@ export async function createApi(options: ApiOptions) {
     if (!Number.isFinite(decoded.exp) || decoded.exp < Date.now()) return reply.code(403).send('Preview expired');
     const version = store.state.versions.find((entry) => entry.dto.id === decoded.versionId);
     if (!version) return reply.code(404).send('Preview not found');
+    if(options.publicProfile){const project=store.state.projects.find(p=>p.dto.id===version.dto.projectId);if(!project||!codeActive(project.codeId)||!options.publicProfile.deployment().ready)return reply.code(403).send('Preview capability revoked or unavailable');}
     const path = param(request, '*') || 'index.html';
     if (!RelativePath.safeParse(path).success || !version.manifest.files.some((entry) => entry.path === `dist/${path}`)) return reply.code(404).send('File not found');
     reply.header('X-Content-Type-Options', 'nosniff').header('Referrer-Policy', 'no-referrer');
@@ -436,7 +457,7 @@ export async function createApi(options: ApiOptions) {
         const project = store.state.projects.find((entry) => entry.dto.id === current.dto.projectId)!;
         if (current.dto.status === 'cancelling') { finish(current, 'cancelled'); return; }
         if (terminal(current.dto.status) || current.dto.executionId !== executionId || project.dto.activeRunId !== current.dto.id || project.dto.currentVersionId !== current.dto.baseVersionId) throw new Error('Publication fence mismatch');
-        const expiresAt = new Date(Date.now() + 7200000).toISOString();
+        const expiresAt = new Date(options.publicProfile?Math.min(Date.now()+(options.publicProfile.previewTtlSeconds??900)*1000,Date.parse(store.state.codes.find(c=>c.id===current.codeId)?.expiresAt??'')):Date.now()+7200000).toISOString();
         const version: VersionDto = { id: versionId, projectId: project.dto.id, parentVersionId: project.dto.currentVersionId,
           restoredFromVersionId: null, runId: current.dto.id, summary, checks: manifest.checks,
           previewUrl: signedPreview(versionId, expiresAt), previewExpiresAt: expiresAt, createdAt: now() };
@@ -496,13 +517,16 @@ export async function createApi(options: ApiOptions) {
   const tick = async () => {
     if (busy || closed) return; busy = true;
     try {
+      if(options.publicProfile)for(const record of store.state.runs.filter(r=>!terminal(r.dto.status)&&!codeActive(r.codeId)))store.transaction(()=>cancelRunCore(record));
       let runtimeReady = false;
       try { runtimeReady = Boolean((await (await runtime('/internal/v1/health')).json() as { ready: boolean }).ready); }
       catch {
         for (const record of store.state.runs.filter((entry) => !terminal(entry.dto.status))) reportRuntimeConnection(record.dto.id, false);
         // Existing work still retains its lock. A health error is not a stop confirmation.
       }
-      for (const project of runtimeReady ? store.state.projects : []) {
+      const isolationReady=options.publicProfile?await publicReady():true;
+      if(options.publicProfile)for(const record of store.state.runs.filter(r=>!terminal(r.dto.status)&&r.dto.status==='queued'&&!r.dto.executionId)){if(record.isolationWaiting===!isolationReady||(isolationReady&&!record.isolationWaiting))continue;store.transaction(()=>{record.isolationWaiting=!isolationReady;const message={id:id('message'),projectId:record.dto.projectId,runId:record.dto.id,role:'assistant' as const,status:'complete' as const,content:isolationReady?'隔离执行环境已就绪，将按原队列继续；没有重新调用项目 Router。':'正在等待当前隔离执行策略与环境验收就绪。修改意图已保存排队，尚未派发代码生成或消耗生成次数。',createdAt:now()};store.state.messages.push(message);emit(message.projectId,message.runId,{type:'message.updated',payload:message});});}
+      for (const project of runtimeReady&&isolationReady ? store.state.projects : []) {
         if (project.dto.activeRunId) continue;
         const record = store.state.runs.find((entry) => entry.dto.projectId === project.dto.id && entry.dto.status === 'queued' && !entry.dto.executionId);
         if (!record) continue;
@@ -528,7 +552,7 @@ export async function createApi(options: ApiOptions) {
       for (const reference of store.state.runs.filter((entry) => entry.dto.executionId && !terminal(entry.dto.status))) {
         let record = store.state.runs.find((entry) => entry.dto.id === reference.dto.id)!;
         const path = `/internal/v1/executions/${record.dto.executionId}`;
-        if(record.delivery){try{await delivery.tick(record,ingest,publish);reportRuntimeConnection(record.dto.id,true);}catch(error){if(transportError(error))reportRuntimeConnection(record.dto.id,false);else delivery.invalid(record,error);}continue;}
+        if(record.delivery){if(options.publicProfile&&record.dto.status!=='cancelling'&&!isolationReady&&(!record.delivery.prepareAccepted||record.delivery.stage==='executing'&&!record.delivery.executionAccepted))continue;try{await delivery.tick(record,ingest,publish);reportRuntimeConnection(record.dto.id,true);}catch(error){if(transportError(error))reportRuntimeConnection(record.dto.id,false);else delivery.invalid(record,error);}continue;}
         try {
           // PUT is an idempotent outbox delivery, including after response loss or API restart.
           await runtime(path, 'PUT', record.request);
@@ -555,6 +579,7 @@ export async function createApi(options: ApiOptions) {
     } finally { busy = false; }
   };
   const seedCode = (code: string, limits = { projectLimit: 3, runLimit: 10 }) => store.transaction(() => {
+    if(options.publicProfile)throw new Error('Public identity must be issued through stopped/drained offline administration');
     const existing = store.state.codes.find((entry) => entry.hash === hash(code)); if (existing) return existing.id;
     const record: Code = { id: id('code'), hash: hash(code), expiresAt: new Date(Date.now() + 604800000).toISOString(), revoked: false, ...limits };
     store.state.codes.push(record); return record.id;
@@ -562,9 +587,11 @@ export async function createApi(options: ApiOptions) {
   if (options.demoCode) seedCode(options.demoCode);
   delivery=registerDelivery({app,store,dataDir,agentUrl:options.agentUrl,serviceToken:options.serviceToken,toolchainId:options.deliveryToolchainId??'toolchain_react_v1',toolchain:options.deliveryToolchain,planningMode:options.deliveryPlanningMode,profileHint:options.deliveryProfileHint,id,now,hash,fail,authorize,ownRun,ownProject,ownVersion,updateRun,finish,
     message(record,content,time=now()){const message={id:id('message'),projectId:record.dto.projectId,runId:record.dto.id,role:'assistant' as const,status:'complete' as const,content,createdAt:time};store.state.messages.push(message);emit(message.projectId,message.runId,{type:'message.updated',payload:message},time);}});
+  sharing=registerSharing({app,store,profile:options.publicProfile,authorize,ownProject,ownVersion,fail,freshVersion,now});
   coordination=registerCoordination({app,store,agentUrl:options.agentUrl,serviceToken:options.serviceToken,id,now,hash,canonical,fail,
     delivery:options.legacyFixtureMode?undefined:delivery,
-    messageLimit:options.coordinationMessageLimit,messagesPerMinute:options.coordinationMessagesPerMinute,
+    codeActive:options.publicProfile?codeActive:undefined,deploymentFacts:()=>sharing.hostFacts(),
+    messageLimit:options.coordinationMessageLimit??(options.publicProfile?15:undefined),messagesPerMinute:options.coordinationMessagesPerMinute??(options.publicProfile?6:undefined),
     authorize,ownProject,ownRun,mutation,sessionDto,workspace:workspaceFor,createRun:createRunCore,cancelRun:cancelRunCore,
     versionInfo:freshVersion,
     emitMessage:(message)=>emit(message.projectId,message.runId,{type:'message.updated',payload:message})});
@@ -572,6 +599,6 @@ export async function createApi(options: ApiOptions) {
   const coordinationTimer=options.autoSchedule===false?null:setInterval(()=>{void coordination!.tick();},options.pollMs??500);
   timer?.unref();
   coordinationTimer?.unref();
-  const close = async () => { closed = true; if (timer) clearInterval(timer);if(coordinationTimer)clearInterval(coordinationTimer);await coordination!.close(); while (busy) await new Promise((resolve) => setTimeout(resolve, 10)); await app.close(); await preview.close(); store.close(); };
+  const close = async () => {if(closed)return; closed = true; if (timer) clearInterval(timer);if(coordinationTimer)clearInterval(coordinationTimer);await coordination!.close(); while (busy) await new Promise((resolve) => setTimeout(resolve, 10)); await app.close(); await preview.close(); store.close();releasePublicWriter(); };
   return { app, preview, tick, tickCoordination:()=>coordination!.tick(), close, seedCode, store };
 }

@@ -1,0 +1,16 @@
+ARG NODE_BASE=docker.io/library/node@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb
+FROM ${NODE_BASE}
+LABEL atoms.owner="atoms-v03" atoms.role="trusted-agent"
+RUN npm install --global --ignore-scripts --registry=https://registry.npmjs.org pnpm@10.33.0
+WORKDIR /app
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY apps/agent/package.json apps/agent/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter @atoms/agent... --registry=https://registry.npmjs.org
+COPY packages/contracts packages/contracts
+COPY apps/agent apps/agent
+RUN mkdir -p /var/lib/atoms-v03-agent /run/provider-secret && chown -R 1000:1000 /var/lib/atoms-v03-agent /run/provider-secret && chmod 0700 /run/provider-secret
+USER 1000:1000
+ENV AGENT_HOST=0.0.0.0 AGENT_PORT=4100 AGENT_EXECUTION_BACKEND=docker_linux AGENT_DATA_DIR=/var/lib/atoms-v03-agent
+WORKDIR /app/apps/agent
+CMD ["node","--import","tsx","src/main.ts"]

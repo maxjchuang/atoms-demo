@@ -6,6 +6,7 @@ import { SourceExportManifest, CleanBuildReport, canonicalDeliveryJson, type Fro
 import { safeFile, putFile, sha256, listFiles } from './files.js';
 import { fingerprints, inventoryHash, seal, assertSealed } from './delivery-files.js';
 import { verifyApplication } from './verify.js';
+import { StopUnconfirmedError } from './isolation/client.js';
 import { assertControlledSource } from './source-policy.js';
 import { runBrowserPlan } from './browser-dsl.js';
 
@@ -50,7 +51,8 @@ async function install(workspace: string, home: string, signal: AbortSignal) {
   });
 }
 /** ZIP bytes, then external export manifest, then clean report: no self-referential archive. */
-export async function exportAndVerify(options: { workspace: string; root: string; bundle: FrozenDeliveryBundleDto; signal: AbortSignal; activity: (text: string) => void }) {
+export type IsolatedClean = (options:{workspace:string;evidenceDir:string;bundle:FrozenDeliveryBundleDto;exported:ReturnType<typeof SourceExportManifest.parse>;startedAt:string;signal:AbortSignal})=>Promise<{clean:ReturnType<typeof CleanBuildReport.parse>;evidence:Evidence[]}>;
+export async function exportAndVerify(options: { isolatedClean?:IsolatedClean; workspace: string; root: string; bundle: FrozenDeliveryBundleDto; signal: AbortSignal; activity: (text: string) => void }) {
   const { workspace, root, bundle, signal } = options; const toolchain = bundle.binding.toolchain;
   const files = await fingerprints(workspace, 'source/'); const sourceHash = inventoryHash(files);
   if (files.find((entry) => entry.path === 'source/package.json')?.sha256 !== toolchain.packageJsonHash
@@ -70,7 +72,7 @@ export async function exportAndVerify(options: { workspace: string; root: string
     archive: { id: `archive_${bundle.binding.executionId}`, sha256: sha256(archive), bytes: archive.length }, createdAt: new Date().toISOString() }));
   return { exported, archive: Buffer.from(archive), ...await verifyArchive({ ...options, exported, archive }) };
 }
-export async function verifyArchive(options: { root: string; bundle: FrozenDeliveryBundleDto; exported: ReturnType<typeof SourceExportManifest.parse>; archive: Uint8Array; signal: AbortSignal; activity: (text: string) => void }) {
+export async function verifyArchive(options: { isolatedClean?:IsolatedClean; root: string; bundle: FrozenDeliveryBundleDto; exported: ReturnType<typeof SourceExportManifest.parse>; archive: Uint8Array; signal: AbortSignal; activity: (text: string) => void }) {
   const { root, bundle, exported, signal, activity } = options; const startedAt = new Date().toISOString();
   const cleanRoot = path.join(root, 'clean'); const workspace = path.join(cleanRoot, 'source'); const evidenceDir = path.join(root, 'evidence', 'clean'); await mkdir(evidenceDir, { recursive: true }); await mkdir(cleanRoot, { recursive: true });
   const notRun = () => ({ status: 'not_run' as const, evidenceIds: [] as string[], reason: 'A prior clean export stage failed.' });
@@ -89,6 +91,7 @@ export async function verifyArchive(options: { root: string; bundle: FrozenDeliv
     }
     before = inventoryHash(await fingerprints(workspace, 'source/')); if (before !== exported.sourceSnapshotHash) throw new Error('Extracted source inventory mismatch');
     await assertControlledSource(workspace);
+    if(options.isolatedClean)return await options.isolatedClean({workspace,evidenceDir,bundle,exported,startedAt,signal});
     activity('开始从精确导出 ZIP 的独立目录安装公开依赖；禁用生命周期脚本。');
     const installed = await install(workspace, path.join(root, 'clean-home'), signal); await writeFile(path.join(evidenceDir, 'install.log'), installed.log);
     stages.install = { status: installed.success ? 'passed' : 'failed', evidenceIds: ['clean_install'], reason: installed.success ? null : 'Frozen independent install failed.' } as never;
@@ -98,6 +101,7 @@ export async function verifyArchive(options: { root: string; bundle: FrozenDeliv
     if (!verified.errors) { activity('开始在干净导出构建中重跑同一冻结浏览器计划。'); const behavior = await runBrowserPlan({ dist: path.join(workspace, 'dist'), plan: bundle.plan, evidenceDir, signal }); results = behavior.caseResults; if (behavior.interrupted) { await writeFile(path.join(evidenceDir, 'browser-budget.log'), 'Clean frozen browser validation exceeded its bounded budget or was cancelled.'); stages.smoke = { status: 'failed', evidenceIds: ['clean_browser-budget'], reason: 'Clean browser verification was interrupted.' } as never; } }
     after = inventoryHash(await fingerprints(workspace, 'source/')); const distFiles = await fingerprints(path.join(workspace, 'dist'), 'dist/'); distHash = inventoryHash(distFiles);
   } catch (error) {
+    if(error instanceof StopUnconfirmedError)throw error;
     const message = error instanceof Error ? error.message : 'Clean export failed'; await writeFile(path.join(evidenceDir, 'failure.log'), message);
     if (stages.install.status === 'not_run') { await writeFile(path.join(evidenceDir, 'install.log'), message); stages.install = { status: 'failed', evidenceIds: ['clean_install'], reason: message } as never; }
   }

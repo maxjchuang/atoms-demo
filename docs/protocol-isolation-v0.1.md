@@ -1,14 +1,14 @@
-# Isolation capabilities v0.1.0 — G0 frozen
+# Isolation capabilities v0.2.0 — G0 frozen
 
 Scope is only API↔Agent readiness. Existing execution/conversation/delivery strict DTOs, plans, budgets, report/ZIP semantics and publication fences are unchanged. Broker operations remain Agent-owned private implementation; no shared Docker/command/mount/lease API is introduced here.
 
-`GET /internal/isolation/v1/capabilities` requires the existing API↔Agent service Bearer and request/response header `X-Atoms-Isolation-Version: 0.1.0`. Model API keys and broker tokens must never be used for this authentication. No host public port or public gateway route exposes the endpoint. Authentication/version errors use the existing error envelope; unsafe/unavailable isolation returns HTTP200 with `ready:false` and fixed reason codes.
+`GET /internal/isolation/v1/capabilities` requires the existing API↔Agent service Bearer and request/response header `X-Atoms-Isolation-Version: 0.2.0`. Model API keys and broker tokens must never be used for this authentication. No host public port or public gateway route exposes the endpoint. Authentication/version errors use the existing error envelope; unsafe/unavailable isolation returns HTTP200 with `ready:false` and fixed reason codes.
 
 The strict shared module `@atoms/contracts/isolation` defines exactly:
 
 | Field | Shape |
 | --- | --- |
-| protocolVersion | `0.1.0` |
+| protocolVersion | `0.2.0` |
 | backend | `host_local` or `docker_linux` |
 | ready | boolean |
 | reasonCodes | unique fixed codes: HOST_BACKEND_UNSAFE / DOCKER_UNAVAILABLE / IMAGE_MISSING / POLICY_MISMATCH / CACHE_INVALID / PROBE_NOT_PASSED / CAPACITY_UNAVAILABLE |
@@ -16,7 +16,7 @@ The strict shared module `@atoms/contracts/isolation` defines exactly:
 | imageDigest | `sha256:` plus64 lowercase hex, nullable |
 | policyHash / cacheHash | SHA256, nullable |
 | probeRevision | existing ID syntax, nullable |
-| platform | `linux/arm64`, nullable |
+| platform | `linux/arm64` or `linux/amd64`, nullable |
 
 `ready:true` requires docker_linux, all six environment/probe fields present and no reasons. host_local is never ready, must have HOST_BACKEND_UNSAFE and all Docker metadata null. Every nonready response has a nonempty reason list. Unknown fields/values/digests/platforms are rejected. Synthetic ready fixture proves wire validation only; it is not an actual Docker probe result.
 
@@ -31,3 +31,11 @@ Root independently reviewed this module and passed contracts check plus 90/90 in
 ### Independent Router lane and generation admission
 
 Normal healthy single-job occupancy does not invalidate the proven isolation tuple or set `CAPACITY_UNAVAILABLE`; that code is for an actually unavailable/unhealthy supported capacity. Trusted project coordination, including natural-language ask/consultation and progress, uses the independent M1 Router lane and remains authenticated, code-expiry/coordination-budget/rate-limited but is not blocked by job OS readiness. It does not run untrusted source. Direct Run/proposal accept generation admission still checks current readiness. An auto Router change may persist a bounded proposal/queued intent under existing authorization/quotas; reservation is not billable work. Without the current matching proof, the API must not dispatch Prepare/Worker or consume generation-used. Recovery resumes the same queued identity/outbox only; it never reruns Router inference, adds a new model retry or resets budgets. Queue waiting messages must state the isolation wait truthfully, not pretend code generation started or the healthy Router service disconnected.
+
+### Independent job lifetime and UID roles
+
+The untrusted Linux job image uses a read-only native PID-namespace init watchdog as UID/GID **10002**, while the broker always executes the fixed compiler/browser runner as UID/GID **10001**. Both remain nonroot with no capabilities; `Config.User=10002:10002` describes the watchdog, not the business runner. Policy/evidence must record both roles. At immutable lease creation the broker fixes one absolute epoch deadline and puts it into the created container; upload, start retries and reconciliation never renew it. PID 1 converts the remaining duration once to an absolute kernel `timerfd(CLOCK_BOOTTIME)` expiration and exits 124 at expiry, causing the kernel to terminate the namespace even if the broker and Docker CLI stay dead. The source/image and these UID/deadline settings participate in the current policy/image/probe bindings. Actual acceptance includes broker death without restart, worker signal/priority/scheduler/ptrace/process-memory interference, CPU pressure, and expiration; a broker-side JavaScript timeout alone is insufficient. This is a private execution-policy clarification, with no change to the strict shared capability DTO.
+
+## Native AMD64 extension (v0.2.0)
+
+The isolated readiness module now exports IsolationPlatform with two exact native Linux platforms. Version0.1.0 is rejected; consumers must update request/response version checks together. Existing execution/conversation/delivery DTOs remain unchanged. Both platform fixtures are synthetic wire cases, not OS proof; actual daemon, image and runtime architecture must agree and each platform requires its own fresh eleven-gate proof. No ARM proof or emulated run can certify AMD64.

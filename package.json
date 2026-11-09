@@ -3,7 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "packageManager": "pnpm@10.33.0",
-  "engines": { "node": ">=24.9.0" },
+  "engines": {
+    "node": ">=24.9.0"
+  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "dev:demo": "node scripts/dev.mjs --demo",
@@ -17,6 +19,34 @@
     "test:coordination": "pnpm --filter @atoms/contracts exec tsx ../../tests/integration/coordination-loop.mjs",
     "test:coordination:real": "pnpm --filter @atoms/contracts exec tsx ../../tests/integration/coordination-loop.mjs --real",
     "test:delivery": "pnpm --filter @atoms/contracts exec tsx ../../tests/integration/delivery-loop.mjs",
-    "test:delivery:real": "pnpm --filter @atoms/contracts exec tsx ../../tests/integration/delivery-loop.mjs --real"
+    "test:delivery:real": "pnpm --filter @atoms/contracts exec tsx ../../tests/integration/delivery-loop.mjs --real",
+    "m3:build": "node scripts/m3-build.mjs",
+    "m3:preflight": "node scripts/m3-public.mjs preflight",
+    "m3:initialize": "node scripts/m3-public.mjs initialize",
+    "m3:up": "node scripts/m3-public.mjs up",
+    "m3:issue-code": "node scripts/m3-public.mjs issue-code",
+    "m3:revoke-code": "node scripts/m3-public.mjs revoke-code",
+    "m3:origins:apply": "node scripts/m3-public.mjs origins:apply",
+    "m3:state": "node scripts/m3-public.mjs state",
+    "m3:drain": "node scripts/m3-public.mjs drain",
+    "m3:down": "node scripts/m3-public.mjs down",
+    "m3:test-context": "node scripts/m3-test-context.mjs",
+    "m3:test": "pnpm --filter @atoms/api exec tsx ../../scripts/m3-check.mjs",
+    "m3:test-unit": "node --test deploy/m3/gateway.test.mjs scripts/m3-lib.test.mjs scripts/m3-runtime-mode.test.mjs",
+    "m3:clean-check": "node scripts/m3-clean-check.mjs",
+    "m3:certify": "node scripts/m3-certify.mjs",
+    "m3:tunnels": "node scripts/m3-tunnels.mjs",
+    "m3:smoke-real": "pnpm --filter @atoms/api exec tsx ../../scripts/m3-smoke-real.mjs",
+    "m3:test-stage2": "node --test scripts/m3-stage2.test.mjs",
+    "m3:build-connector": "node scripts/m3-build-connector.mjs",
+    "m3:test-connector": "node --test scripts/m3-docker-transport.test.mjs",
+    "m3:probe-connector-network": "node scripts/m3-connector-probe.mjs",
+    "m3:handoff": "node --import tsx scripts/m3-handoff.mjs",
+    "ops": "./atoms",
+    "ops:start": "./atoms start",
+    "ops:stop": "./atoms stop",
+    "ops:restart": "./atoms restart",
+    "ops:status": "./atoms status",
+    "test:ops": "node --test scripts/atoms-ops*.test.mjs scripts/m3-reset-code.test.mjs"
   }
 }

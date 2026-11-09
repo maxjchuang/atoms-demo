@@ -117,4 +117,56 @@ Preparation JSON and model DSL-schema errors now share the same single structure
 
 Fresh DSH planning now explicitly refines Seed requirements into derived criteria (`r*` refs with `sourceSeedRefs`), with opaque IDs and required flags filled by the host. It retains original canonical Seed criteria and uses the frozen shared conservative parent projection; manual/unsupported children remain visible and cannot become automatic. Full Goal preservation, one coverage per derived criterion and two-way case edges are validated before freeze. Existing completed host-profile/seed-only model results replay unchanged. See [DERIVED-CRITERIA-DESIGN.md](DERIVED-CRITERIA-DESIGN.md) for the exact internal format, six-core-behavior-plus-human local fixture and compatibility boundaries.
 
-The isolated controlled-repair smoke tool is ready for supervisor review: [CONTROLLED-REPAIR.md](CONTROLLED-REPAIR.md). `smoke:controlled:repair -- --fake` rehearses 6 fixture cases without a provider; guarded real mode imports the reviewed original V4 **8-case/70-step/15-required** source/plan, creates one separate host_profile Run and asks the real Worker only for repair after a recorded controlled persistence failure. Constructor-only callbacks have no main/env/wire activation. No real repair has been run yet; it must not be inferred from Fake success or the earlier three first-pass real CodeRuns.
+The isolated controlled-repair smoke tool is ready for supervisor review: [CONTROLLED-REPAIR.md](CONTROLLED-REPAIR.md). `smoke:controlled:repair -- --fake` rehearses 6 fixture cases without a provider; guarded real mode imports the reviewed original V4 **8-case/70-step/15-required** source/plan, creates one separate host_profile Run and asks the real Worker only for repair after a recorded controlled persistence failure. Constructor-only callbacks have no main/env/wire activation. The supervisor subsequently ran the single bounded real controlled-repair gate successfully; its immutable evidence/usage is recorded in CONTROLLED-REPAIR.md. It is distinct from Fake rehearsal and the three original first-pass CodeRuns.
+
+### M3 Docker execution (local gates; public deployment is a separate API gate)
+
+Set `AGENT_EXECUTION_BACKEND=docker_linux`, `BROKER_URL=http://broker:4310`, and `AGENT_BROKER_TOKEN_FILE=/run/agent-secrets/broker-token`. The Agent must not have the Docker socket. Broker runs `node --import tsx src/isolation/broker.ts`, with its own `AGENT_BROKER_TOKEN_FILE`, `BROKER_DATA_DIR=/var/lib/atoms-v03-broker`, `JOB_IMAGE=atoms-v03-job:linux-v1` and Docker access. Trusted images use UID 1000; the fixed isolated runner uses UID 10001 and its independent native PID1 watchdog uses UID 10002. `Dockerfile.control` and `Dockerfile.broker` start Node directly so TERM reaches the service. Secret files may also supply `ATOMS_SERVICE_TOKEN_FILE` and, only for explicitly authorized real runs, `DEEPSEEK_API_KEY_FILE=/run/provider-secret/provider-key`; use a separate provider-only volume mounted solely into the trusted model Agent. Fake mode never reads the provider file.
+
+Build only new `atoms-v03-*` images, from an explicit source-only context:
+
+```sh
+pnpm --filter @atoms/agent exec tsx src/isolation/build-job-image.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/build-control-images.ts
+```
+
+The following administrator-only tests do not load `.env`, call a model, or contact public app services. Run sequentially (the development VM has about 5.77 GiB RAM):
+
+```sh
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-policy-job.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-browser.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-offline.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-runtime.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-broker.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-resources.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-canaries.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-runtime-cancel.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-runtime-restart.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-deadline.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-watchdog.ts
+pnpm --filter @atoms/agent exec tsx src/isolation/smoke-services.ts
+```
+
+The capability endpoint stays `ready:false` until a privileged certification command runs all actual gates in the broker environment and atomically persists matching image/policy/cache/probe evidence:
+
+```sh
+BROKER_DATA_DIR=/var/lib/atoms-v03-broker node --import tsx src/isolation/certify.ts --certify
+```
+
+This is not an HTTP feature or an environment switch that declares success. Drain broker jobs first. A changed image/policy/cache, missing/tampered proof, or unconfirmed stop fails closed; a healthy occupied job slot leaves readiness stable. Use `show-capabilities.ts` with the private service token file to read the shared typed response. The private probe constructor is restricted to explicit Fake test harnesses; production `main.ts` exposes no bypass.
+
+Linux clean export extracts the **exact source ZIP** into a fresh private job, installs from the image-bound verified offline pnpm store with frozen lock and scripts disabled, then typechecks/builds and runs the same frozen DSL in a separate sandboxed browser job. This is an offline-store Linux mode, not a claim of live network installation. The archive keeps its public registry lock and remains independently installable. No platform node_modules or host compiler/browser fallback is used.
+
+主管最终独立复验：Agent check、78/78全量（120.9s）及build通过；实际Docker绝对deadline与trusted service TERM/stop/文件凭证边界分别在Gk8MYc、82K5TR通过。其余独立Linux/原DSL/精确ZIP、资源、真实跨plane/peer canary、HTTP取消、Broker及Agent强杀恢复记录见项目M3状态。部署内certifier与API最终拓扑/公网仍须后续验收，不把这些本地证据称G5。
+
+The certifier pins the inspected image ID into every child `JOB_IMAGE`, and uses private `BROKER_DATA_DIR/certifier-tmp` scratch instead of the small service `/tmp`. It never forwards model credentials, broker tokens, or arbitrary Node options. Allow at least 2 GiB free broker-data space and 100k inodes; compiler installs and caches remain in bounded per-job tmpfs, not operator scratch. Its current matrix has 11 gates including independent watchdog expiry.
+
+独立watchdog补修后主管重新通过check、完整80/80（125.7s）及build。新image精确digest下，Broker永不恢复/权限与CPU干扰watchdog正例QHC6q4、FakeRuntime→原6DSL修复→精确ZIPclean ee6nuh、当前job policy gHZVXh由主管独立通过；旧78项/旧镜像证据保留为历史，不代替当前认证。当前operator policy入口使用smoke-policy-job.ts；早期Node probe image脚本只保留历史来源。部署broker认证仍须实际执行，readiness不由此文字设置。
+
+A zero-prompt DSH startup check is available as `node --import tsx src/smoke-dsh-initialize.ts --synthetic`. Run it only in a fresh network-none trusted-Agent oneoff with readonly root, cap-drop ALL, UID1000, fresh writable HOME/data/scratch and **no** provider/service-token volumes or credential env. It starts the SDK handshake and closes it without calling `run` or sending a prompt; no `.env`/credential file is read. All production SDK adapters fix the native loader cache off so native code loads from the trusted readonly image while `/tmp` stays noexec.
+
+Structured Worker generation/repair now fixes `reasoningEffort=off` and disabled thinking, using the same trusted no-tools/off patch as Preparation; project Router stays low. The former low Worker max-token/zero-visible-text result is preserved as failed evidence. Retry affordability snapshots numeric usage before each await, and does not accept a zero/unmeasured delta as a free request. Model/provider and total Run budgets are unchanged. Zero-network regressions: `tsx --test test/worker-retry-budget.test.ts test/dsh-native-env.test.ts test/model-observation.test.ts`.
+
+Future verification attempts retain private immutable `executions/<executionId>/source-snapshots/attempt_N/source/**` plus a canonical manifest before checks. They use the exact existing `source/` inventory hash and existing 1,000-file / Run artifact-byte bounds, with at most `maxRepairRounds+1` snapshots; they do not lower valid source capacity to 50 files or 1 MiB. Native/credential paths fail closed; node_modules/native SDK homes/keys are never copied. Replays verify existing bytes and never overwrite. These are not public evidence/download paths, and older failed attempts are never reconstructed retrospectively.
+
+Browser failures now carry bounded JSON in existing expected/actual strings: locator match count, up to 3 tag/role/test-ID summaries, count/text/value samples (256 chars), baseline/actual box and displacement, plus the declared drag target's center hit. DOM data is untrusted; no model JavaScript, arbitrary selector or URL is evaluated. Each string is <=1,800 chars; logs are capped at 64 KiB/case and 256 KiB total. Worker receives the exact frozen Spec and Plan once, with explicit untrusted repair observations; generic hook guidance preserves static business identity while avoiding hooks invented from transient test input.

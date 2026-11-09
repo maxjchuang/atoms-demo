@@ -1,0 +1,34 @@
+ARG PLAYWRIGHT_BASE=mcr.microsoft.com/playwright@sha256:f1e7e01021efd65dd1a2c56064be399f3e4de00fd021ac561325f2bfbb2b837a
+ARG NODE_BASE=docker.io/library/node@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb
+FROM ${NODE_BASE} AS pinned-node
+FROM pinned-node AS watchdog-build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+COPY watchdog.c watchdog-probe.c /build/
+RUN gcc -O2 -Wall -Wextra -Werror /build/watchdog.c -o /watchdog && gcc -O2 -Wall -Wextra -Werror /build/watchdog-probe.c -o /watchdog-probe && chmod 0555 /watchdog /watchdog-probe
+FROM ${PLAYWRIGHT_BASE}
+COPY --from=pinned-node /usr/local/bin/node /usr/local/bin/node
+COPY --from=pinned-node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm && ln -sf /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npm install --global --ignore-scripts --registry=https://registry.npmjs.org pnpm@10.33.0
+WORKDIR /opt/runner
+COPY job-package.json ./package.json
+COPY job-lock.yaml ./pnpm-lock.yaml
+RUN pnpm install --frozen-lockfile --ignore-workspace --ignore-pnpmfile --ignore-scripts --registry=https://registry.npmjs.org --config.enable-global-virtual-store=false
+COPY template/ /opt/template/
+RUN cd /opt/template && pnpm install --frozen-lockfile --ignore-workspace --ignore-pnpmfile --ignore-scripts --registry=https://registry.npmjs.org --store-dir=/opt/offline-store --config.enable-global-virtual-store=false --config.package-import-method=copy
+# Static dependency/browser permission layer: never invalidate for dynamic verifier/source edits.
+RUN chmod -R a+rX /ms-playwright /opt/offline-store /opt/template /opt/runner
+COPY contracts/ /opt/runner/node_modules/@atoms/contracts/
+COPY verifier/ /opt/verifier/
+COPY job.ts /opt/runner/
+COPY --from=watchdog-build /watchdog /watchdog-probe /opt/runner/
+RUN ln -s /opt/runner/node_modules /opt/verifier/node_modules && ln -s /opt/template/node_modules/typescript /opt/runner/node_modules/typescript
+RUN chmod -R a+rX /opt/verifier /opt/runner/node_modules/@atoms/contracts && chmod a+r /opt/runner/job.ts && chmod a+rx /opt/runner/watchdog /opt/runner/watchdog-probe
+USER 10002:10002
+WORKDIR /job
+ENV HOME=/job/home TMPDIR=/tmp NODE_ENV=development
+ENTRYPOINT ["/opt/runner/watchdog"]
+
+ARG SOURCE_HASH
+LABEL atoms.owner="atoms-v03" atoms.role="untrusted-job" atoms.source-hash=$SOURCE_HASH

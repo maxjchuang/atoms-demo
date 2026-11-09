@@ -1,0 +1,126 @@
+name: atoms-m3-public
+x-safe: &safe
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: ['/tmp:rw,nosuid,nodev,size=128m']
+  pids_limit: 128
+  logging: {driver: local, options: {max-size: 5m, max-file: '2'}}
+services:
+  api:
+    <<: *safe
+    stop_grace_period: 30s
+    image: ${M3_API_IMAGE:?Run the owned image build first}
+    mem_limit: 512m
+    cpus: 1
+    environment:
+      NODE_ENV: production
+      ATOMS_PUBLIC_DEMO: '1'
+      API_HOST: 0.0.0.0
+      API_PORT: '3001'
+      PREVIEW_PORT: '3002'
+      API_DATA_DIR: /data/api
+      AGENT_URL: http://agent:4100
+      M3_DEPLOYMENT_FILE: /run/m3/deployment.json
+      M3_TRUST_PROXY: 172.31.93.2
+      ATOMS_SERVICE_TOKEN_FILE: /run/api-secrets/service-token
+      PREVIEW_SECRET_FILE: /run/api-secrets/preview-secret
+      M2_TOOLCHAIN_ID: ${M3_TOOLCHAIN_ID:-toolchain_unconfigured}
+    volumes: [api-data:/data/api, api-secrets:/run/api-secrets:ro, config:/run/m3:ro]
+    networks: {control: {ipv4_address: 172.31.93.3}}
+  agent:
+    <<: *safe
+    image: ${M3_AGENT_IMAGE:?Use the Agent-owned control image}
+    mem_limit: 1g
+    cpus: 1
+    environment:
+      NODE_ENV: production
+      AGENT_HOST: 0.0.0.0
+      AGENT_PORT: '4100'
+      AGENT_MODE: ${M3_RUNTIME_MODE:-fake}
+      COORDINATOR_MODE: ${M3_RUNTIME_MODE:-fake}
+      AGENT_EXECUTION_BACKEND: docker_linux
+      AGENT_DATA_DIR: /var/lib/atoms-v03-agent
+      API_INTERNAL_URL: http://api:3001
+      BROKER_URL: http://broker:4310
+      ATOMS_SERVICE_TOKEN_FILE: /run/agent-secrets/service-token
+      AGENT_BROKER_TOKEN_FILE: /run/agent-secrets/broker-token
+      DEEPSEEK_API_KEY_FILE: /run/provider-secret/provider-key
+    volumes: [agent-data:/var/lib/atoms-v03-agent, agent-secrets:/run/agent-secrets:ro, provider-secret:/run/provider-secret:ro]
+    networks: {control: {ipv4_address: 172.31.93.4}}
+  broker:
+    <<: *safe
+    image: ${M3_BROKER_IMAGE:?Use the Agent-owned restricted broker image}
+    group_add: ['${M3_DOCKER_GID:-0}']
+    mem_limit: 256m
+    cpus: 0.5
+    environment:
+      NODE_ENV: production
+      BROKER_HOST: 0.0.0.0
+      BROKER_PORT: '4310'
+      BROKER_DATA_DIR: /var/lib/atoms-v03-broker
+      JOB_IMAGE: ${M3_JOB_IMAGE:?Use the pinned Agent-owned job image}
+      AGENT_BROKER_TOKEN_FILE: /run/broker-secrets/broker-token
+    volumes: [broker-data:/var/lib/atoms-v03-broker, broker-secrets:/run/broker-secrets:ro, /var/run/docker.sock:/var/run/docker.sock]
+    networks: {control: {ipv4_address: 172.31.93.5}}
+  workbench-gateway:
+    <<: *safe
+    image: ${M3_GATEWAY_IMAGE:?Run the owned gateway build first}
+    mem_limit: 128m
+    cpus: 0.5
+    environment: {M3_GATEWAY_ROLE: workbench, M3_DEPLOYMENT_FILE: /run/m3/deployment.json, M3_PAUSED_FILE: /run/m3/paused, M3_UPSTREAM: 'http://api:3001/'}
+    volumes: [config:/run/m3:ro]
+    ports: ['127.0.0.1:18080:8080']
+    networks: {control: {ipv4_address: 172.31.93.2}, edge: {aliases: [workbench-gateway]}}
+  preview-gateway:
+    <<: *safe
+    image: ${M3_GATEWAY_IMAGE:?Run the owned gateway build first}
+    mem_limit: 128m
+    cpus: 0.5
+    environment: {M3_GATEWAY_ROLE: preview, M3_DEPLOYMENT_FILE: /run/m3/deployment.json, M3_UPSTREAM: 'http://api:3002/'}
+    volumes: [config:/run/m3:ro]
+    ports: ['127.0.0.1:18081:8080']
+    networks: {control: {ipv4_address: 172.31.93.6}, edge: {aliases: [preview-gateway]}}
+  admin:
+    <<: *safe
+    profiles: [admin]
+    image: ${M3_API_IMAGE:?Run the owned image build first}
+    command: [pnpm, --filter, '@atoms/api', exec, tsx, ../../deploy/m3/bootstrap-runtime.mjs, state]
+    environment:
+      NODE_ENV: production
+      M3_ADMIN_OFFLINE: '1'
+      API_DATA_DIR: /data/api
+      AGENT_URL: http://agent:4100
+      M3_DEPLOYMENT_FILE: /run/m3/deployment.json
+    volumes: [api-data:/data/api, api-secrets:/run/api-secrets, config:/run/m3, admin-code:/run/admin-code]
+    networks: [control]
+  bootstrap:
+    <<: *safe
+    profiles: [admin]
+    image: ${M3_API_IMAGE:?Run owned API build first}
+    network_mode: none
+    environment: {API_DATA_DIR: /data/api, M3_DEPLOYMENT_FILE: /run/m3/deployment.json}
+    command: [pnpm, --filter, '@atoms/api', exec, tsx, ../../deploy/m3/bootstrap-runtime.mjs, initialize]
+    volumes: [api-data:/data/api, api-secrets:/run/api-secrets, agent-secrets:/run/agent-secrets, broker-secrets:/run/broker-secrets, config:/run/m3]
+  agent-key-ingress:
+    <<: *safe
+    profiles: [admin]
+    image: ${M3_AGENT_IMAGE:?Use reviewed trusted Agent image}
+    network_mode: none
+    entrypoint: [node]
+    command: [--version]
+    volumes: [provider-secret:/var/lib/atoms-v03-agent]
+networks:
+  edge: {driver: bridge, labels: {atoms.owner: atoms-v03, atoms.role: connector-edge}}
+  control: {ipam: {config: [{subnet: 172.31.93.0/28}]}}
+volumes:
+  api-data: {labels: {atoms.owner: atoms-v03}}
+  agent-data: {labels: {atoms.owner: atoms-v03}}
+  broker-data: {labels: {atoms.owner: atoms-v03}}
+  api-secrets: {labels: {atoms.owner: atoms-v03}}
+  provider-secret: {labels: {atoms.owner: atoms-v03}}
+  agent-secrets: {labels: {atoms.owner: atoms-v03}}
+  broker-secrets: {labels: {atoms.owner: atoms-v03}}
+  config: {labels: {atoms.owner: atoms-v03}}
+  admin-code: {labels: {atoms.owner: atoms-v03}}

@@ -1,0 +1,64 @@
+#!/usr/bin/env node
+import {fileURLToPath,pathToFileURL} from 'node:url';
+import {dirname,resolve,join} from 'node:path';
+import {DEFAULT_PRIVATE_DIR,readSettings,operationId,mutationPlan,withOpsLock,openJournal,runOperation,publicOutput,fixedDockerEnvironment} from './atoms-ops-lib.mjs';
+export const ROOT=resolve(dirname(fileURLToPath(import.meta.url)),'..');
+export const HELP=`Usage: ./atoms <command> [options]
+  start                  Start/repair owned services and missing tunnels
+  stop [--all]           Stop five app services; --all also stops tunnels
+  restart [--all]        Restart apps; --all explicitly refreshes CF domains
+  status | details       Read sanitized deployment and readiness status
+  code new [--builds N] [--ttl-seconds N] [--code-file PATH]
+  code reset --code-file PATH [--builds N]
+  code info --code-file PATH
+  backup | config | help
+Options: --config FILE --dry-run --operation-id ID
+Code new/reset default to 10 remaining builds (1..100). Reset preserves used/history.
+TTL defaults to 86400 seconds, maximum 86400. Code files are private; code text is never printed.
+Keep the printed operation ID to resume the same operation without another quota reset.
+No operation creates a CodeRun or invokes a model. Readiness uses existing proof, not a new OS certification.`;
+export function parseArgs(argv){
+  const words=[],flags={};const boolean=new Set(['--dry-run','--all']);const valued=new Set(['--config','--operation-id','--code-file','--builds','--ttl-seconds']);
+  for(let n=0;n<argv.length;n++){const a=argv[n];if(a==='--help'||a==='-h')return{command:'help',options:{}};if(a.startsWith('-')){if(Object.hasOwn(flags,a))throw Error('Duplicate option '+a);if(boolean.has(a))flags[a]=true;else if(valued.has(a)){if(!argv[n+1]||argv[n+1].startsWith('--'))throw Error('Missing value for '+a);flags[a]=argv[++n];}else throw Error('Unknown option '+a);}else words.push(a);}
+  if(!words.length)words.push('help');if(words[0]==='code'&&words[1]==='create')words[1]='new';const command=words.join(' ');
+  if(!['help','config','start','stop','restart','status','details','code new','code reset','code info','backup'].includes(command))throw Error('Unknown command; use ./atoms help');
+  const allowed=new Set(['--config']);if(['start','stop','restart','code new','code reset','backup'].includes(command)){allowed.add('--dry-run');allowed.add('--operation-id');}if(['stop','restart'].includes(command))allowed.add('--all');if(command.startsWith('code '))allowed.add('--code-file');if(['code new','code reset'].includes(command))allowed.add('--builds');if(command==='code new')allowed.add('--ttl-seconds');for(const key of Object.keys(flags))if(!allowed.has(key))throw Error(key+' is not valid for '+command);
+  const integer=(name,fallback,max)=>{const raw=flags[name];if(raw===undefined)return fallback;if(!/^[1-9][0-9]*$/.test(raw)||Number(raw)>max)throw Error(name+' must be an integer from 1 to '+max);return Number(raw);};
+  const options={all:!!flags['--all'],dryRun:!!flags['--dry-run'],configFile:flags['--config'],operationId:flags['--operation-id'],codeFile:flags['--code-file']?resolve(flags['--code-file']):undefined};
+  if(['code new','code reset'].includes(command))options.builds=integer('--builds',10,100);
+  if(command==='code new')options.ttlSeconds=integer('--ttl-seconds',86400,86400);
+  if(['code reset','code info'].includes(command)&&!options.codeFile)throw Error('--code-file is required');
+  if(options.operationId!==undefined)operationId(options.operationId);
+  return{command,options};
+}
+export async function main(argv=process.argv.slice(2),{runtimeFactory,output=console.log,errorOutput=console.error}={}){
+  let parsed;try{parsed=parseArgs(argv);}catch(error){errorOutput(error.message);return 1;}
+  const{command,options}=parsed;if(command==='help'){output(HELP);return 0;}
+  let settings;try{settings=await readSettings(options.configFile?resolve(options.configFile):join(DEFAULT_PRIVATE_DIR,'ops-config.json'),ROOT,{optional:!options.configFile});}catch{errorOutput('Invalid private JSON configuration; expected owned 0600 file with dockerContext/privateDir/project/ngrokBinary/ngrokTokenFile fields.');return 1;}
+  if(command==='config'){output(JSON.stringify(settings,null,2));return 0;}
+  const mutation=!['status','details','code info'].includes(command);
+  if(mutation){options.operationId=operationId(options.operationId);if(command==='code new'&&!options.codeFile)options.codeFile=join(settings.privateDir,'codes',options.operationId+'.txt');}
+  if(options.dryRun){output(JSON.stringify(mutationPlan(command,options),null,2));return 0;}
+  if(mutation)output(JSON.stringify({operationId:options.operationId,resume:'Repeat the same command with this --operation-id and identical options.'}));
+  let stage=mutation?'operation_lock':'runtime_init',activeJournal;
+  const execute=async()=>{
+    stage='runtime_init';
+    // Drop inherited Docker endpoint/TLS overrides before importing any adapter.
+    const env=fixedDockerEnvironment(settings);for(const k of ['DOCKER_HOST','DOCKER_CONTEXT','DOCKER_TLS_VERIFY','DOCKER_CERT_PATH','DOCKER_CONFIG','DOCKER_API_VERSION','DOCKER_TLS','BUILDX_BUILDER'])delete process.env[k];process.env.DOCKER_CONTEXT=env.DOCKER_CONTEXT;
+    const factory=runtimeFactory??(await import('./atoms-ops-runtime.mjs')).createRuntime;
+    const runtime=await factory(settings);
+    const parameters={command,all:options.all,codeFile:options.codeFile??null,builds:options.builds??null,ttlSeconds:options.ttlSeconds??null,settings};
+    stage=mutation?'journal_open':'read_status';
+    activeJournal=mutation?await openJournal(settings,options.operationId,parameters):undefined;
+    stage=mutation?'operation':command==='code info'?'read_code_info':'read_status';
+    const result=await runOperation(runtime,settings,command,options,activeJournal);output(JSON.stringify(publicOutput(result),null,2));
+  };
+  try{if(mutation)await withOpsLock(settings,execute);else await execute();return 0;}catch(error){
+    const categories={ENOENT:'REQUIRED_PATH_OR_EXECUTABLE_MISSING',EACCES:'ACCESS_DENIED',EPERM:'ACCESS_DENIED',ECONNREFUSED:'CONNECTION_REFUSED',ETIMEDOUT:'CONNECTION_TIMEOUT',ERR_MODULE_NOT_FOUND:'RUNTIME_MODULE_UNAVAILABLE'};
+    const errorCode=Object.hasOwn(categories,error?.code??'')?categories[error.code]:error instanceof SyntaxError?'MANAGEMENT_DATA_INVALID':'OPERATION_FAILED';
+    const phase=activeJournal?.record.phase;
+    const journalPhase=['created','backup','provision','reset','completed'].includes(phase)?phase:undefined;
+    errorOutput(JSON.stringify({error:'Operation failed; no automatic retry or force was performed.',errorCode,stage,journalPhase,dockerContext:settings.dockerContext,project:settings.project,operationId:options.operationId??null,recoveryRequired:!!error?.recoveryRequired,hints:['Check ./atoms config.',`Check Docker availability with: docker --context ${settings.dockerContext} info.`,...(mutation?[`Inspect private operation records in ${join(settings.privateDir,'ops-journal')}; resume only the same operation ID with identical parameters.`]:['Check configured privateDir and its owned 0700 permissions.'])]}));return 1;
+  }
+}
+if(process.argv[1]&&pathToFileURL(resolve(process.argv[1])).href===import.meta.url)process.exitCode=await main();

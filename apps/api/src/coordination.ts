@@ -18,7 +18,7 @@ type Result = {status:number;body?:unknown;cookie?:string};
 type NewRunOptions = {sourceMessageId:string;originTurnId:string;proposalId:string;exactBaseVersionId?:string|null};
 export interface CoordinationHost {
   app:FastifyInstance; store:Store; agentUrl:string; serviceToken:string;
-  messageLimit?:number; messagesPerMinute?:number;delivery?:ReturnType<typeof registerDelivery>;
+  codeActive?:(id:string)=>boolean;canDispatch?:()=>Promise<boolean>;deploymentFacts?:()=>StartCoordinationRequestDto['context']['facts']['deployment'];messageLimit?:number; messagesPerMinute?:number;delivery?:ReturnType<typeof registerDelivery>;
   id:(prefix:string)=>string; now:()=>string; hash:(input:string|Uint8Array)=>string; canonical:(value:unknown)=>string;
   fail:(status:number,code:string,message:string)=>never;
   authorize:(request:FastifyRequest)=>SessionRecord;
@@ -38,6 +38,8 @@ const runTerminal = (status:string)=>['succeeded','failed','cancelled','interrup
 export function registerCoordination(host:CoordinationHost) {
   const {app,store,id,now,fail}=host;
   const state=()=>store.state.coordination;
+  const deploymentFacts=()=>host.deploymentFacts?.()??{scope:'local_only' as const,publicDeployment:false};
+  const deploymentHelp=()=>deploymentFacts().publicDeployment?'宿主已配置临时公网分享入口。应用版本链接需点击分享按钮即时获取；创作入口仍需体验码。临时地址不保证长期可用，外部验收状态以分享卡回执为准。':deploymentFacts().scope==='unavailable'?'公开入口暂未就绪，当前没有可用公网分享链接。稍后由宿主恢复，不会因此创建任务。':'当前服务仅在本机运行，公网部署和分享验收尚未完成。可下载源码后自行部署；本机预览不是他人可访问的公网链接。';
   let busy=false; let closing=false;
   const coordEvent=(projectId:string,turnId:string|null,event:ConversationEventDto['event'],occurredAt=now())=>{
     const seq=state().events.filter(e=>e.projectId===projectId).at(-1)?.seq??0;
@@ -179,7 +181,7 @@ export function registerCoordination(host:CoordinationHost) {
           if(runTerminal(target.dto.status))fail(409,'CONFLICT','任务已结束，不需要停止');
           resolution={kind:'cancel_run',runId:target.dto.id,expectedRevision:target.dto.revision,requiresExplicitAction:true};
         }else resolution={kind:'view_run',runId:target.dto.id};
-      }else resolution={kind:'deployment_help',message:'当前服务仅在本机运行，公网部署和分享验收尚未完成。可下载源码后自行部署；本机预览不是他人可访问的公网链接。'};
+      }else resolution={kind:'deployment_help',message:deploymentHelp()};
       return {status:200,body:ResolveActionResponse.parse({turnId:record.dto.id,actionId:action.id,resolution})};
     });
   });
@@ -329,7 +331,7 @@ export function registerCoordination(host:CoordinationHost) {
       conversationRevision:state().revisions[project.dto.id]??0,contextVersionId:basis?.dto.id??null,asOf:now(),hash:'0'.repeat(64),
       facts:{project:{id:project.dto.id,title:project.dto.title},currentVersionId:project.dto.currentVersionId,
         versions:versions.map(({dto:v})=>({id:v.id,summary:v.summary,createdAt:v.createdAt,checks:v.checks.map(c=>({kind:c.kind,status:c.status}))})),
-        runs,availableActions:actions,deployment:{scope:'local_only',publicDeployment:false}},projectMemory:memoryView,recentMessages:recent,
+        runs,availableActions:actions,deployment:deploymentFacts()},projectMemory:memoryView,recentMessages:recent,
       pendingClarifications:state().clarifications.filter(c=>c.projectId===project.dto.id&&c.status==='open'),
       relevantProposals:state().proposals.filter(p=>p.projectId===project.dto.id&&(p.status==='open'||(record.operation.kind==='proposal_refresh'&&p.id===record.operation.proposalId))),
       ...(basis&&allowedPaths.length?{sourceArtifact:{versionId:basis.dto.id,artifactId:basis.artifactId,manifestSha256:host.hash(basis.manifestRaw),allowedPaths}}:{})};
@@ -408,6 +410,7 @@ export function registerCoordination(host:CoordinationHost) {
         if(!record.request!.context.facts.deployment.publicDeployment&&/(?:已(?:经)?(?:公开|公网)?(?:部署|上线|发布)|可(?:以)?(?:直接)?(?:公网|外网|公开)访问|https?:\/\/)/i.test(text)){
           text='宿主部署事实：当前应用仅在本机服务预览，尚未完成公网部署。可以下载源码；给他人公网访问需要后续部署，不能把本机地址当作公网链接。';
         }
+        if(deploymentFacts().publicDeployment&&/(?:https?:\/\/|永久|永不失效)/i.test(text))text=deploymentHelp();
         outcome={kind:'consult',replyMessageId:replyId,contextUsed:result.contextUsed,references:result.references};
       }
     }else if(result.kind==='clarify'){
@@ -490,6 +493,8 @@ export function registerCoordination(host:CoordinationHost) {
         state().turns.find(t=>t.dto.projectId===projectId&&!terminal(t.dto.status))!.dto.id);
       for(const turnId of ids){
         let record=state().turns.find(t=>t.dto.id===turnId)!;
+        if(host.codeActive&&!host.codeActive(record.codeId)&&!terminal(record.dto.status)){store.transaction(()=>{if(!record.request)updateTurn(record,{status:'cancelled',completedAt:now()});else{record.cancelCommand??={commandId:id('command')};updateTurn(record,{status:'cancelling'});}});if(terminal(record.dto.status))continue;}
+        if(host.canDispatch&&!record.request&&record.dto.status!=='cancelling'&&!(record.operation.kind==='message'&&['status','sharing_help'].includes(record.operation.input.kind))&&!await host.canDispatch())continue;
         try{
           if(!record.request){
             try{store.transaction(()=>{boundRequest(record);});}
@@ -500,7 +505,7 @@ export function registerCoordination(host:CoordinationHost) {
             store.transaction(()=>{record.started=true;updateTurn(record,{status:'processing',startedAt:now()});
               const context=record.request!.context;const input=record.operation.kind==='message'?record.operation.input:null;
               if(input?.kind==='status')settle(record,{kind:'status',answer:context.facts.runs.length?'已读取项目任务状态。':'当前没有构建任务。',observations:context.facts.runs.filter(r=>input.targetRunId?r.id===input.targetRunId:true),contextUsed:usedContext(record.request!),references:[],memoryUpdates:[]});
-              else settle(record,{kind:'consult',answer:'当前预览仅在本机服务可用，尚未完成公网部署。可以下载源码；分享给别人需要后续部署步骤。',contextUsed:usedContext(record.request!),references:context.facts.availableActions.filter(a=>a.kind==='source_download').map(a=>({kind:'available_action' as const,actionId:a.id})),memoryUpdates:[]});
+              else settle(record,{kind:'consult',answer:deploymentHelp(),contextUsed:usedContext(record.request!),references:context.facts.availableActions.filter(a=>a.kind==='source_download').map(a=>({kind:'available_action' as const,actionId:a.id})),memoryUpdates:[]});
             });continue;
           }
           const path=record.deliveryRequest?`/internal/delivery/v1/coordination-turns/${turnId}`:`/internal/v2/coordination-turns/${turnId}`;

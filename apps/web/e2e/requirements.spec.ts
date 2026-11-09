@@ -7,9 +7,9 @@ async function seed(page: Page, scenario = 'three-ask', options = {}) {
     const post = async (path: string, body: unknown) => { const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `test_${crypto.randomUUID()}` }, body: JSON.stringify(body) }); if (!response.ok) throw new Error(`Mock seed ${response.status}`); return response.json(); };
     await post('/api/v1/sessions', { code: 'atoms-demo-2026' }); const project = await post('/api/v1/projects', { title: '累计需求审阅 Mock' }); await post('/__mock/requirements/seed', { projectId: project.id, scenario, ...options }); return project.id as string;
   }, { scenario, options });
-  await page.goto(`/#/projects/${projectId}`); await page.reload(); await expect(page.getByTestId('requirements-panel')).toBeVisible(); return projectId;
+  await page.goto(`/#/projects/${projectId}`); await page.reload(); await expect(page.locator('.current-run-strip')).toBeVisible(); await page.locator('.requirements-audit>summary').click(); await expect(page.getByTestId('requirements-panel')).toBeVisible(); await expect(page.getByText('正在读取权威需求快照…',{exact:true})).toHaveCount(0); for(const summary of await page.locator('.complete-summary-review>summary').all()) await summary.click(); return projectId;
 }
-const panel = (page: Page) => page.getByTestId('requirements-panel');
+const panel = (page: Page) => page.locator('.coordination-scroll');
 async function stats(page: Page, projectId: string) { return page.evaluate(async id => (await fetch(`/__mock/requirements/${id}/stats`)).json(), projectId); }
 async function latestRun(page: Page, projectId: string) { return page.evaluate(async id => (await (await fetch(`/api/v1/projects/${id}/workspace`)).json()).latestRun, projectId); }
 
@@ -101,7 +101,7 @@ for (const policy of ['latest', 'exact'] as const) for (const basis of ['publish
       for (const summary of data[projectId].view.pendingSummaries) { summary.proposal.basePolicy = { kind: 'exact_version', expectedBaseVersionId: summary.snapshot.base.kind === 'empty_project' ? null : summary.snapshot.base.versionId }; summary.hash = await requirementHash(summary); }
       localStorage.setItem(key, JSON.stringify(data));
     }, projectId);
-    await page.reload();
+    await page.reload(); await page.locator('.complete-summary-review>summary').first().click();
   }
   const copy = panel(page).locator('.summary-baseline-copy').first();
   if (policy === 'latest') { await expect(copy).toContainText(basis === 'empty' ? '审阅时尚无已发布应用' : '审阅时基于已发布版本'); await expect(copy).toContainText('开始构建时使用届时最新成功版本，无则使用模板'); await expect(copy).not.toContainText('精确锁定'); }
@@ -111,7 +111,7 @@ for (const policy of ['latest', 'exact'] as const) for (const basis of ['publish
 
 test('published base is explicit and corrupt authority fails closed instead of restoring old accept', async ({ page }) => {
   await seed(page, 'published'); await expect(panel(page)).toContainText('基于已发布版本'); await expect(panel(page)).toContainText('源码可用'); await expect(panel(page)).not.toContainText('尚无已发布应用或源码');
-  await seed(page, 'corrupt'); await expect(panel(page).getByRole('alert')).toContainText('指纹不一致'); await expect(panel(page).getByRole('button', { name: '接受完整方案并创建构建' })).toHaveCount(0); await expect(page.getByRole('button', { name: '接受提案并创建构建', exact: true })).toBeDisabled();
+  await seed(page, 'corrupt'); await expect(page.locator('.requirements-audit').getByRole('alert')).toContainText('指纹不一致'); await expect(panel(page).getByRole('button', { name: '接受完整方案并创建构建' })).toHaveCount(0); await expect(page.getByRole('button', { name: '接受提案并创建构建', exact: true })).toHaveCount(0);
 });
 
 test('budget PLAN_REVIEW_REQUIRED prepares review draft, never pays or creates a Run by navigation', async ({ page }) => {

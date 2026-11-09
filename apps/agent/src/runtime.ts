@@ -39,7 +39,7 @@ import { DeliveryExecutionRuntime } from './delivery-execution.js';
 
 type RuntimeBody = ReturnType<typeof RuntimeEvent.parse>;
 type CheckValue = ReturnType<typeof Check.parse>;
-export type RecordValue = {repairController?:RepairControllerState;
+export type RecordValue = {repairController?:RepairControllerState;failureDiagnosis?:{kind:'replan_tests'|'environment';summary:string;revisions?:{caseId:string;stepId:string;fact:string;suggestion:string}[];sourceHash:string|null;specHash:string|null;planHash:string|null};
   isolationGeneration?: string; isolationPending?: boolean; isolationCancelRequested?: boolean;
   usageKnown?: boolean; pendingModelRequest?: boolean; usageObservationVersion?: 'settled-request-v1';
   executionBackend?:'host_local'|'docker_linux';recovery?: RecoveryExecutionRequestDto; recoveryInitialFeedback?:string|null; delivery?: DeliveryExecutionRequestDto;
@@ -312,12 +312,24 @@ export class AgentRuntime {
         if (controller.signal.aborted) throw new Error('Execution aborted');
         if (errors && !item.repairClaimed) {
           if (item.repairRoundsUsed >= item.request.budget.maxRepairRounds) throw new HttpError(422, 'VERIFICATION_FAILED', '验证失败且修复次数已用完：' + errors.slice(-1000));
-          item.repairRoundsUsed++; item.repairClaimed = true; this.persist();
+          // The existing Worker call may ask a question; only accepted code consumes a repair round.
         }
         this.update(item, { phase: errors ? 'repairing' : 'generating' });
         this.emit(item, { type: 'phase.changed', payload: { phase: errors ? 'repairing' : 'generating' } });
         await begin(errors?'repair':'generate');if(item.delivery)this.deliveryEngine!.validateFrozen(item);
-        const generated = await this.adapter.generate(context, item.plan, errors || item.recoveryInitialFeedback || undefined);
+        let generated = await this.adapter.generate(context, item.plan, errors || item.recoveryInitialFeedback || undefined);
+        if(typeof generated!=='string'&&item.delivery){const after=await binding();if(after.sourceHash!==item.repairController!.entries.at(-1)!.binding.sourceHash){await finish({outcome:'failed',failure:failure('trust',[],[])});throw new HttpError(422,'VERIFICATION_FAILED','A diagnosis/question cannot apply source edits');}}
+        if(typeof generated!=='string'&&generated.kind!=='question'){
+          const refs=await binding();item.failureDiagnosis={...generated,sourceHash:refs.sourceHash,specHash:refs.specHash,planHash:refs.planHash};this.persist();
+          const category=generated.kind==='replan_tests'?'replan_required':'infrastructure';await finish({outcome:'failed',failure:failure(category,generated,[])});
+          context.report(generated.kind==='replan_tests'?'当前验收需要重新规划：'+generated.summary+'。原计划未修改；请使用显式重新规划入口，确认后新Code需新的构建额度。':'模型提出环境诊断：'+generated.summary+'。未继续改代码，需宿主核对环境。');
+          throw Object.assign(new HttpError(422,'VERIFICATION_FAILED',generated.kind==='replan_tests'?'验收解释需要重新规划，原任务未修改测试或源码；新方案需显式确认。':'环境诊断需要核对，未继续源码修复。'),{controllerCategory:category});
+        }
+        if(typeof generated==='string'&&errors&&!item.repairClaimed){item.repairRoundsUsed++;item.repairClaimed=true;this.persist();}
+        if(typeof generated==='string'&&errors&&item.delivery&&item.repairRoundsUsed<item.request.budget.maxRepairRounds&&item.ordinaryQuestions<COORDINATION_DEFAULTS.maxOrdinaryRunQuestions&&budget().known&&(budget().remaining.outputTokens??0)>0&&budget().remaining.modelSteps>0){
+          const after=await binding();const previous=item.repairController!.entries.at(-1)!.binding.sourceHash;
+          if(after.sourceHash===previous){item.repairClaimed=false;generated={kind:'question',title:'请补充期望的实际表现',description:'自动修复尚未产生可验证进展。请用使用场景补充实现细节；回答只用于原有验收。若需改变目标或测试，请使用重新规划入口，确认后新Code需要构建额度。',options:[],allowText:true};}
+        }
         const generationDecision=await finish({outcome:typeof generated==='string'?'passed':'question'});
         if(generationDecision?.action==='stop')throw new HttpError(422,generationDecision.reason==='usage_unknown'?'BUDGET_EXCEEDED':'VERIFICATION_FAILED',generationDecision.reason==='usage_unknown'?'模型用量未知，控制器已停止后续验证或推理。':'修复未改变源码或重复已失败源码，已停止无进展循环。');
         if(typeof generated==='string')item.recoveryInitialFeedback=null;

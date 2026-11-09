@@ -1,3 +1,5 @@
+import {atomicLedger} from './atomic-ledger.js';
+import {beginControllerEffect,finishControllerEffect,failureFingerprint,validateController,type RepairControllerState,type BudgetObservation} from './repair-controller.js';
 import { compilePlanningRecipes, recipePlanningPrompt, recipeCompilationReceipt } from './planning-recipes.js';
 import { inspectPlanningCandidate, combinedPlanIssues, savePlanningProposal, safePlanFailure } from './planning-diagnostics.js';
 import { verifiedSemanticSource, reviewPlanSemantics, type SemanticSource } from './planning-semantics.js';
@@ -27,7 +29,7 @@ import { parseModelJson, StructuredOutputError } from './structured-output.js';
 export class DeliveryError extends Error { constructor(readonly status: number, readonly code: string, message: string) { super(message); } }
 type PlanResult = ReturnType<typeof ProposedDeliveryPlan.parse>;
 type PlanEvent = ReturnType<typeof PlanningSourceEvent.parse>;
-type PlanRecord = { usageObservationVersion?: 'settled-request-v1'; usageKnown?: boolean; pendingModelRequest?: boolean; settledUsage?: { inputTokens: number; outputTokens: number }; request: PrepareDeliveryPlanRequestDto; hash: string; snapshot: PlanPreparationSnapshotDto; events: PlanEvent[];
+type PlanRecord = {repairController?:RepairControllerState; usageObservationVersion?: 'settled-request-v1'; usageKnown?: boolean; pendingModelRequest?: boolean; settledUsage?: { inputTokens: number; outputTokens: number }; request: PrepareDeliveryPlanRequestDto; hash: string; snapshot: PlanPreparationSnapshotDto; events: PlanEvent[];
   commands: Record<string, string>; report: ReturnType<typeof DeliveryReport.parse> | null };
 const ended = (status: string) => ['completed', 'failed', 'cancelled', 'interrupted'].includes(status);
 const now = () => new Date().toISOString();
@@ -150,12 +152,12 @@ export class DeliveryPlanningRuntime {
     mkdirSync(options.dataDir, { recursive: true }); this.file = path.join(options.dataDir, 'preparations.json');
     this.adapter = options.adapter || (options.mode === 'fake' ? new FakePlanningAdapter() : new DshPlanningAdapter(options));
     if (existsSync(this.file)) for (const record of JSON.parse(readFileSync(this.file, 'utf8')) as PlanRecord[]) {
-      this.records.set(record.request.preparationId, record);
+      if(record.repairController)validateController(record.repairController,{requestHash:record.hash,toolchainHash:sha256(canonicalDeliveryJson(record.request.toolchain))});this.records.set(record.request.preparationId, record);
       if (record.snapshot.status === 'running') { if (record.usageObservationVersion === 'settled-request-v1' && record.pendingModelRequest) { record.usageKnown = false; record.snapshot.usage.inputTokens = null; record.snapshot.usage.outputTokens = null; } this.fail(record, 'interrupted', 'EXECUTION_INTERRUPTED', 'Readonly preparation interrupted; explicit new authorized Run is required.'); }
       else if (record.snapshot.status === 'accepted') this.schedule(record);
     }
   }
-  private persist() { writeFileSync(this.file + '.tmp', JSON.stringify([...this.records.values()])); renameSync(this.file + '.tmp', this.file); }
+  private persist() { atomicLedger(this.file,[...this.records.values()]); }
   private emit(record: PlanRecord, event: PlanEvent['event']) { record.snapshot.lastSourceSeq = record.events.length + 1; record.snapshot.updatedAt = now();
     record.events.push(PlanningSourceEvent.parse({ protocolVersion: '0.1.0', preparationId: record.request.preparationId,
       runId: record.request.runId, executionId: record.request.executionId, sourceSeq: record.snapshot.lastSourceSeq, occurredAt: now(), event })); this.persist(); }
@@ -196,23 +198,31 @@ export class DeliveryPlanningRuntime {
         if (record.snapshot.usage.modelSteps > record.request.planningBudget.maxModelSteps || (record.settledUsage?.inputTokens || 0) > record.request.planningBudget.maxInputTokens
           || (record.settledUsage?.outputTokens || 0) > record.request.planningBudget.maxOutputTokens) { controller.abort('budget'); throw new Error('Planning budget exceeded'); }
       } };
+    const budget=():BudgetObservation=>({known:record.usageKnown!==false&&!record.pendingModelRequest,used:{modelSteps:record.snapshot.usage.modelSteps,inputTokens:record.usageKnown===false?null:record.settledUsage?.inputTokens??0,outputTokens:record.usageKnown===false?null:record.settledUsage?.outputTokens??0,activeMs:Date.now()-startedAt},remaining:{modelSteps:record.request.planningBudget.maxModelSteps-record.snapshot.usage.modelSteps,inputTokens:record.usageKnown===false?null:record.request.planningBudget.maxInputTokens-(record.settledUsage?.inputTokens??0),outputTokens:record.usageKnown===false?null:context.remainingOutput(),activeMs:context.remainingActiveMs!()},repairUsed:0,repairLimit:0});
+    const binding=(result?:{spec:{hash:string};plan:{hash:string}})=>({sourceHash:record.request.input.kind==='version'?record.request.input.manifestSha256:null,specHash:result?.spec.hash??null,planHash:result?.plan.hash??null,bindingHash:null,toolchainHash:sha256(canonicalDeliveryJson(record.request.toolchain)),requestHash:record.hash});
+    let effect:string|null=null;
     try {
       await mkdir(context.directory, { recursive: true }); let result;
       if (record.request.planningMode === 'host_profile') {
+        effect=beginControllerEffect(record,'prepare_plan',binding(),budget(),()=>this.persist());
         const trusted = this.options.trustedHostPlan;
         if (trusted && record.request.profileHint?.id === trusted.id) {
           if (record.request.profileHint.hash !== trusted.hash) throw new DeliveryError(409, 'BINDING_MISMATCH', 'Trusted captured profile fingerprint changed');
           result = await trusted.prepare(record.request); context.report('可信测试使用已绑定的 captured host_profile；准备阶段未调用模型，原步骤与 required 不变。');
         } else result = await profileProposal(record.request, record.request.profileHint!.id);
+        finishControllerEffect(record,effect,'prepare_plan',binding(result),budget(),{outcome:'passed'},()=>this.persist());effect=null;
       }
       else for (let retry = 0; ; retry++) {
         const attemptStartedAt = Date.now(); const outputBefore = record.settledUsage?.outputTokens ?? 0;
-        try { result = await this.adapter.plan(context); break; }
+        try { effect=beginControllerEffect(record,'prepare_plan',binding(),budget(),()=>this.persist());result = await this.adapter.plan(context);finishControllerEffect(record,effect,'prepare_plan',binding(result),budget(),{outcome:'passed'},()=>this.persist());effect=null;break; }
         catch (error) {
-          if (!(error instanceof StructuredOutputError || error instanceof ModelPlanSchemaError) || retry >= record.request.planningBudget.maxStructuredRetries) throw error;
-          const admission = structuredRetryAdmission({ usageKnown: record.usageKnown !== false, remainingMs: context.remainingActiveMs!(), remainingOutputTokens: context.remainingOutput(), remainingModelSteps: record.request.planningBudget.maxModelSteps - record.snapshot.usage.modelSteps,
-            previousMs: Date.now() - attemptStartedAt, previousOutputTokens: (record.settledUsage?.outputTokens ?? 0) - outputBefore });
-          if (!admission.allowed) { await writeModelDiagnostic(context.directory, { stage: 'retry_skipped', role: 'delivery-planning', id: record.request.preparationId, ...(error instanceof ModelPlanSchemaError ? { errorClass: 'SchemaError' as const, issues: error.issues } : structuredDiagnostic(error)), errorCategory: admission.reason, remaining: { activeMs: context.remainingActiveMs!(), outputTokens: context.remainingOutput() }, usageKnown: record.usageKnown !== false }); throw new DeliveryError(422, 'BUDGET_EXCEEDED', 'Insufficient measured remaining budget for another structured planning request.'); }
+          const format=error instanceof StructuredOutputError||error instanceof ModelPlanSchemaError;
+          const canRetry=format&&retry<record.request.planningBudget.maxStructuredRetries;
+          const admission=canRetry?structuredRetryAdmission({usageKnown:record.usageKnown!==false,remainingMs:context.remainingActiveMs!(),remainingOutputTokens:context.remainingOutput(),remainingModelSteps:record.request.planningBudget.maxModelSteps-record.snapshot.usage.modelSteps,previousMs:Date.now()-attemptStartedAt,previousOutputTokens:(record.settledUsage?.outputTokens??0)-outputBefore}):null;
+          const category=record.usageKnown===false?'usage_unknown':controller.signal.aborted||canRetry&&admission&&!admission.allowed?'budget':format?'plan_format':error instanceof DeliveryError&&['BINDING_MISMATCH','INVALID_REQUEST','FORBIDDEN'].includes(error.code)?'trust':'infrastructure';
+          const decision=effect?finishControllerEffect(record,effect,'prepare_plan',binding(),budget(),{outcome:'failed',failure:{category,fingerprint:failureFingerprint(category,error instanceof ModelPlanSchemaError?error.issues.map(i=>({code:i.code,path:i.path})):[]),evidenceRefs:['planning-diagnostics']}},()=>this.persist(),record.request.planningBudget.maxStructuredRetries-retry):null;effect=null;
+          if(canRetry&&admission&&!admission.allowed){await writeModelDiagnostic(context.directory,{stage:'retry_skipped',role:'delivery-planning',id:record.request.preparationId,...(error instanceof ModelPlanSchemaError?{errorClass:'SchemaError' as const,issues:error.issues}:structuredDiagnostic(error)),errorCategory:admission.reason,remaining:{activeMs:context.remainingActiveMs!(),outputTokens:context.remainingOutput()},usageKnown:record.usageKnown!==false});throw new DeliveryError(422,'BUDGET_EXCEEDED','Insufficient measured remaining budget for another structured planning request.');}
+          if(!format||decision?.action!=='retry_plan'||!canRetry)throw error;
           context.formatFeedback = error instanceof ModelPlanSchemaError ? { kind: 'dsl_schema_invalid', details: error.issues } : { kind: 'json_syntax', details: structuredDiagnostic(error) };
           context.report(`计划${error instanceof ModelPlanSchemaError ? ' DSL 字段不符合严格协议' : ' JSON 不完整'}，进行一次受同一总预算约束的结构化重试（${retry+1}/${record.request.planningBudget.maxStructuredRetries}）。`);
         }
@@ -227,6 +237,7 @@ export class DeliveryPlanningRuntime {
     } catch (error) {
       await this.adapter.close(record.request.preparationId).catch(() => {});
       if (record.usageObservationVersion === 'settled-request-v1' && record.pendingModelRequest) context.markUsageUnknown!();
+      if(effect){const category=record.usageKnown===false?'usage_unknown':controller.signal.aborted?'budget':error instanceof DeliveryError&&['BINDING_MISMATCH','INVALID_REQUEST','FORBIDDEN'].includes(error.code)?'trust':'infrastructure';finishControllerEffect(record,effect,'prepare_plan',binding(),budget(),{outcome:'failed',failure:{category,fingerprint:failureFingerprint(category,[]),evidenceRefs:[]}},()=>this.persist());effect=null;}
       record.snapshot.usage.activeMs = Date.now() - startedAt;
       this.fail(record, controller.signal.reason === 'cancel' || this.closed ? 'cancelled' : 'failed',
         controller.signal.reason === 'budget' || (error instanceof DeliveryError && error.code === 'BUDGET_EXCEEDED') ? 'BUDGET_EXCEEDED' : 'PLANNING_FAILED', safePlanFailure(error)||'Readonly preparation did not produce a freezeable plan.');

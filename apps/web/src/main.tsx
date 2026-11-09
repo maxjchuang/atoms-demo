@@ -13,3 +13,5 @@ async function start() {
   createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);
 }
 void start();
+
+import './run-replan.css';

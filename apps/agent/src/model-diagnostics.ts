@@ -4,7 +4,7 @@ import type { SafePlanIssue } from './planning-format.js';
 import { StructuredOutputError } from './structured-output.js';
 export type ModelDiagnostic = {
   stage: 'request_started' | 'response_received' | 'structured_rejected' | 'request_failed' | 'retry_skipped' | 'dsl_schema_invalid';
-  role: 'router' | 'worker' | 'delivery-planning'; id: string;
+  role: 'router' | 'worker' | 'review' | 'delivery-planning'; id: string;
   finishReason?: string | null; textLength?: number | null;
   errorClass?: 'SyntaxError' | 'SchemaError' | 'UsageAccountingError' | 'RequestError' | null;
   errorCategory?: string | null; errorPosition?: number | null;

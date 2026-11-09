@@ -340,17 +340,17 @@ test('host action lookup is scoped to immutable turn facts; resolution never cre
   }finally{await f.close();}
 });
 
-test('host corrects stale model status prose and invented public deployment claims',async()=>{
+test('host corrects stale status and typed sharing requests without classifying ordinary prose',async()=>{
   const f=await fixture();try{
     await f.login();const project=await f.project();const active=(await f.request('POST',`/api/v1/projects/${project.id}/runs`,{prompt:'[hold]',mode:'build'})).data.run;await f.service.tick();
     f.coordinator.setFactory(request=>({kind:'status',answer:'所有任务已经完成，可以直接使用。',observations:request.context.facts.runs,contextUsed:contextUsedFor(request),references:[],memoryUpdates:[]}));
     const message=await f.submit(project.id,'当前任务进行到哪一步？');await f.service.tickCoordination();
     const snapshot=await f.workspace(project.id);const reply=snapshot.messages.find(m=>m.id===(snapshot.latestCoordinationTurn?.assistantMessageId));
     assert.ok(reply?.content.includes('执行中'));assert.ok(!reply?.content.includes('所有任务已经完成'));
-    f.coordinator.setFactory(request=>({...fakeConsult(request),answer:'应用已经公开发布，可以公网访问 https://invented.example/app'}));
-    await f.submit(project.id,'如何分享这个应用？');await f.service.tickCoordination();
+    f.coordinator.setFactory(request=>({...fakeConsult(request),answer:'应用已经公开发布，可以公网访问 https://invented.example/app',references:[{kind:'available_action',actionId:request.context.facts.availableActions.find(a=>a.kind==='deployment_help')!.id}]}));
+    const help=await f.request('POST',`/api/v2/projects/${project.id}/messages`,{input:{kind:'sharing_help'},mode:'ask'});assert.equal(help.status,202);await f.service.tickCoordination();
     const latest=await f.workspace(project.id);const sharing=latest.messages.find(m=>m.id===latest.latestCoordinationTurn?.assistantMessageId);
-    assert.ok(sharing?.content.includes('尚未完成公网部署'));assert.ok(!sharing?.content.includes('invented.example'));
+    assert.match(sharing!.content,/公网部署.*尚未完成/);assert.ok(!sharing?.content.includes('invented.example'));
     assert.equal((await f.request('GET',`/api/v1/runs/${active.id}`)).data.status,'running');assert.equal(f.service.store.state.runs.length,1);
   }finally{await f.close();}
 });

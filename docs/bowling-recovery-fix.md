@@ -25,3 +25,11 @@
 - 停服、SQLite 备份后，对保龄球项目追加 revision 11 的需求快照，将误记操作句 requirement_d1154ffc526ed7a6f689 标为 withdrawn；旧 revision 10 与源消息原样保留。管理审计在数据目录 administrative-corrections.jsonl。没有伪造用户撤销消息。
 - 保留 4 个项目、10 次构建、5 个版本；原体验码仍有 10 次可用构建。
 - 真实模型重试成功率与三维视觉质量尚未验证；用户可在原项目重试失败的协调消息，再审阅完整方案。原失败构建不会自动继续。
+
+## 重试链路补漏
+
+用户继续重试暴露两处未覆盖边界：前端 retry 以 strict `{turn}` 校验实际 `{userMessage,turn}` 回执，导致服务端已接收而前端报协议错误；模型对已 withdrawn 条目额外输出中文 exclusion reason，触发固定枚举校验。
+
+前端改为使用共享 SubmitMessageResponse；接口 mock 验证真实回执、单次 POST 和丢失回执后的幂等键保留。Agent 修复需覆盖确定的 schema 错误反馈，并明确固定枚举和 inactive 条目处理，仍共用原有一次纠正，不放宽来源授权、自动替换枚举或清除需求。
+
+补漏验收：前端真实回执与幂等回归 6/6、web 类型检查通过；Agent 原映射及中文 reason/inactive 组合回归 4/4、Agent 类型检查通过。模型错误反馈仅包含安全化 code/path，来源、snapshot 等宿主绑定错误不转为结构纠错；已撤下条目不再形成新排除，结构纠错仍共享原一次预算。未重放真实用户任务。

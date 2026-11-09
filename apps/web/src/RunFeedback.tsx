@@ -4,9 +4,9 @@ import type { ProjectEventDto, RunDto } from '@atoms/contracts';
 import { isTerminal, phaseLabels, statusLabels } from './state';
 import { feedbackTiming, formatDuration, phasePresentation, stageState, summarizeActivity, type ApiSync } from './activity';
 
-export function RunFeedback({ run, events, sync, historyLoading, historyError, busy, onCancel }: {
+export function RunFeedback({ run, events, sync, historyLoading, historyError, busy, onCancel, errorSummary }: {
   run: RunDto; events: ProjectEventDto[]; sync: ApiSync; historyLoading: boolean; historyError: string;
-  busy: boolean; onCancel: () => void;
+  busy: boolean; onCancel: () => void; errorSummary?: string | null;
 }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
@@ -28,7 +28,7 @@ export function RunFeedback({ run, events, sync, historyLoading, historyError, b
     <div className="last-activity"><span>最后执行活动</span><strong>{activity.lastActivityAt ? `${formatDuration(idle)}前` : '尚未收到'}</strong></div>
     <div className={`api-sync ${sync.status}`} aria-label="API同步状态">{sync.status === 'interrupted' ? <WifiOff size={11}/> : <Wifi size={11}/>}<span>{sync.status === 'ok' ? 'API 状态同步正常' : sync.status === 'interrupted' ? 'API 状态同步中断，正在重试' : '正在同步 API 状态'}</span>{sync.lastSuccessAt && <small>{formatDuration(now - sync.lastSuccessAt)}前同步</small>}</div>
     {longWait && <div className="long-wait" role="status"><Clock3 size={14}/><p>已超过 45 秒尚未收到新的执行结果。你可以继续等待或停止任务；关闭页面不会取消任务。<span>状态同步成功不代表模型或工具已完成。</span></p></div>}
-    {run.error && <p className="run-error">{run.error.message}</p>}
+    {run.error && (errorSummary ? <div className="run-error"><strong>{errorSummary}</strong><details><summary>原执行错误（历史记录）</summary><p>{run.error.message}</p></details></div> : <p className="run-error">{run.error.message}</p>)}
     <div className="checks-overview"><strong>必要检查已完成 {activity.completedChecks}/3</strong><span>仅统计实际返回的结果</span></div>
     <div className="core-checks">{activity.coreChecks.map(({ kind, name, check }) => <span key={kind} className={check?.status === 'passed' ? 'passed' : check?.status === 'failed' ? 'failed' : ''}>{check?.status === 'passed' ? <Check size={11}/> : <span className="check-dot"/>}{name}<small>{check?.status === 'passed' ? '通过' : check?.status === 'failed' ? '失败' : check?.status === 'skipped' ? '跳过' : check?.status === 'not_run' ? '未验证' : '待结果'}</small></span>)}</div>
     {activity.files.length > 0 && <div className="file-summary"><FileCode2 size={13}/><span><strong>{activity.files.length} 个文件有变更记录</strong><small>{activity.files.slice(0, 2).map(([path]) => path).join(' · ')}{activity.files.length > 2 ? ` 等 ${activity.files.length} 个` : ''}</small></span></div>}

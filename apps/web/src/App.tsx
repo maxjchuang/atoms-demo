@@ -367,7 +367,7 @@ export function App() {
         {loading && !workspace ? <div className="loading-state"><LoaderCircle className="spin"/>正在恢复你的项目…</div> : workspace && <>
           <section className="conversation-panel"><div className="conversation-heading"><div><span className="agent-avatar-small">M</span><div><strong>项目负责人</strong><small>规划 · 协调 · 交付</small></div></div><span className="online-dot">任务协调</span></div>
             {coordination && <ProjectConversation view={coordination} memory={memory} versions={versions} events={activityEvents} sync={sync} historyLoading={historyLoading} historyError={historyError} busy={busy}
-              onSubmit={submitMessage} onLoadOlder={loadOlder} onRevealMessage={revealMessage}
+              onSubmit={submitMessage} onLoadOlder={loadOlder} onRevealMessage={revealMessage} onBudgetQuota={quota => setSession(previous => previous ? { ...previous, quota } : null)}
               onCancelTurn={turn => action(async () => { const receipt = await coordinationApi.cancel(turn.id, turn.revision); if (receipt.disposition === 'already_dispatched') setError('该消息已创建构建任务。停止回答不会停止构建，请使用“停止构建”。'); })}
               onRetryTurn={turn => action(() => coordinationApi.retry(turn.id, turn.revision))}
               onCancelRun={run => action(() => api.cancel(run.id))}

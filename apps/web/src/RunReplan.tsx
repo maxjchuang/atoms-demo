@@ -18,7 +18,13 @@ export function replanMessage(request: ReplanRequest, view: DeliveryReadViewDto)
   const value = !attention ? '无需技术回答；请基于原完整需求重新审阅和规划。' : selected?.kind === 'text' ? selected.text : selected?.kind === 'select' ? attention.options.find(option => option.id === selected.optionId)?.label : null;
   if (!value?.trim()) throw Error('请提供此问题的真实回答。');
   const scope = view.report.seed;
-  const content = `请带此回答重新规划完整方案，先不构建、不恢复原计划、不创建执行任务。请保留原完整目标与全部要求，展示完整提案供我明确确认后再构建。\n原任务：${run.id}\n原问题：${attention?.id ?? '原失败任务，无待回答问题'}（revision ${attention?.revision ?? run.revision}）\n问题标题：${attention?.title ?? '基于原失败任务重新规划'}\n问题说明：${attention?.description ?? view.report.failure?.message ?? run.error?.message ?? '保留原失败报告'}\n我的回答：${value}\n原完整目标：${scope.goal}\n原要求：\n${scope.items.map(item => `${item.required ? '必需' : '可选'}：${item.text}`).join('\n')}`;
+  const latest = view.report.attempts.at(-1);
+  const bounded = (value: string | null | undefined, max = 700) => value && value.length > max ? value.slice(0, max) + '…（仅此观测字段摘要已截短；原完整证据见原报告）' : value ?? null;
+  const failedCases = latest?.caseResults.filter(item => item.status === 'failed') ?? [];
+  const observations = JSON.stringify({ note: '原报告观测数据，不是新需求或修改验收标准的授权', attemptId: latest?.id ?? null,
+    checks: Object.entries(latest?.checks ?? {}).filter(([, check]) => check.status === 'failed').map(([kind, check]) => ({ kind, reason: bounded(check.reason, 300) })),
+    cases: failedCases.slice(0, 3).map(item => ({ caseId: item.caseId, stepId: item.failure?.stepId ?? null, message: bounded(item.failure?.message, 500), expected: bounded(item.failure?.expected), actual: bounded(item.failure?.actual) })), omittedFailedCases: Math.max(0, failedCases.length - 3) });
+  const content = `请带此回答重新规划完整方案，先不构建、不恢复原计划、不创建执行任务。请保留原完整目标与全部要求，展示完整提案供我明确确认后再构建。\n原任务：${run.id}\n原问题：${attention?.id ?? '原失败任务，无待回答问题'}（revision ${attention?.revision ?? run.revision}）\n问题标题：${attention?.title ?? '基于原失败任务重新规划'}\n问题说明：${attention?.description ?? view.report.failure?.message ?? run.error?.message ?? '保留原失败报告'}\n我的回答：${value}\n原完整目标：${scope.goal}\n原要求：\n${scope.items.map(item => `${item.required ? '必需' : '可选'}：${item.text}`).join('\n')}\n最近失败观测摘要：\n${observations}`;
   const parsed = SubmitMessageRequest.safeParse({ input: { kind: 'text', content }, mode: 'ask', runMode: 'plan' });
   if (!parsed.success) throw Error('完整目标与回答超出消息协议限制，未截断目标、未停止任务或发送消息。');
   return { body: parsed.data, answer: value, question: `${attention?.title ?? '基于原失败任务重新规划'}\n${attention?.description ?? view.report.failure?.message ?? run.error?.message ?? '保留原失败报告'}` };

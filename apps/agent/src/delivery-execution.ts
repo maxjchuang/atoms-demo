@@ -1,3 +1,4 @@
+import { preserveAttemptSource } from './source-snapshot.js';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -65,7 +66,7 @@ export class DeliveryExecutionRuntime {
       acceptance: item.delivery!.bundle.spec.criteria.map((criterion) => ({ id: criterion.id, description: criterion.description })) };
   }
   context(item: RecordValue, context: AdapterContext) {
-    context.frozenTestPlan = item.delivery!.bundle.plan;
+    context.frozenTestPlan = item.delivery!.bundle.plan;context.frozenSpecification=item.delivery!.bundle.spec;
     context.deliveryProfileId = this.planning.get(item.delivery!.bundle.binding.preparationId).request.profileHint?.id
       || (item.delivery!.bundle.seed.goal.includes('[calculator]') && this.runtime.adapter.mode === 'fake' ? 'profile_calculator_v1' : 'profile_notes_v1');
   }
@@ -106,7 +107,7 @@ export class DeliveryExecutionRuntime {
       sourceProvenance = { kind: 'controlled_regression', baseSourceHash: base, patchHash: sha256(patch), injectedSourceHash: inventoryHash(await fingerprints(workspace, 'source/')), patchEvidenceId: `evidence_attempt_${index}_controlled-patch` };
       context.report('宿主测试显式注入了持久化受控回归；此失败不代表模型自然缺陷。');
     }
-    const sourceBeforeHash = inventoryHash(await fingerprints(workspace, 'source/')); const startedAt = now();
+    const sourceBeforeHash = inventoryHash(await fingerprints(workspace, 'source/')); await preserveAttemptSource({workspace,root:path.join(this.root(item.request.executionId),'source-snapshots'),attemptIndex:index,maxAttempts:item.request.budget.maxRepairRounds+1,maxBytes:item.request.budget.maxArtifactBytes,expectedHash:sourceBeforeHash}); const startedAt = now();
     let interruption: unknown; let browserInterrupted = false; let checked: { checks: ReturnType<typeof Check.parse>[]; errors: string | null } = { checks: [], errors: null };
     let cases = notRunCases(bundle, 'A required application build/smoke gate failed.');
     try {

@@ -394,6 +394,11 @@ export function registerCoordination(host:CoordinationHost) {
   const settle=(record:CoordinationRecord,result:RouterResultDto)=>{
     if(record.dto.status==='cancelling'){updateTurn(record,{status:'cancelled',completedAt:now()});return;}
     validateResult(record,result);
+    // New scope-review processing must produce a proposal (or an explicit question), not silently succeed as generic advice.
+    // This is not a read/migration check: already-terminal historical consult records are left untouched.
+    if(record.requirementsRequest?.purpose.kind==='scope_review'&&['consult','status','control'].includes(result.kind)){
+      failure(record,'INTERNAL_ERROR','完整需求审阅未产出可确认的完整提案；原始要求已保留，没有创建构建任务。请重新发起完整方案审阅。');return;
+    }
     const replyId=record.dto.assistantMessageId!;const projectId=record.dto.projectId;
     let outcome:NonNullable<CoordinationTurnDto['result']>;let text='';
     if(result.kind==='consult'||result.kind==='status'){

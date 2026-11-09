@@ -57,7 +57,7 @@ test('actual browser supports source aria-label application region and initial t
     assert.equal(result.caseResults.length, 3);
     assert.ok(result.caseResults.every(c => c.status === 'passed'), JSON.stringify(result.caseResults));
 });
-test('mock replay of both mechanically invalid IR responses receives aggregate actionable feedback but stops at the unchanged single retry', { timeout: 10000 }, async (t) => {
+test('mock replay of both mechanically invalid IR responses receives aggregate actionable feedback then preserves unreliable automation as required manual after the unchanged single retry', { timeout: 10000 }, async (t) => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'atoms-recipe-capture-replay-'));
     t.after(() => rm(root, { recursive: true, force: true }));
     let calls = 0;
@@ -74,14 +74,14 @@ test('mock replay of both mechanically invalid IR responses receives aggregate a
     for (let n = 0; n < 500 && !['failed', 'completed'].includes(app.planning.get(req.preparationId).snapshot.status); n++)
         await new Promise(r => setTimeout(r, 10));
     const state = app.planning.get(req.preparationId).snapshot;
-    assert.equal(state.status, 'failed');
+    assert.equal(state.status, 'completed', JSON.stringify(state.error));
     assert.equal(calls, 2);
     assert.equal(state.usage.modelSteps, 2);
     assert.equal(state.usage.inputTokens, 20);
     assert.equal(state.usage.outputTokens, 200);
-    assert.equal(state.result, null);
+    assert.ok(state.result!.plan.coverage.some(c=>c.method==='manual'));assert.equal(state.result!.plan.cases.length,0);
     assert.equal(app.runtime.records.size, 0);
     assert.ok(prompts[1].includes('Supported role values are exactly'));
     assert.ok(prompts[1].includes('Every press requires an explicit target and key'));
-    assert.match(state.error!.message, /PLAN_REVIEW_V1/);
+    assert.equal(state.error,null);
 });

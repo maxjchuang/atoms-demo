@@ -8,3 +8,15 @@ test('foreign, changed question and absent scope are rejected rather than using 
 test('terminal failed run can replan full scope without technical answer, but 202 or retained writer cannot authorize send',()=>{const failed={...run,status:'failed' as const,pendingAttention:null};assert.equal(replanMessage({run:failed,answer:null},view).body.mode,'ask');assert.equal(stoppedForReplan({...run,status:'cancelling'},run.projectId,run.id,run.id),false);assert.equal(stoppedForReplan(failed,run.projectId,run.id,run.id),false);assert.equal(stoppedForReplan(failed,run.projectId,run.id,null),true);assert.equal(stoppedForReplan(failed,'project_other',run.id,null),false);});
 
 test('failed replan preserves actual latest case/step expected/actual as observations, not new scope',()=>{const copy=structuredClone(view);if(copy.state!=='available'||!copy.report)assert.fail();const item=copy.report.attempts.at(-1)!.caseResults[0];item.status='failed';item.failure={stepId:'step_svg',message:'Text assertion requires an HTMLElement',expected:'pelican riding a bicycle',actual:'svg role=img'};const value=replanMessage({run:{...run,status:'failed',pendingAttention:null},answer:null},copy);if(value.body.input.kind!=='text')assert.fail();for(const field of [item.caseId,'step_svg','Text assertion requires an HTMLElement','pelican riding a bicycle','svg role=img','原报告观测数据，不是新需求'])assert.ok(value.body.input.content.includes(field));assert.ok(value.body.input.content.includes(copy.report.seed.goal));});
+
+test('replan-only reflection preserves specific reason and binds either text or option to ask/plan without authorizing Code', () => {
+  const reflected = { ...waiting, pendingAttention: { ...waiting.pendingAttention, resolution: 'replan' as const, description: '修复耗尽：导出复验仍失败，需重新审查实现与断言。' } };
+  for (const answer of [{ kind: 'text' as const, text: '保留完整目标，先核对失败原因' }, { kind: 'select' as const, optionId: 'answer_a' }]) {
+    const result = replanMessage({ run: reflected, answer: { attentionId: attention.id, expectedRevision: attention.revision, answer } }, view);
+    assert.equal(result.body.mode, 'ask'); assert.equal(result.body.runMode, 'plan');
+    if (result.body.input.kind !== 'text') assert.fail();
+    assert.ok(result.body.input.content.includes(reflected.pendingAttention.description));
+    assert.ok(result.body.input.content.includes('先不构建、不恢复原计划、不创建执行任务'));
+    assert.ok(result.body.input.content.includes(view.state === 'available' ? view.report!.seed.goal : ''));
+  }
+});

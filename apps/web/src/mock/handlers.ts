@@ -59,7 +59,7 @@ function advance(record: Record) {
     message(record, run.id, 'assistant', '已收到你的需求。我会先整理实现范围，再构建并验证应用。此处为独立 Mock 演示。'); return;
   }
   if (tick === 2 && record.prompts[run.id].includes('[run-question]') && !run.pendingAnswer) {
-    update(record, run, { status: 'waiting_input', pendingAttention: { id: id('attention'), runId: run.id, revision: 1, kind: 'question', title: '构建需要补充配色信息', description: '这是已有Run执行中的问题。', options: [{ id: 'option_warm', label: '暖色' }, { id: 'option_dark', label: '深色' }], allowText: true, createdAt: now() } }); return;
+    update(record, run, { status: 'waiting_input', pendingAttention: { id: id('attention'), runId: run.id, revision: 1, kind: 'question', title: '构建需要补充配色信息', description: '这是已有Run执行中的问题。', options: [{ id: 'option_warm', label: '暖色' }, { id: 'option_dark', label: '深色' }], ...(record.prompts[run.id].includes('[repair-reflection]') ? { resolution: 'replan' as const, title: '修复复盘：请确认下一轮核验方向', description: 'Mock 复盘：当前自动验证仍未通过，不能继续原冻结计划。请确认保留原目标，并重新审查失败测试与实现的差异。', options: [{ id: 'option_review', label: '保留原目标，先重新审查失败测试与实现' }] } : {}), allowText: true, createdAt: now() } }); return;
   }
   if (tick === 2 && run.mode === 'plan' && !run.pendingAnswer) {
     update(record, run, { status: 'waiting_input', pendingAttention: { ...baseAttention, id: id('attention'), runId: run.id, createdAt: now() } }); return;

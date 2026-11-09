@@ -61,7 +61,7 @@ export function summarizeActivity(run: RunDto, events: ProjectEventDto[]) {
     lastPhase = value; phaseStartedAt = event.occurredAt;
     if (value === run.phase) currentPhaseSince = event.occurredAt;
     if (value === 'repairing') repairRounds++;
-    add(event, 'phase', value === 'repairing' ? `开始第 ${repairRounds} 轮修复` : `进入${phaseLabels[value]}阶段`);
+    add(event, 'phase', value === 'repairing' ? '进入修复阶段（具体轮次以报告为准）' : `进入${phaseLabels[value]}阶段`);
   };
   const message = (event: ProjectEventDto, messageId: string, text: string) => {
     if (completedMessages.has(messageId)) return;
@@ -143,12 +143,12 @@ export function feedbackTiming(run: RunDto, phaseStartedAt: string, lastActivity
   };
 }
 
-export function phasePresentation(run: RunDto) {
+export function phasePresentation(run: RunDto, hasPublishedVersion = false) {
   if (run.status === 'queued') return { title: '任务已排队', description: '需求已保存，获得执行资源后会继续处理。' };
   if (run.status === 'waiting_input') return { title: '等待你的确认', description: '回答下方问题后，任务会排队恢复；等待期间不会持续调用模型。' };
   if (run.status === 'cancelling') return { title: '等待执行停止确认', description: '取消请求已接收，执行服务确认停止后才会显示已取消。' };
   if (isTerminal(run)) return { title: statusLabels[run.status], description: run.status === 'succeeded'
-    ? '应用已保存。可以预览、继续修改或查看版本。' : '本次执行已结束；上一成功版本会继续保留。' };
+    ? '应用已保存。可以预览、继续修改或查看版本。' : hasPublishedVersion ? '本次执行已结束；上一成功版本会继续保留。' : '本次执行已结束，未发布新的应用；当前没有可预览版本。' };
   const descriptions = {
     planning: '正在梳理需求和实现计划，准备本次任务的执行范围。',
     generating: '正在生成应用代码；收到代码后会继续类型、构建与页面运行检查。',

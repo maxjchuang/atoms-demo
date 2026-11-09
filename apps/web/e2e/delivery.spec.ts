@@ -150,7 +150,7 @@ for (const scenario of ['projection-mixed', 'projection-auto']) for (const viewp
     await expect(panel(page).locator('.aggregate-criterion').first()).toContainText('criterion_leaf_manual'); await page.screenshot({ path: `review-artifacts/m2/${scenario}-audit-${viewport.width}-mock.png` });
     await panel(page).locator('.aggregate-criterion').first().getByText('完整目标与原始汇总依据', { exact: true }).click();
   } else await expect(panel(page).locator('.aggregate-criterion').first()).toContainText('通过');
-  await expect(panel(page).locator('.case-result')).toHaveCount(2);
+  await expect(panel(page).locator('.delivery-attempt .case-result')).toHaveCount(2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
   expect(await panel(page).evaluate(element => getComputedStyle(element).fontSize)).toBe('14px');
   await panel(page).evaluate(element => { element.scrollTop = 0; }); await page.screenshot({ path: `review-artifacts/m2/${scenario}-report-${viewport.width}-mock.png` });

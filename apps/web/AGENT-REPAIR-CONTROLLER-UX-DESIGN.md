@@ -1,6 +1,6 @@
 # Agent自主验证/修复闭环：Web边界冻结候选
 
-日期：2026-11-10。仅设计，不改生产代码、共享合同或用户记录。已对齐主管候选 `docs/agent-repair-stability-plan.md`（当前candidate worktree中的文件）。后续由Root冻结producer语义/必要接口，再由各线实施。当前UI反例来自真实5180只读审计，不把临时成功游戏替代用户实际失败。
+日期：2026-11-09。设计来源；Root已批准首批按现有DTO实施，不新增共享合同或改用户记录。已对齐主管候选 `docs/agent-repair-stability-plan.md`（当前candidate worktree中的文件）。producer语义冻结为现有phase/message/report：合法clean失败先nonfinal→真实repairing→新attempt/export/clean，实际停止才final；final.cleanBuild仅最新，旧轮证据保留。当前UI反例来自真实5180只读审计，不把临时成功游戏替代用户实际失败。
 
 ## 1. 已查实的问题与责任
 
@@ -91,4 +91,14 @@
 
 普通独立测试仅Fake/Mock，无模型和用户源码运行；生产build不得回退Mock。root跨线验证使用统一故障矩阵，不把单个游戏或临时手工成功样例升级为通用稳定性。正文14px/元信息12px、失败原因和下一步是主内容，hash/平台细节展开，不靠缩字或裸日志堆满界面。
 
-本阶段只完成现状审计与设计。等待Root冻结首批现有DTO语义/是否需要小投影后，再在apps/web实施上述必要展示，不改用户数据/额度/报告。
+Root已冻结上述现有DTO producer语义并批准首批实现：Web独立clean结果/历史Run报告/空版本文案与可信修复观察已落地；不新增共享投影、不改变用户数据/额度/报告。Mock验证只证明消费者行为，真实Controller闭环与用户任务发布仍须Root跨线验收。
+
+## 8. Web首批稳定交付记录（2026-11-09）
+
+- 生产源只修改 `apps/web`，复用现有公共DTO；无业务数据/额度写、真实模型、生成源码执行、部署或Git提交。
+- 最终Web `check`、完整 **88/88 unit**、`build`通过；共享contracts `check`和 **122/122 contracts**通过（共享文件未修改）。
+- `ATOMS_MOCK_PORT=5195 pnpm --filter @atoms/web exec playwright test e2e/repair-controller.spec.ts e2e/delivery.spec.ts e2e/feedback.spec.ts --output=/tmp/atoms-web-repair-regression-results`：修正前 **35/35**（1.1m），包含delivery29、feedback2、新增4。随后Root两项小审查修正仅涉及missing计数/目标密度。
+- 最终 `ATOMS_MOCK_PORT=5197 pnpm --filter @atoms/web exec playwright test e2e/repair-controller.spec.ts --output=/tmp/atoms-web-repair-final3-results`：**5/5**（16.4s），含历史clean失败/候选与clean区分/源修复与旧证据hash读取/实际Mock发布、Run迟到、跨项目迟到+只读入口、合法not_run+长目标展开。最终单测/build对应该生产源；Root可独立5194运行相关35+新增1。
+- 截图 `apps/web/review-artifacts/repair-controller/history-clean-failure-{1440,390}-mock.png`；浏览器断言正文14px/元信息12px且无横向页面溢出。截图明确Mock，不能作为真实Agent或用户项目成功证据。
+- 初轮两处测试选择器错误（当前状态class和tab role）已修正，原失败日志 `/tmp/atoms-web-repair-browser-first-failure.log`；收尾新fixture初次违反严格合同被拒（`/tmp/atoms-web-repair-final-unit.log`、`/tmp/atoms-web-repair-final2-browser.log`），已改合法not_run完整case集合，未放宽Schema。现有Schema拒绝 `caseResults=[]` 丢失冻结集合，因此missing仅作防御性纯计数测试，不伪造合法缺失报告。
+- 最终日志 `/tmp/atoms-web-repair-final-unit2.log`、`/tmp/atoms-web-repair-final-build2.log`、`/tmp/atoms-web-repair-final3-browser.log`；真实5180用户UI及Controller闭环待Root集成验收，历史用户报告不改写。

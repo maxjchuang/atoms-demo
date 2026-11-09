@@ -52,7 +52,7 @@ export const api = {
   createProject: (title: string, key?: string) => post('/projects', { title }, Project, key),
   workspace: (id: string) => request(`/projects/${id}/workspace`, WorkspaceSnapshot),
   events: (id: string, after: number) => request(`/projects/${id}/events?after=${after}&limit=100`, ProjectEventPage),
-  run: (id: string) => request(`/runs/${id}`, Run),
+  run: (id: string, signal?: AbortSignal) => request(`/runs/${id}`, Run, { signal }),
   createRun: (id: string, prompt: string, mode: 'build' | 'plan', key?: string) => post(`/projects/${id}/runs`, { prompt, mode }, RunMutationResponse, key),
   answer: (id: string, answer: AnswerRequestDto, key?: string) => post(`/runs/${id}/answers`, answer, RunMutationResponse, key),
   cancel: (id: string, key?: string) => post(`/runs/${id}/cancel`, {}, RunMutationResponse, key),

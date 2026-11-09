@@ -2,6 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { project } from '@atoms/contracts/fixtures';
 import { api, HttpError } from '../src/api.js';
+import { run } from '@atoms/contracts/fixtures';
+test('history Run GET carries its abort signal and remains a credentialed readonly lookup', async () => {
+  const original = globalThis.fetch, abort = new AbortController();
+  try { globalThis.fetch = async (url, options) => { assert.equal(String(url), `/api/v1/runs/${run.id}`); assert.equal(options?.signal, abort.signal); assert.equal(options?.credentials, 'same-origin'); assert.notEqual(options?.method, 'POST'); return Response.json(run); }; await api.run(run.id, abort.signal); }
+  finally { globalThis.fetch = original; }
+});
 
 test('mutation sends the public route, body and idempotency header', async () => {
   const original = globalThis.fetch;

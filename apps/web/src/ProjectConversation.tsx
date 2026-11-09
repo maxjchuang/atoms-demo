@@ -29,6 +29,7 @@ interface Props {
   busy: boolean;
   onSubmit: (request: SubmitMessageRequestDto) => Promise<void>;
   onLoadOlder: () => Promise<void>;
+  onViewRunReport: (run: RunDto) => void;
   onRevealMessage: (id: string) => Promise<boolean>;
   onCancelTurn: (turn: CoordinationTurnDto) => Promise<void>;
   onRetryTurn: (turn: CoordinationTurnDto) => Promise<void>;
@@ -54,6 +55,8 @@ export function ProjectConversation(props: Props) {
   const [chatBudgetSummary, setChatBudgetSummary] = useState<{runId: string; summary: string | null} | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const previousInput = useRef<string | null>(null);
+  const runRead = useRef<AbortController | null>(null);
+  const runReadEpoch = useRef(0);
   const nearBottom = useRef(true);
   const [unseenMessage, setUnseenMessage] = useState(false);
   const execution = view.workspace.execution;
@@ -75,7 +78,7 @@ export function ProjectConversation(props: Props) {
   }, [execution.project.id, currentRun?.id, currentRun?.revision, currentRun?.status]);
   const latestSelected = selectedRun ? [...events].reverse().find(event => event.event.type === 'run.updated' && event.event.payload.id === selectedRun.id) : null;
   const activityRun = latestSelected?.event.type === 'run.updated' ? latestSelected.event.payload : selectedRun ?? currentRun;
-  useEffect(() => { let alive = true; setSelectedRun(null); setTab('chat'); setSourceError(''); previousInput.current = null; const selected = sessionStorage.getItem(recoverySelectionKey(execution.project.id)); if (selected) void api.run(selected).then(value => { if (alive && value.projectId === execution.project.id) { setSelectedRun(value); setTab('activity'); } }).catch(() => {}); return () => { alive = false; }; }, [execution.project.id]);
+  useEffect(() => { let alive = true; runRead.current?.abort(); const epoch = ++runReadEpoch.current, abort = new AbortController(); runRead.current = abort; setSelectedRun(null); setTab('chat'); setSourceError(''); previousInput.current = null; const selected = sessionStorage.getItem(recoverySelectionKey(execution.project.id)); if (selected) void api.run(selected, abort.signal).then(value => { if (alive && !abort.signal.aborted && epoch === runReadEpoch.current && value.id === selected && value.projectId === execution.project.id) { setSelectedRun(value); setTab('activity'); } }).catch(() => {}); return () => { alive = false; abort.abort(); ++runReadEpoch.current; }; }, [execution.project.id]);
   const lastInput = view.messages.filter(message => message.role === 'user' && message.coordinationTurnId !== null).at(-1)?.id ?? null;
   useEffect(() => {
     if (previousInput.current && lastInput && previousInput.current !== lastInput) {
@@ -98,7 +101,8 @@ export function ProjectConversation(props: Props) {
   async function openRun(id: string) {
     sessionStorage.removeItem(recoverySelectionKey(execution.project.id));
     setTab('activity'); setSourceError('');
-    try { setSelectedRun(await api.run(id)); } catch { setSourceError('任务记录暂时无法读取，请刷新重试。'); }
+    const epoch = ++runReadEpoch.current; runRead.current?.abort(); const abort = new AbortController(); runRead.current = abort;
+    try { const value = await api.run(id, abort.signal); if (!abort.signal.aborted && epoch === runReadEpoch.current) { if (value.projectId !== execution.project.id || value.id !== id) throw new Error('历史任务与所选对象不一致。'); setSelectedRun(value); } } catch { if (!abort.signal.aborted && epoch === runReadEpoch.current) setSourceError('任务记录暂时无法读取或对象不一致，请刷新重试。'); }
   }
   async function older() {
     if (olderLoading) return;
@@ -122,7 +126,7 @@ export function ProjectConversation(props: Props) {
       <button role="tab" aria-selected={tab === 'memory'} onClick={() => setTab('memory')}><BookOpen size={14}/>项目约定{memory && <small>{memory.revision}</small>}</button>
     </div>
     <CompactRun run={currentRun} errorSummary={chatBudgetSummary?.runId === currentRun?.id ? chatBudgetSummary?.summary : null} processingMessage={view.workspace.pendingCoordinationTurns.length > 0} busy={busy}
-      onView={() => { setSelectedRun(null); setTab('activity'); }} onCancel={() => currentRun && void props.onCancelRun(currentRun)}/>
+      onView={() => { runRead.current?.abort(); ++runReadEpoch.current; setSelectedRun(null); setTab('activity'); }} onCancel={() => currentRun && void props.onCancelRun(currentRun)}/>
     {tab === 'chat' && unseenMessage && <button className="jump-latest" onClick={() => { if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight; nearBottom.current = true; setUnseenMessage(false); }}>有新消息，跳至最新答复<ChevronDown size={12}/></button>}
     <div className="conversation-scroll coordination-scroll" ref={scroll} onScroll={() => {
       if (!scroll.current || tab !== 'chat') return;
@@ -155,8 +159,8 @@ export function ProjectConversation(props: Props) {
         {execution.activeRun?.pendingAttention && <RunAttention run={execution.activeRun} busy={busy} onAnswer={answer => void props.onAnswerRun(execution.activeRun!, answer)}/>}
         {execution.queuedRuns.length > 0 && <div className="queue-card"><Clock3 size={14}/>{execution.queuedRuns.length} 个修改任务排队，将在开始时使用最新成功版本。</div>}
       </> : tab === 'activity' ? <>
-        <div className="activity-view-heading"><h3>构建活动</h3><p>执行任务与项目问答独立。停止回答不会停止构建。</p></div>
-        {activityRun ? <><RunFeedback run={activityRun} events={events} sync={props.sync} historyLoading={props.historyLoading} historyError={props.historyError} busy={busy} errorSummary={budgetSummary?.runId === activityRun.id ? budgetSummary.summary : null} onCancel={() => void props.onCancelRun(activityRun)}/>{activityRun.status === 'failed' && <BudgetRecoveryCard key={activityRun.id} run={activityRun} onViewRun={id => void openRun(id)} onQuota={props.onBudgetQuota} onDiagnosis={(runId, summary) => setBudgetSummary({runId, summary})} onCreated={() => setSelectedRun(activityRun)} onReview={() => void prepareRequirementsReview()}/>}</> : <div className="no-run-state"><Layers3 size={24}/><p>还没有构建任务。明确的修改需求经准入后才会进入这里。</p></div>}
+        <div className="activity-view-heading"><h3>{activityRun && currentRun?.id !== activityRun.id ? '历史任务构建活动' : '构建活动'}</h3><p>执行任务与项目问答独立。停止回答不会停止构建。</p>{activityRun && <button className="secondary-button" onClick={() => props.onViewRunReport(activityRun)}>查看此任务交付报告</button>}</div>
+        {activityRun ? <><RunFeedback run={activityRun} hasPublishedVersion={!!execution.currentVersion} acceptedGoal={view.proposals.find(proposal => proposal.projectId === activityRun.projectId && proposal.acceptedRunId === activityRun.id)?.goal} events={events} sync={props.sync} historyLoading={props.historyLoading} historyError={props.historyError} busy={busy} errorSummary={budgetSummary?.runId === activityRun.id ? budgetSummary.summary : null} onCancel={() => void props.onCancelRun(activityRun)}/>{activityRun.status === 'failed' && <BudgetRecoveryCard key={activityRun.id} run={activityRun} onViewRun={id => void openRun(id)} onQuota={props.onBudgetQuota} onDiagnosis={(runId, summary) => setBudgetSummary({runId, summary})} onCreated={() => setSelectedRun(activityRun)} onReview={() => void prepareRequirementsReview()}/>}</> : <div className="no-run-state"><Layers3 size={24}/><p>还没有构建任务。明确的修改需求经准入后才会进入这里。</p></div>}
         {execution.activeRun?.pendingAttention && <RunAttention run={execution.activeRun} busy={busy} onAnswer={answer => void props.onAnswerRun(execution.activeRun!, answer)}/>}
         {execution.queuedRuns.map(run => <button className="queued-run-link" key={run.id} onClick={() => void openRun(run.id)}>等待中的修改任务 · {new Date(run.createdAt).toLocaleTimeString('zh-CN')}</button>)}
       </> : <>

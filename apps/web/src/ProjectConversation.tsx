@@ -10,6 +10,8 @@ import { RunFeedback } from './RunFeedback';
 import type { ApiSync } from './activity';
 import { formatDuration } from './activity';
 import { HostAction } from './HostAction';
+import { BudgetRecoveryCard } from './BudgetRecovery';
+import { recoverySelectionKey, recoveryApi, diagnosticSummary } from './budget-recovery-api';
 
 interface Props {
   view: ConversationView;
@@ -32,6 +34,7 @@ interface Props {
   onDismissProposal: (proposal: ChangeProposalDto) => Promise<void>;
   onDismissClarification: (question: ClarificationDto) => Promise<void>;
   onCorrectMemory: (text: string) => void;
+  onBudgetQuota: (quota: import('zod').z.infer<typeof import('@atoms/contracts').Session>['quota']) => void;
 }
 const kindLabels = { consult: '项目问答', status: '状态查询', change_proposal: '修改需求', clarify: '需求澄清', control: '任务控制' };
 export function ProjectConversation(props: Props) {
@@ -41,15 +44,26 @@ export function ProjectConversation(props: Props) {
   const [selectedRun, setSelectedRun] = useState<RunDto | null>(null);
   const [showSuperseded, setShowSuperseded] = useState(false);
   const [sourceError, setSourceError] = useState('');
+  const [budgetSummary, setBudgetSummary] = useState<{runId: string; summary: string | null} | null>(null);
+  const [chatBudgetSummary, setChatBudgetSummary] = useState<{runId: string; summary: string | null} | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const previousInput = useRef<string | null>(null);
   const nearBottom = useRef(true);
   const [unseenMessage, setUnseenMessage] = useState(false);
   const execution = view.workspace.execution;
   const currentRun = execution.activeRun ?? execution.latestRun;
+  useEffect(() => {
+    setChatBudgetSummary(null);
+    if (currentRun?.status !== 'failed') return;
+    const abort = new AbortController(); let alive = true;
+    void recoveryApi.read(execution.project.id, currentRun.id, abort.signal).then(value => {
+      if (alive && !abort.signal.aborted) setChatBudgetSummary({ runId: currentRun.id, summary: diagnosticSummary(value.diagnosis) });
+    }).catch(() => { /* Original failure remains; no invented diagnosis on read failure. */ });
+    return () => { alive = false; abort.abort(); };
+  }, [execution.project.id, currentRun?.id, currentRun?.revision, currentRun?.status]);
   const latestSelected = selectedRun ? [...events].reverse().find(event => event.event.type === 'run.updated' && event.event.payload.id === selectedRun.id) : null;
   const activityRun = latestSelected?.event.type === 'run.updated' ? latestSelected.event.payload : selectedRun ?? currentRun;
-  useEffect(() => { setSelectedRun(null); setTab('chat'); setSourceError(''); previousInput.current = null; }, [execution.project.id]);
+  useEffect(() => { let alive = true; setSelectedRun(null); setTab('chat'); setSourceError(''); previousInput.current = null; const selected = sessionStorage.getItem(recoverySelectionKey(execution.project.id)); if (selected) void api.run(selected).then(value => { if (alive && value.projectId === execution.project.id) { setSelectedRun(value); setTab('activity'); } }).catch(() => {}); return () => { alive = false; }; }, [execution.project.id]);
   const lastInput = view.messages.filter(message => message.role === 'user' && message.coordinationTurnId !== null).at(-1)?.id ?? null;
   useEffect(() => {
     if (previousInput.current && lastInput && previousInput.current !== lastInput) {
@@ -70,6 +84,7 @@ export function ProjectConversation(props: Props) {
     return index < 0 ? '已保存版本' : `V${versions.length - index}`;
   };
   async function openRun(id: string) {
+    sessionStorage.removeItem(recoverySelectionKey(execution.project.id));
     setTab('activity'); setSourceError('');
     try { setSelectedRun(await api.run(id)); } catch { setSourceError('任务记录暂时无法读取，请刷新重试。'); }
   }
@@ -94,7 +109,7 @@ export function ProjectConversation(props: Props) {
       <button role="tab" aria-selected={tab === 'activity'} onClick={() => setTab('activity')}><Layers3 size={14}/>构建活动{execution.activeRun && <i/>}</button>
       <button role="tab" aria-selected={tab === 'memory'} onClick={() => setTab('memory')}><BookOpen size={14}/>项目约定{memory && <small>{memory.revision}</small>}</button>
     </div>
-    <CompactRun run={currentRun} processingMessage={view.workspace.pendingCoordinationTurns.length > 0} busy={busy}
+    <CompactRun run={currentRun} errorSummary={chatBudgetSummary?.runId === currentRun?.id ? chatBudgetSummary?.summary : null} processingMessage={view.workspace.pendingCoordinationTurns.length > 0} busy={busy}
       onView={() => { setSelectedRun(null); setTab('activity'); }} onCancel={() => currentRun && void props.onCancelRun(currentRun)}/>
     {tab === 'chat' && unseenMessage && <button className="jump-latest" onClick={() => { if (scroll.current) scroll.current.scrollTop = scroll.current.scrollHeight; nearBottom.current = true; setUnseenMessage(false); }}>有新消息，跳至最新答复<ChevronDown size={12}/></button>}
     <div className="conversation-scroll coordination-scroll" ref={scroll} onScroll={() => {
@@ -128,7 +143,7 @@ export function ProjectConversation(props: Props) {
         {execution.queuedRuns.length > 0 && <div className="queue-card"><Clock3 size={14}/>{execution.queuedRuns.length} 个修改任务排队，将在开始时使用最新成功版本。</div>}
       </> : tab === 'activity' ? <>
         <div className="activity-view-heading"><h3>构建活动</h3><p>执行任务与项目问答独立。停止回答不会停止构建。</p></div>
-        {activityRun ? <RunFeedback run={activityRun} events={events} sync={props.sync} historyLoading={props.historyLoading} historyError={props.historyError} busy={busy} onCancel={() => void props.onCancelRun(activityRun)}/> : <div className="no-run-state"><Layers3 size={24}/><p>还没有构建任务。明确的修改需求经准入后才会进入这里。</p></div>}
+        {activityRun ? <><RunFeedback run={activityRun} events={events} sync={props.sync} historyLoading={props.historyLoading} historyError={props.historyError} busy={busy} errorSummary={budgetSummary?.runId === activityRun.id ? budgetSummary.summary : null} onCancel={() => void props.onCancelRun(activityRun)}/>{activityRun.status === 'failed' && <BudgetRecoveryCard key={activityRun.id} run={activityRun} onViewRun={id => void openRun(id)} onQuota={props.onBudgetQuota} onDiagnosis={(runId, summary) => setBudgetSummary({runId, summary})} onCreated={() => setSelectedRun(activityRun)} onReview={() => { setTab('chat'); requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.workspace-composer textarea')?.focus()); }}/>}</> : <div className="no-run-state"><Layers3 size={24}/><p>还没有构建任务。明确的修改需求经准入后才会进入这里。</p></div>}
         {execution.activeRun?.pendingAttention && <RunAttention run={execution.activeRun} busy={busy} onAnswer={answer => void props.onAnswerRun(execution.activeRun!, answer)}/>}
         {execution.queuedRuns.map(run => <button className="queued-run-link" key={run.id} onClick={() => void openRun(run.id)}>等待中的修改任务 · {new Date(run.createdAt).toLocaleTimeString('zh-CN')}</button>)}
       </> : <>
@@ -142,13 +157,14 @@ export function ProjectConversation(props: Props) {
   </>;
 }
 
-function CompactRun({ run, processingMessage, busy, onView, onCancel }: { run: RunDto | null; processingMessage: boolean; busy: boolean; onView: () => void; onCancel: () => void }) {
+function CompactRun({ run, processingMessage, busy, onView, onCancel, errorSummary }: { run: RunDto | null; processingMessage: boolean; busy: boolean; onView: () => void; onCancel: () => void; errorSummary?: string | null }) {
   const [now, setNow] = useState(Date.now);
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const ended = isTerminal(run);
   return <div className="current-run-strip" aria-label="当前构建状态">
     {run ? <><span className="strip-context">{ended ? '最近构建' : '当前构建'}</span><span className="run-card-top"><strong>{statusLabels[run.status]}</strong></span><button onClick={onView}>查看构建活动</button>{!ended && <button disabled={busy || run.status === 'cancelling'} onClick={onCancel}>停止构建</button>}
       <div className="strip-phase"><span>{run.phase ? phaseLabels[run.phase] : '尚未获得执行资源'}</span><span>总耗时 {formatDuration((ended ? Date.parse(run.updatedAt) : now) - Date.parse(run.createdAt))}</span></div>
+      {run.error && <p className="compact-run-error">{errorSummary ?? run.error.message} · 查看构建活动中的具体诊断。</p>}
       {processingMessage && ended && <small className="strip-understanding">正在处理新消息，尚未创建新的构建。</small>}
     </> : <><span>{processingMessage ? '正在处理消息，尚未创建构建' : '当前没有构建任务'}</span><small>咨询不会创建应用版本</small></>}
   </div>;
@@ -180,9 +196,9 @@ function ProposalCard({ proposal, busy, runMode, versionLabel, onAccept, onRefre
 }) {
   const [strategy, setStrategy] = useState(runMode);
   return <div className={`change-proposal ${proposal.status}`} data-proposal-id={proposal.id}>
-    <span className="card-kind"><Layers3 size={13}/>{proposal.status === 'accepted' ? '修改已准入' : '修改提案 · 尚未执行'}</span><h3>{proposal.summary}</h3><p>{proposal.goal}</p>
-    <div className="proposal-baseline">{proposal.basePolicy.kind === 'latest_on_dispatch' ? '将在开始构建时使用最新成功版本。' : `仅针对 ${versionLabel(proposal.basePolicy.expectedBaseVersionId)}；基线改变后需要重新确认。`}</div>
-    <ul>{proposal.acceptance.map(item => <li key={item.id}><Check size={12}/>{item.description}</li>)}</ul>
+    <span className="card-kind"><Layers3 size={13}/>{proposal.status === 'accepted' ? '修改已准入' : '修改提案 · 尚未执行'}</span><h3>{proposal.summary}</h3><strong>本提案目标</strong><p>{proposal.goal}</p>
+    <div className="proposal-baseline">{proposal.basePolicy.kind === 'latest_on_dispatch' ? '将在开始构建时使用最新成功版本。' : proposal.basePolicy.expectedBaseVersionId === null ? '首个版本，尚无已发布应用；首次交付后此基线需要重新确认。' : `仅针对 ${versionLabel(proposal.basePolicy.expectedBaseVersionId)}；基线改变后需要重新确认。`}</div>
+    <strong>本提案验收要求</strong><ul>{proposal.acceptance.map(item => <li key={item.id}><Check size={12}/>{item.description}</li>)}</ul>
     {proposal.lastAdmissionError && <p className="proposal-error">{proposal.lastAdmissionError.message}</p>}
     {proposal.status === 'open' && <><label className="proposal-strategy">构建策略<select aria-label="提案构建策略" value={strategy} onChange={event => setStrategy(event.target.value as 'build' | 'plan')}><option value="build">直接构建</option><option value="plan">先确认计划</option></select></label><button className="primary-button" disabled={busy} onClick={() => onAccept(strategy)}>接受提案并创建构建</button><small>仅此操作会使用一次构建额度；刷新提案不会创建构建。</small><button className="card-dismiss" disabled={busy} onClick={onDismiss}>不采用此提案</button></>}
     {['stale', 'expired'].includes(proposal.status) && <><p>当前提案不可执行。刷新只会重新评估，并产生需要再次接受的新提案。</p><button className="secondary-button" disabled={busy} onClick={onRefresh}><RefreshCw size={13}/>刷新提案（只读重评）</button></>}

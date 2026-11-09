@@ -213,3 +213,9 @@ pnpm --filter @atoms/web exec node --import tsx scripts/check-sharing-external.m
 标志表示操作者声明门禁已接受，本身不证明隔离成立。工具验证实际外部 HTTPS 登录/Secure host-only Cookie/刷新、实际复制比对、无工作台 Cookie 新浏览器打开、真实模块资源/新增编辑后刷新保存、M2 精确 ZIP 实际 bytes/hash、匿名源码拒绝、内部端点与非法签名拒绝，以及前后双游标/消息/Run/版本/配额不变。结果不记录完整 capability、Cookie 或体验码；截图遮罩输入，不启用 trace/raw URL 日志。
 
 输出在 `review-artifacts/m3-external/`；失败报告只记阶段和脱敏请求，不能把任何 HTTP200/health 或 Mock 通过当 G5。真实到期、code撤销、域名/key轮换和恶意Origin写入仍由后端/主管独立控制门禁，工具不会自行重启隧道或制造模型任务。目前未执行此工具，没有实际外网/G5通过声明。
+
+## Budget recovery：显式换额续作
+
+共享G0后新增独立预算诊断/恢复client及失败卡，精确区分Token/步数/时长等中止、已观察下界/下一请求预留/最终结算未知。只有API eligible的真实Token中止才提供固定1次构建额度的后续段；已知错误或未审计划显示“验收计划需要重新审阅”，不允许付额沿错计划继续。旧failed/报告保留，新的后续Run从可信保存源码继续，预占与started结算分开。
+
+丢回应/刷新通过GET核对同一旧Run的successor，同请求稳定idem、不盲建新任务；scope/quote/head冲突须重读并再次明确点击。所有计划、source/stop证明和额度准入是API/Agent权威，UI不猜或绕过。独立Mock/6单元/预算14浏览器及原协调反馈回归的精确分段记录见 [Budget Web 第一批状态](BUDGET-RECOVERY-STATUS.md)。requirements完整汇总/语义新协议为下一批，当前未消费，不把最后追加当完整累计目标。

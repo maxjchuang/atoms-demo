@@ -1,3 +1,4 @@
+import {BudgetRecoveryInternalPrefix,BudgetRecoveryVersionHeader,BudgetRecoveryProtocolVersion} from '@atoms/contracts/budget-recovery';
 import type {FastifyInstance,FastifyRequest} from 'fastify';
 import {mkdir,readFile,writeFile,rename,rm} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -32,7 +33,8 @@ export function registerDelivery(h:Host){
  const assertHash=(v:{hash:string})=>{if(digest(v)!==v.hash)throw new Error('Canonical hash mismatch');};
  const signed=<T extends object>(v:T):T&{hash:string}=>({...v,hash:hash(D.deliveryHashBody(v as Record<string,unknown>))});
  const request=async(path:string,method='GET',body?:unknown)=>{
-  const r=await fetch(h.agentUrl.replace(/\/$/,'')+path,{method,headers:{authorization:`Bearer ${h.serviceToken}`,'X-Atoms-Delivery-Version':D.DeliveryProtocolVersion,'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(10000)}).catch(error=>{throw Object.assign(error,{transport:true});});
+  const recovery=path.startsWith(BudgetRecoveryInternalPrefix);
+  const r=await fetch(h.agentUrl.replace(/\/$/,'')+path,{method,headers:{authorization:`Bearer ${h.serviceToken}`,...(recovery?{[BudgetRecoveryVersionHeader]:BudgetRecoveryProtocolVersion}:{'X-Atoms-Delivery-Version':D.DeliveryProtocolVersion}),'content-type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(10000)}).catch(error=>{throw Object.assign(error,{transport:true});});
   if(!r.ok)throw Object.assign(new Error('Delivery runtime unavailable'),{status:r.status});return r;
  };
  const bounded=async(r:Response,max:number)=>{const chunks:Uint8Array[]=[];let size=0;if(!r.body)throw new Error('Missing body');const reader=r.body.getReader();try{for(;;){const item=await reader.read();if(item.done)break;size+=item.value.length;if(size>max)throw new Error('Resource exceeds limit');chunks.push(item.value);}}finally{await reader.cancel();}return Buffer.concat(chunks);};
@@ -43,7 +45,7 @@ export function registerDelivery(h:Host){
  const sourceHash=(files:{path:string;bytes:number;sha256:string}[])=>hash(D.canonicalDeliveryJson(files.map(({path,bytes,sha256})=>({path,bytes,sha256})).sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0)));
  const pathSet=(paths:string[])=>{const keys=new Set<string>();for(const path of paths){if(!RelativePath.safeParse(path).success||! /^(source|dist|evidence)\//.test(path)||/(^|\/)(\.env(?:\..*)?|node_modules|\.git|\.dsh)(\/|$)/.test(path))throw new Error('Unsafe artifact path');const key=path.normalize('NFC').toLowerCase();if(keys.has(key))throw new Error('Colliding artifact paths');keys.add(key);}};
  const prepare=async(r:RunRecord)=>{
-  const d=r.delivery!;if(d.prepare)return;
+  const d=r.delivery!;if(d.prepare||r.recovery)return;
   let discovered:unknown=h.toolchain;if(!discovered)try{discovered=await data(`/internal/delivery/v1/toolchains/${encodeURIComponent(h.toolchainId)}`);}catch(error){if((error as {status?:number}).status===404)throw new Error('Configured trusted toolchain is not supported');throw error;}
   const toolchain=D.ToolchainDescriptor.parse(discovered);if(toolchain.id!==h.toolchainId)throw new Error('Toolchain identity mismatch');
   const proposal=store.state.coordination.proposals.find(v=>v.id===r.proposalId);
@@ -78,7 +80,7 @@ export function registerDelivery(h:Host){
   const parsed='state'in raw?D.ReportRead.parse(raw):{state:'available' as const,report:D.DeliveryReport.parse(raw)};
   if(parsed.state!=='available')return;
   const report=parsed.report;assertHash(report);
-  if(report.projectId!==r.dto.projectId||report.runId!==r.dto.id||report.executionId!==r.dto.executionId||report.preparationId!==r.delivery!.preparationId||D.canonicalDeliveryJson(report.seed)!==D.canonicalDeliveryJson(r.delivery!.prepare!.seed))throw new Error('Report subject mismatch');
+  if(report.projectId!==r.dto.projectId||report.runId!==r.dto.id||report.executionId!==r.dto.executionId||report.preparationId!==r.delivery!.preparationId||D.canonicalDeliveryJson(report.seed)!==D.canonicalDeliveryJson(r.delivery!.prepare?.seed??r.delivery!.wrapper!.bundle.seed))throw new Error('Report subject mismatch');
   if(report.bundle&&D.canonicalDeliveryJson(report.bundle)!==D.canonicalDeliveryJson(r.delivery!.wrapper?.bundle))throw new Error('Report changed frozen bundle');
   if(r.delivery!.report?.final&&report.hash!==r.delivery!.report.hash)throw new Error('Final report is immutable');
   if(r.delivery!.report&&report.revision<r.delivery!.report.revision)throw new Error('Stale report');
@@ -126,7 +128,7 @@ export function registerDelivery(h:Host){
   if(finalSnapshot.execution.id!==r.dto.executionId||finalSnapshot.execution.runId!==r.dto.id||finalSnapshot.binding.hash!==r.delivery!.wrapper!.bundle.binding.hash||finalSnapshot.binding.id!==r.delivery!.wrapper!.bundle.binding.id||finalSnapshot.execution.artifactId!==manifest.id)throw new Error('Final snapshot binding mismatch');
   if(finalSnapshot.execution.status!=='succeeded')throw Object.assign(new Error('Awaiting terminal execution snapshot'),{status:503});
   persist(()=>{current(r.dto.id).delivery!.finalUsage=finalSnapshot.cumulativeUsage;});
-  const usage=finalSnapshot.cumulativeUsage;const budget=r.delivery!.prepare!.totalBudget;
+  const usage=finalSnapshot.cumulativeUsage;const budget=r.delivery!.prepare?.totalBudget??r.delivery!.wrapper!.bundle.binding.totalBudget;
   if(!usage||usage.inputTokens===null||usage.outputTokens===null||usage.activeMs>budget.maxWallTimeMs||usage.modelSteps>budget.maxModelSteps||usage.inputTokens>budget.maxInputTokens||usage.outputTokens>budget.maxOutputTokens)throw new Error('Unknown or exceeded total usage');
   const report=await loadReport(r);if(!report?.final||report.lifecycle!=='completed'||!['complete','partial'].includes(D.deriveDeliveryQuality(report)))throw new Error('Delivery blocked or provisional');
   const files=manifest.files;pathSet(files.map(f=>f.path));
@@ -139,16 +141,20 @@ export function registerDelivery(h:Host){
  };
  const tick=async(r:RunRecord,ingest:(r:RunRecord,event:AgentEventDto)=>Promise<void>,publish:(r:RunRecord,artifactId:string)=>Promise<void>)=>{
   const runId=r.dto.id;
-  if(r.dto.status==='cancelling'&&!r.delivery!.prepare){persist(()=>h.finish(current(runId),'cancelled'));return;}
+  if(r.dto.status==='cancelling'&&!r.delivery!.prepare&&!r.delivery!.wrapper){persist(()=>h.finish(current(runId),'cancelled'));return;}
   await prepare(r);r=current(runId);const d=r.delivery!;
   const path=reportPath(r);
   if(r.dto.status==='cancelling'){
-   try{await request(path);}catch(error){if((error as {status?:number}).status===404){if((d.stage==='preparing'?d.putPending:d.executionPutPending)===false&&!(d.stage==='preparing'?d.prepareAccepted:d.executionAccepted)){if(d.stage==='executing'){const prefix=`/internal/delivery/v1/preparations/${d.preparationId}`;await request(prefix+'/cancel','POST',r.cancelCommand??{commandId:id('command')});const report=await loadReport(r,prefix);if(!report?.final)return;}persist(()=>{if(d.stage==='preparing')current(runId).delivery!.noReportExpected=true;h.finish(current(runId),'cancelled');});return;}throw error;}throw error;}
+   try{await request(path);}catch(error){if((error as {status?:number}).status===404){if((d.stage==='preparing'?d.putPending:d.executionPutPending)===false&&!(d.stage==='preparing'?d.prepareAccepted:d.executionAccepted)){if(d.stage==='executing'&&!r.recovery){const prefix=`/internal/delivery/v1/preparations/${d.preparationId}`;await request(prefix+'/cancel','POST',r.cancelCommand??{commandId:id('command')});const report=await loadReport(r,prefix);if(!report?.final)return;}persist(()=>{if(d.stage==='preparing')current(runId).delivery!.noReportExpected=true;h.finish(current(runId),'cancelled');});return;}throw error;}throw error;}
    if(!r.cancelCommand)persist(()=>{current(runId).cancelCommand={commandId:id('command')};});
    await request(path+'/cancel','POST',r.cancelCommand);
   }else{
-   const key=d.stage==='preparing'?'putPending':'executionPutPending';persist(()=>{current(runId).delivery![key]=true;});
-   await request(path,'PUT',d.stage==='preparing'?d.prepare:d.wrapper);persist(()=>{current(runId).delivery![key]=false;if(d.stage==='preparing')current(runId).delivery!.prepareAccepted=true;else current(runId).delivery!.executionAccepted=true;});
+   const previouslyUncertain=Boolean(d.executionPutPending),previouslyAccepted=Boolean(d.executionAccepted);const key=d.stage==='preparing'?'putPending':'executionPutPending';if(!(r.recovery&&!d.executionAccepted&&Date.now()>Date.parse(r.recovery.request.authorization.startBefore)))persist(()=>{current(runId).delivery![key]=true;});
+   if(r.recovery&&!d.executionAccepted&&Date.now()>Date.parse(r.recovery.request.authorization.startBefore)){
+    if(d.executionPutPending===false){persist(()=>{current(runId).delivery!.noReportExpected=true;h.finish(current(runId),'failed','CONFLICT','续跑授权已过期，未确认启动；保留原失败和唯一后继关系。');});return;}
+    // A possibly delivered PUT is reconciled at the same identity; never manufacture a second execution.
+    if(!r.cancelCommand)persist(()=>{current(runId).cancelCommand={commandId:id('command')};h.updateRun(current(runId),{status:'cancelling',pendingAttention:null,pendingAnswer:null});h.message(current(runId),'续跑启动授权已过期，正在核对可能已送达的执行；不会盲目重派，停止确认前保留任务锁。');});await request(path);await request(path+'/cancel','POST',r.cancelCommand);
+   }else{try{await request(r.recovery?BudgetRecoveryInternalPrefix+'/executions/'+r.dto.executionId:path,'PUT',r.recovery?r.recovery.request:d.stage==='preparing'?d.prepare:d.wrapper);}catch(error){const status=(error as{status?:number}).status;if(r.recovery&&!previouslyUncertain&&!previouslyAccepted&&status&&[400,401,403,404,409].includes(status)){persist(()=>{current(runId).delivery!.executionPutPending=false;current(runId).delivery!.runtimeStopped=true;current(runId).delivery!.noReportExpected=true;h.finish(current(runId),'failed','CONFLICT','执行服务已明确拒绝续跑来源或授权；未启动Worker，保留旧报告与唯一后继记录。');});return;}throw error;}}persist(()=>{current(runId).delivery![key]=false;if(d.stage==='preparing')current(runId).delivery!.prepareAccepted=true;else current(runId).delivery!.executionAccepted=true;});
   }
   r=current(runId);
   if(r.delivery!.stage==='preparing'){
@@ -241,7 +247,7 @@ export function registerDelivery(h:Host){
   versions:request.context.facts.versions.map(v=>{const stored=store.state.versions.find(x=>x.dto.id===v.id)!,r=origin(stored);return {versionId:v.id,quality:r?.delivery?(r.delivery.invalid?'blocked':r.delivery.verified?r.delivery.report?.quality??'pending':'pending'):'legacy_unverified',report:r?.delivery?.report?{id:r.delivery.report.id,hash:r.delivery.report.hash}:null,sourceSnapshotHash:r?.delivery?.report?.attempts.at(-1)?.sourceBeforeHash??null,provenance:provenance(stored,r),gaps:r?.delivery?.report?.gaps??[]};}),
   runs:request.context.facts.runs.map(v=>{const r=store.state.runs.find(x=>x.dto.id===v.id)!;return {runId:v.id,quality:r.delivery?(r.delivery.invalid?'blocked':r.delivery.verified||r.delivery.report?.quality==='blocked'?r.delivery.report?.quality??'pending':'pending'):'legacy_unverified',report:r.delivery?.report?{id:r.delivery.report.id,hash:r.delivery.report.hash}:null,gaps:r.delivery?.report?.gaps??[]};}),availableActions:[]}) as Record<string,unknown>));
  return {tick,verifyCandidate,archive,view,provenance,facts,signed,request,loadReport,
-  invalid(r:RunRecord,error?:unknown){persist(()=>{const currentRecord=current(r.dto.id);const reasons:Record<string,string>={'Nonpublic lockfile':'LOCKFILE_NONPUBLIC_REFERENCE','Archive checksum mismatch':'ARCHIVE_CHECKSUM_MISMATCH','Archive contents manifest mismatch':'ARCHIVE_CONTENTS_MISMATCH','Candidate source/dist mismatch':'SOURCE_DIST_BINDING_MISMATCH','Report subject mismatch':'REPORT_SUBJECT_MISMATCH','Report changed frozen bundle':'FROZEN_BUNDLE_MISMATCH','Unknown or exceeded total usage':'BUDGET_USAGE_INVALID','Canonical hash mismatch':'OBJECT_HASH_MISMATCH'};currentRecord.delivery!.invalidReason=error instanceof Error&&error.name==='ZodError'?'CONTRACT_INVALID':error instanceof Error?reasons[error.message]??'DELIVERY_VALIDATION_FAILED':'DELIVERY_VALIDATION_FAILED';currentRecord.delivery!.invalid='Evidence validation failed';if(!terminal(currentRecord.dto.status)){if(!currentRecord.delivery!.prepare||currentRecord.delivery!.runtimeStopped)h.finish(currentRecord,currentRecord.dto.status==='cancelling'?'cancelled':'failed','ARTIFACT_INVALID','交付证据未通过完整性校验，保留当前版本。');else{currentRecord.cancelCommand??={commandId:id('command')};h.updateRun(currentRecord,{status:'cancelling',pendingAttention:null,pendingAnswer:null});}}});},
+  invalid(r:RunRecord,error?:unknown){persist(()=>{const currentRecord=current(r.dto.id);const reasons:Record<string,string>={'Nonpublic lockfile':'LOCKFILE_NONPUBLIC_REFERENCE','Archive checksum mismatch':'ARCHIVE_CHECKSUM_MISMATCH','Archive contents manifest mismatch':'ARCHIVE_CONTENTS_MISMATCH','Candidate source/dist mismatch':'SOURCE_DIST_BINDING_MISMATCH','Report subject mismatch':'REPORT_SUBJECT_MISMATCH','Report changed frozen bundle':'FROZEN_BUNDLE_MISMATCH','Unknown or exceeded total usage':'BUDGET_USAGE_INVALID','Canonical hash mismatch':'OBJECT_HASH_MISMATCH'};currentRecord.delivery!.invalidReason=error instanceof Error&&error.name==='ZodError'?'CONTRACT_INVALID':error instanceof Error?reasons[error.message]??'DELIVERY_VALIDATION_FAILED':'DELIVERY_VALIDATION_FAILED';currentRecord.delivery!.invalid='Evidence validation failed';if(!terminal(currentRecord.dto.status)){if(!currentRecord.delivery!.prepare&&!currentRecord.delivery!.wrapper||currentRecord.delivery!.runtimeStopped)h.finish(currentRecord,currentRecord.dto.status==='cancelling'?'cancelled':'failed','ARTIFACT_INVALID','交付证据未通过完整性校验，保留当前版本。');else{currentRecord.cancelCommand??={commandId:id('command')};h.updateRun(currentRecord,{status:'cancelling',pendingAttention:null,pendingAnswer:null});}}});},
   async restoreCheck(v:VersionRecord){if(!v.deliveryOriginRunId)return;const r=origin(v);if(!r?.delivery?.report?.exportManifest)throw new Error('Missing restore provenance');for(const f of r.delivery.report.exportManifest.files){const bytes=await readFile(join(v.directory,f.path));if(bytes.length!==f.bytes||hash(bytes)!==f.sha256)throw new Error('Restore source changed');}}
  };
 }

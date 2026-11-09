@@ -1,6 +1,6 @@
-# Requirements authority 0.1.0 — proposal, not a frozen contract
+# Requirements authority 0.1.0 — frozen G0
 
-This second G0 is separate from budget recovery. Shared Schema/fixtures/tests are candidates for supervisor G0 review; no consumers are implemented by this contract commit. The API owns versioned requirement authority; Agent interprets messages and proposes a complete reviewable scope; Web presents that scope and asks the user to accept it. Existing execution/conversation/delivery DTOs and old message/proposal/report rows are not extended or rewritten.
+This second G0 is separate from budget recovery. G0 Schema/fixtures/tests were frozen at241ce25 (supervisor shared check and122tests passed). API consumers are delivered separately; this document preserves the protocol and clarifies source/queue policy without changing DTOs. The API owns versioned requirement authority; Agent interprets messages and proposes a complete reviewable scope; Web presents that scope and asks the user to accept it. Existing execution/conversation/delivery DTOs and old message/proposal/report rows are not extended or rewritten.
 
 ## Minimal new objects
 
@@ -45,3 +45,10 @@ Source basis is explicit: empty_project has no published source and can only pro
 The independent modules use `X-Atoms-Requirements-Version:0.1.0` on every new route/wrapper, echoed on successful HTTP responses. PUT accepts identical frozen request/hash, refuses differing body for the same turn; new wrapper GET/events/cancel preserve request purpose/snapshot refs and use existing coordination cancellation semantics. No old DTO accepts a new requirements field. Producers/consumers independently calculate canonical hashes excluding only each object's own top-level hash and validate actual source provenance.
 
 G0 vector: canonical synthetic snapshot is1,285 UTF-8 bytes, SHA256 `4a07c6e30061ced38a02fa7d5b86b0591f2c8d3f4028f95e811aa02d29c55e74`. Fixtures are shapes, not model/authority/browser proof. Independent API consumption tests must additionally run three real-HTTP FakeRuntime ask messages then typed full acceptance, cross-session duplicates, old-accept bypass rejection, auto single-clear compatibility, read-only consultation, typed review zero Run, source/base/stale checks, legacy import preservation and full cumulative Seed projection.
+
+
+## Consumer policy clarification (no DTO expansion)
+
+A first complete explicit intent that is already authorized/building is distinct from multiple unaccepted planning requests. A later clear auto/latest intent may queue behind that first build; dispatch uses its actual latest successful source plus the complete authorized cumulative Seed, not a forced template merely because the earlier Router snapshot was empty. Typed scope_review/refresh proposals instead lock exact_version (including null) and reject head drift before Prepare. Ordinary proposals retain their declared latest/exact policy, and UI must distinguish the two from the precise state check at acceptance.
+
+External typedaccept and budgetcontinue additionally refuse while a later ordinary text/short-answer turn is queued/running/cancelling or a clarification remains open. Typed status/sharing operations are known read-only exceptions. Auto materialization excludes its own active turn from this check; it does not block itself or silently ignore a later unparsed intent. After a genuine scope change commits, the old summary/quote is stale. No pending question is auto-answered or transformed into an accepted requirement.

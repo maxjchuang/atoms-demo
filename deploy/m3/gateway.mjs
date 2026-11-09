@@ -24,7 +24,7 @@ export function createGateway({role,manifestFile,upstream,webDir,pausedFile}){
    const origins=configured.map(value=>{const u=new URL(value);if(u.protocol!=='https:'||u.origin!==value||u.username||u.password||u.hostname.includes('*'))throw Error('Invalid configured origin');return u;});
    const expected=origins.find(u=>u.host===req.headers.host);if(!expected)return deny(403,'Unexpected gateway host');
    if(role==='workbench'&&['POST','DELETE','PUT','PATCH'].includes(req.method)&&req.headers.origin!==expected.origin)return deny(403,'Exact same-host workbench Origin required');
-   const api=role==='workbench'&&/^\/api\/(?:v1|v2|delivery\/v1|sharing\/v1)(?:\/|$)/.test(path);
+   const api=role==='workbench'&&/^\/api\/(?:v1|v2|delivery\/v1|sharing\/v1|budget-recovery\/v1|requirements\/v1)(?:\/|$)/.test(path);
    if(path==='/internal'||path.startsWith('/internal/')||path.startsWith('/metrics')||path.startsWith('/broker')||path.startsWith('/docker')||path.startsWith('/.'))return deny(404,'Not found');
    if(role==='preview'&&(!['GET','HEAD'].includes(req.method)||!/^\/p\/[^/]+\/.+/.test(path)))return deny(404,'Not found');
    if(api||role==='preview'){

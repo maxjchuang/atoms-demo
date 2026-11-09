@@ -12,7 +12,7 @@ export interface ProjectRecord { dto: ProjectDto; codeId: string }
 export interface RunRecord { dto: RunDto; prompt: string; codeId: string; started: boolean; sourceSeq: number;
   request?: StartExecutionDto; manifestHash?: string; answerCommand?: object; cancelCommand?: object;
   isolationWaiting?:boolean; runtimeDisconnected?: boolean; originTurnId?: string; sourceMessageId?: string; proposalId?: string;
-  exactBaseVersionId?: string | null; delivery?: DeliveryRecord; budgetContinuation?:boolean; recovery?:{parentRunId:string;rootRunId:string;segment:number;request:import('@atoms/contracts/budget-recovery').RecoveryExecutionRequestDto} }
+  requirementsSummary?:{id:string;hash:string;revision:number;confirmedSnapshotId:string};exactBaseVersionId?: string | null; delivery?: DeliveryRecord; budgetContinuation?:boolean; recovery?:{parentRunId:string;rootRunId:string;segment:number;request:import('@atoms/contracts/budget-recovery').RecoveryExecutionRequestDto} }
 export interface DeliveryRecord {
   stage:'preparing'|'executing'; preparationId:string; planningSeq:number;
   prepare?:PrepareDeliveryPlanRequestDto; prepareHash?:string; wrapper?:DeliveryExecutionRequestDto;
@@ -22,7 +22,7 @@ export interface DeliveryRecord {
 export interface CoordinationRecord { dto: CoordinationTurnDto; codeId: string; operation: StartCoordinationRequestDto['operation'];
   inputContent: string; replyTo?: StartCoordinationRequestDto['replyTo']; request?: StartCoordinationRequestDto; requestHash?: string;
   sourceSeq: number; started: boolean; cancelCommand?: {commandId: string}; disconnected?: boolean;
-  requestedContextVersionId?:string|null; deliveryRequest?:import('@atoms/contracts/delivery').DeliveryCoordinationRequestDto; putPending?:boolean; cancelUncertainNotified?:boolean }
+  requirementsReview?:ReturnType<typeof import('@atoms/contracts/requirements').RequirementSnapshotRef.parse>;requirementsRequest?:import('@atoms/contracts/requirements').RequirementsCoordinationRequestDto;requirementsResponse?:import('@atoms/contracts/requirements').RequirementsCoordinationSnapshotDto;requestedContextVersionId?:string|null; deliveryRequest?:import('@atoms/contracts/delivery').DeliveryCoordinationRequestDto; putPending?:boolean; cancelUncertainNotified?:boolean }
 export interface CoordinationState { turns: CoordinationRecord[]; messages: ConversationMessageDto[]; events: ConversationEventDto[];
   proposals: ChangeProposalDto[]; clarifications: ClarificationDto[]; memories: ProjectMemoryViewDto[];
   revisions: Record<string, number>; proposalMemorySuggestions:Record<string,RouterResultDto['memoryUpdates']>;
@@ -50,7 +50,7 @@ export interface PublicProvisionReceipt {
  previousCodeIds:string[];projectLimitChanges:{codeId:string;from:number;to:10}[];
  preserved:{projects:number;runs:number;versions:number;messages:number;events:number;started:number};historySha256:string;
 }
-export interface BudgetRecoveryOrigin {view?:ReturnType<typeof import('@atoms/contracts/budget-recovery').RecoveryRuntimeView.parse>;invalid?:boolean;checkedAt?:number;quote?:ReturnType<typeof import('@atoms/contracts/budget-recovery').RecoveryOffer.parse>;revision:number;stopCommand?:ReturnType<typeof import('@atoms/contracts/budget-recovery').RecoveryStopRequest.parse>}
+export interface BudgetRecoveryOrigin {view?:ReturnType<typeof import('@atoms/contracts/budget-recovery').RecoveryRuntimeView.parse>;invalid?:boolean;checkedAt?:number;auditAt?:number;quote?:ReturnType<typeof import('@atoms/contracts/budget-recovery').RecoveryOffer.parse>;revision:number;stopCommand?:ReturnType<typeof import('@atoms/contracts/budget-recovery').RecoveryStopRequest.parse>}
 export interface BudgetRecoveryState {origins:Record<string,BudgetRecoveryOrigin>;successors:Record<string,{runId:string;operationId:string;codeId:string;requestHash:string}>;keys:Record<string,{requestHash:string;runId:string;operationId:string}>}
 export interface State { budgetRecovery?:BudgetRecoveryState; codes: Code[]; sessions: SessionRecord[]; projects: ProjectRecord[]; runs: RunRecord[];
   versions: VersionRecord[]; messages: MessageRecord[]; events: ProjectEventDto[]; sourceEvents: AgentEventDto[];
@@ -59,6 +59,8 @@ const empty = (): State => ({ codes: [], sessions: [], projects: [], runs: [], v
 
 /** Single API process owns this SQLite database. State changes are atomic snapshots. */
 export class Store {
+  private transactionDepth=0;
+  get inTransaction(){return this.transactionDepth>0;}
   readonly db: DatabaseSync;
   state: State;
   constructor(filename: string) {
@@ -73,7 +75,7 @@ export class Store {
   }
   transaction<T>(fn: () => T): T {
     const before = JSON.stringify(this.state);
-    this.db.exec('BEGIN IMMEDIATE');
+    this.db.exec('BEGIN IMMEDIATE');this.transactionDepth++;
     try {
       const result = fn();
       this.db.prepare('INSERT INTO app_state(id,document) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET document=excluded.document').run(JSON.stringify(this.state));
@@ -81,7 +83,7 @@ export class Store {
       return result;
     } catch (error) {
       this.db.exec('ROLLBACK'); this.state = JSON.parse(before); throw error;
-    }
+    }finally{this.transactionDepth--;}
   }
   close() { this.db.close(); }
 }

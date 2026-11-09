@@ -9,7 +9,7 @@ import {hasDerivedModelCriteria,assertCanonicalSeedCoverage} from '@atoms/contra
 import type {Store,RunRecord,SessionRecord,VersionRecord,ProjectRecord} from './store.js';
 
 type Host={app:FastifyInstance;store:Store;dataDir:string;agentUrl:string;serviceToken:string;toolchainId:string;
-  toolchain?:ReturnType<typeof D.ToolchainDescriptor.parse>;planningMode?:'host_profile'|'model_proposed';profileHint?:{id:string;hash:string};
+  requirementScope?:(r:RunRecord)=>{goal:string;texts:string[];messageIds:string[]}|null;toolchain?:ReturnType<typeof D.ToolchainDescriptor.parse>;planningMode?:'host_profile'|'model_proposed';profileHint?:{id:string;hash:string};
   hash:(value:string|Uint8Array)=>string;id:(prefix:string)=>string;now:()=>string;
   fail:(status:number,code:string,message:string)=>never;authorize:(r:FastifyRequest)=>SessionRecord;
   ownRun:(id:string,s:SessionRecord)=>RunRecord;ownProject:(id:string,s:SessionRecord)=>ProjectRecord;ownVersion:(id:string,s:SessionRecord)=>VersionRecord;
@@ -50,9 +50,10 @@ export function registerDelivery(h:Host){
   const toolchain=D.ToolchainDescriptor.parse(discovered);if(toolchain.id!==h.toolchainId)throw new Error('Toolchain identity mismatch');
   const proposal=store.state.coordination.proposals.find(v=>v.id===r.proposalId);
   const confirmation=store.state.coordination.proposalConfirmations.find(c=>c.proposalId===r.proposalId&&c.runId===r.dto.id);
-  const sourceMessages=r.sourceMessageId?[r.sourceMessageId]:store.state.messages.filter(m=>m.runId===r.dto.id&&m.role==='user').map(m=>m.id);
-  const goal=proposal?.goal??r.prompt;
-  const items=[{id:id('criterion'),kind:'goal' as const,text:goal,required:true},...(proposal?.acceptance??[]).map(a=>({id:id('criterion'),kind:'declared_acceptance' as const,text:a.description,required:true}))];
+  const completeScope=h.requirementScope?.(r);
+  const sourceMessages=completeScope?.messageIds??(r.sourceMessageId?[r.sourceMessageId]:store.state.messages.filter(m=>m.runId===r.dto.id&&m.role==='user').map(m=>m.id));
+  const goal=completeScope?.goal??proposal?.goal??r.prompt;
+  const items=[{id:id('criterion'),kind:'goal' as const,text:goal,required:true},...(completeScope?.texts??[]).map(text=>({id:id('criterion'),kind:'declared_acceptance' as const,text,required:true})),...(proposal?.acceptance??[]).map(a=>({id:id('criterion'),kind:'declared_acceptance' as const,text:a.description,required:true}))];
   const seed=D.RequirementSeed.parse(signed({protocolVersion:D.DeliveryProtocolVersion,id:id('seed'),projectId:r.dto.projectId,runId:r.dto.id,executionId:r.dto.executionId!,revision:1,goal,items,
    source:{admission:confirmation?.kind==='explicit_accept'?'explicit_proposal_acceptance':'auto_explicit_request',messageIds:sourceMessages,turnId:r.originTurnId??null,proposalId:r.proposalId??null,planAttentionId:null,admittedAt:r.dto.createdAt},createdAt:now()}));
   const total=r.request!.budget;

@@ -12,7 +12,7 @@ import {
 import { sha256 } from './files.js';
 import { StructuredOutputError } from './structured-output.js';
 import {
-  canonicalJson, CoordinationError, readPublishedSources, settleDecision, usedContext, validateContext,
+  canonicalJson, CoordinationError, CoordinatorStructureError, readPublishedSources, settleDecision, usedContext, validateContext,
   type SemanticDecision, type SourceRead,
 } from './coordination-context.js';
 import { DshCoordinatorAdapter, FakeCoordinatorAdapter, type CoordinatorAdapter, type CoordinationModelContext } from './coordinator-adapters.js';
@@ -205,15 +205,15 @@ export class CoordinatorRuntime {
             retries++; report(`协调模型结构化结果不完整，开始有界重试（${retries}/${request.budget.maxStructuredRetries}）。`); continue;
           }
           if (decision.kind !== 'read_sources') {
-            if(record.requirements&&(this.adapter.mode==='dsh'||decision.scope))try{
-              failureStage='settle_decision';const preview=settleDecision(request,decision,context.sources,this.excludedTurns);const facts=record.requirements.coordination.deliveryFacts;
-              failureStage='settle_requirements';settleRequirements(record.requirements,decision,preview,{protocolVersion:'0.1.0',coordination:{...record.snapshot,result:preview,status:'completed',revision:record.snapshot.revision+1,updatedAt:now()},deliveryFactsUsed:{projectId:facts.projectId,revision:facts.revision,asOf:facts.asOf,hash:facts.hash}});
+            if(this.adapter.mode==='dsh'||decision.scope||!record.requirements)try{
+              failureStage='settle_decision';const preview=settleDecision(request,decision,context.sources,this.excludedTurns);const facts=record.requirements?.coordination.deliveryFacts;
+              if(record.requirements&&facts){failureStage='settle_requirements';settleRequirements(record.requirements,decision,preview,{protocolVersion:'0.1.0',coordination:{...record.snapshot,result:preview,status:'completed',revision:record.snapshot.revision+1,updatedAt:now()},deliveryFactsUsed:{projectId:facts.projectId,revision:facts.revision,asOf:facts.asOf,hash:facts.hash}});}
             }catch(error){
-              if(!(error instanceof RequirementMappingError))throw error;
+              if(!(error instanceof RequirementMappingError)&&!(error instanceof CoordinatorStructureError))throw error;
               const used=record.snapshot.usage,known=used.inputTokens!==null&&used.outputTokens!==null;
               const room=known&&used.modelSteps<request.budget.maxModelSteps&&used.inputTokens!<request.budget.maxInputTokens&&used.outputTokens!<request.budget.maxOutputTokens&&Date.now()-startedAt<request.budget.maxWallTimeMs;
               if(retries>=Math.min(1,request.budget.maxStructuredRetries)||!room)throw error;
-              retries++;context.validationFeedback=error.feedback;report('完整需求映射缺项：'+error.feedback.issues.flatMap(i=>i.refs).join('、')+'；在同一总预算内纠正一次，不自动补映射或删除要求。');continue;
+              retries++;context.validationFeedback=error.feedback;report('协调结构/需求映射校验未通过：'+error.feedback.issues.map(i=>i.path.join('.')).join('、')+'；在同一总预算内纠正一次，不自动补映射或删除要求。');continue;
             }
             break;
           }

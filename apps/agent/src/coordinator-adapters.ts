@@ -2,6 +2,7 @@ import { requirementsPrompt, scopeReviewDirective } from './requirements-context
 import type { RequirementsCoordinationRequestDto } from '@atoms/contracts/requirements';
 import { DSH_NATIVE_READONLY_ENV } from './dsh-native-env.js';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { DeepSeekHarnessOptions } from '@deepseek-ai/dsh-sdk-client';
@@ -137,9 +138,15 @@ export class DshCoordinatorAdapter implements CoordinatorAdapter {
       context.report('正在恢复项目协调会话与最新可信上下文。');
       await harness.start();
       const markerFile = path.join(context.projectHome, `router-session-${generation}.json`);
-      const marker = existsSync(markerFile) ? JSON.parse(await readFile(markerFile, 'utf8')) as { sessionId: string; model: string } : null;
+      // Requirements/memory are API-owned durable context. Never replay opaque native
+      // history alongside that full snapshot: it duplicates every earlier scope.
+      const freshSnapshotSession = context.requirements !== undefined;
+      const marker = !freshSnapshotSession && existsSync(markerFile) ? JSON.parse(await readFile(markerFile, 'utf8')) as { sessionId: string; model: string } : null;
       if (marker && marker.model !== model) throw new CoordinationError(409, 'INFERENCE_INTERRUPTED', 'Project Router model changed; explicit context migration is required');
-      const session = marker ? await harness.resumeSession(marker.sessionId) : harness.session(`router_${sha256(context.request.projectId).slice(0, 24)}_g${generation}`);
+      const sessionName = freshSnapshotSession
+        ? `router_${sha256(context.request.projectId).slice(0,16)}_turn_${sha256(context.request.turnId).slice(0,16)}_${randomUUID().replaceAll('-','')}`
+        : `router_${sha256(context.request.projectId).slice(0, 24)}_g${generation}`;
+      const session = marker ? await harness.resumeSession(marker.sessionId) : harness.session(sessionName);
       context.report('项目协调会话已就绪，正在理解本次消息。');
       const aliases = buildAliases(context.request, context.excludedTurnIds);
       const currentOperation = context.request.operation;
@@ -186,10 +193,10 @@ export class DshCoordinatorAdapter implements CoordinatorAdapter {
       assertActive(context.signal);
       try { accounting.assertObservable(); }
       catch (error) { if (error instanceof UsageAccountingError) throw new CoordinationError(400, 'BUDGET_EXCEEDED', '模型未提供可核验用量，项目协调不会继续推理或派生操作。'); throw error; }
-      await writeFile(markerFile, JSON.stringify({ sessionId: result.sessionId, model }));
+      if (!freshSnapshotSession) await writeFile(markerFile, JSON.stringify({ sessionId: result.sessionId, model }));
       await appendFile(path.join(context.projectHome, 'coordination-diagnostics.jsonl'), JSON.stringify({
         time: new Date().toISOString(), turnId: context.request.turnId, finishReason: result.finishReason,
-        responseLength: result.finalResponse.length,
+        responseLength: result.finalResponse.length, sessionContext: freshSnapshotSession ? 'authoritative_snapshot' : 'legacy_native_history', promptBytes: Buffer.byteLength(prompt),
       }) + '\n');
       if (['error', 'aborted'].includes(result.finishReason || '')) throw new CoordinationError(503, 'RUNTIME_UNAVAILABLE', 'Project Router model request did not complete');
       const raw = parseModelJson({ text: result.finalResponse, finishReason: result.finishReason }, 'coordinator');

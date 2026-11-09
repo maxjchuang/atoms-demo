@@ -13,6 +13,10 @@ import { formatDuration } from './activity';
 import { HostAction } from './HostAction';
 import { BudgetRecoveryCard } from './BudgetRecovery';
 import { recoverySelectionKey, recoveryApi, diagnosticSummary } from './budget-recovery-api';
+import { RequirementsPanel, useRequirements } from './Requirements';
+import { requirementsApi } from './requirements-api';
+import { HttpError } from './api';
+import type { ProjectRequirementSnapshotDto } from '@atoms/contracts/requirements';
 
 interface Props {
   view: ConversationView;
@@ -35,6 +39,7 @@ interface Props {
   onDismissProposal: (proposal: ChangeProposalDto) => Promise<void>;
   onDismissClarification: (question: ClarificationDto) => Promise<void>;
   onCorrectMemory: (text: string) => void;
+  onPrepareRequirementsReview: (snapshot: ProjectRequirementSnapshotDto) => void;
   onBudgetQuota: (quota: import('zod').z.infer<typeof import('@atoms/contracts').Session>['quota']) => void;
 }
 const kindLabels = { consult: '项目问答', status: '状态查询', change_proposal: '修改需求', clarify: '需求澄清', control: '任务控制' };
@@ -53,6 +58,12 @@ export function ProjectConversation(props: Props) {
   const [unseenMessage, setUnseenMessage] = useState(false);
   const execution = view.workspace.execution;
   const currentRun = execution.activeRun ?? execution.latestRun;
+  const requirements = useRequirements(execution.project.id, view.workspace.conversationRevision, execution.currentVersion?.id ?? null);
+  async function prepareRequirementsReview() { try { const fresh = await requirementsApi.read(execution.project.id); props.onPrepareRequirementsReview(fresh.snapshot); setTab('chat'); } catch (failure) { setSourceError(failure instanceof Error ? failure.message : '当前完整需求暂不可读。'); } }
+  async function acceptLegacy(proposal: ChangeProposalDto, mode: 'build' | 'plan') {
+    try { await requirementsApi.summary(execution.project.id, proposal.id); requirements.reload(); setSourceError('此提案已有完整需求审阅绑定，请使用上方统一接受入口。'); }
+    catch (failure) { if (failure instanceof HttpError && failure.status === 404 && failure.code === 'NOT_FOUND') await props.onAccept(proposal, mode); else setSourceError(failure instanceof Error ? failure.message : '未确认提案绑定，未执行旧接受入口。'); }
+  }
   useEffect(() => {
     setChatBudgetSummary(null);
     if (currentRun?.status !== 'failed') return;
@@ -122,6 +133,7 @@ export function ProjectConversation(props: Props) {
       {tab === 'chat' ? <>
         <div className="coordination-intro"><Sparkles size={16}/><p>可以询问项目，也可以明确提出修改。<small>咨询与状态不占构建次数；明确修改会独立排队。</small></p></div>
         <div className="conversation-shortcuts"><button disabled={busy} onClick={() => void props.onSubmit({ input: { kind: 'status' }, mode: 'ask', runMode: 'build' })}><Clock3 size={13}/>查看当前进度</button><button disabled={busy} onClick={() => void props.onSubmit({ input: { kind: 'sharing_help' }, mode: 'ask', runMode: 'build' })}>如何预览与分享？</button></div>
+        <RequirementsPanel view={requirements.view} loading={requirements.loading} error={requirements.error} onReload={requirements.reload} onPrepareReview={() => void prepareRequirementsReview()} onViewRun={id => void openRun(id)} onQuota={props.onBudgetQuota}/>
         {view.olderCursor && <button className="load-older" disabled={olderLoading} onClick={() => void older()}>{olderLoading ? <LoaderCircle className="spin" size={13}/> : <History size={13}/>}加载更早消息</button>}
         {view.messages.map(message => {
           const turn = message.coordinationTurnId ? view.turns.find(item => item.id === message.coordinationTurnId) : undefined;
@@ -133,7 +145,7 @@ export function ProjectConversation(props: Props) {
               {result && (result.kind === 'consult' || result.kind === 'status') && <div className="answer-basis">基于 {versionLabel(result.contextUsed.contextVersionId)} · 截止 {new Date(result.contextUsed.asOf).toLocaleTimeString('zh-CN', { hour12: false })}<span>项目约定 revision {result.contextUsed.memoryRevision}</span></div>}
             </div></div>
             {result && (result.kind === 'consult' || result.kind === 'status') && result.references.length > 0 && <div className="answer-references">{result.references.map((reference, index) => reference.kind === 'available_action' ? <HostAction key={index} turnId={turn!.id} actionId={reference.actionId} onViewRun={id => void openRun(id)}/> : <span key={index}>{reference.kind === 'version' ? `参考 ${versionLabel(reference.versionId)}` : reference.kind === 'file' ? `源码：${reference.path}` : reference.kind === 'run' ? <button onClick={() => void openRun(reference.runId)}>查看关联任务</button> : <button onClick={() => setTab('memory')}>查看项目约定</button>}</span>)}</div>}
-            {proposal && <ProposalCard proposal={proposal} busy={busy} runMode={turn?.runMode ?? 'build'} versionLabel={versionLabel} onAccept={mode => void props.onAccept(proposal, mode)} onRefresh={() => void props.onRefreshProposal(proposal)} onDismiss={() => void props.onDismissProposal(proposal)} onViewRun={id => void openRun(id)}/>}
+            {proposal && (requirements.view?.pendingSummaries.some(summary => summary.proposal.id === proposal.id) ? <div className="requirements-legacy-notice">此提案绑定完整累计需求，不能仅接受最后一句追加。<button onClick={() => document.querySelector<HTMLElement>(`.complete-requirements-summary[data-proposal-id="${proposal.id}"]`)?.scrollIntoView({ block: 'start', behavior: 'smooth' })}>查看完整累计方案</button></div> : <ProposalCard proposal={proposal} busy={busy || requirements.loading || !!requirements.error} runMode={turn?.runMode ?? 'build'} versionLabel={versionLabel} onAccept={mode => void acceptLegacy(proposal, mode)} onRefresh={() => void props.onRefreshProposal(proposal)} onDismiss={() => void props.onDismissProposal(proposal)} onViewRun={id => void openRun(id)}/>)}
             {question && <ClarificationCard question={question} busy={busy} onDismiss={() => void props.onDismissClarification(question)} onReply={input => props.onSubmit({ input, mode: turn?.mode ?? 'ask', runMode: turn?.runMode ?? 'build', replyTo: { clarificationId: question.id, expectedRevision: question.revision, replyToMessageId: question.questionMessageId } })}/>}
             {result?.kind === 'control' && <div className="control-receipt"><Square size={13}/><span>{result.receipt === 'cancellation_requested' ? '取消构建请求已接收，等待执行停止确认。' : result.receipt === 'already_terminal' ? '目标构建已结束，没有新增任务。' : result.reason?.message ?? '未执行取消。'}</span><button onClick={() => void openRun(result.targetRunId)}>查看目标构建</button></div>}
             {message.role === 'user' && view.turns.filter(item => item.userMessageId === message.id && item.status !== 'completed'
@@ -144,7 +156,7 @@ export function ProjectConversation(props: Props) {
         {execution.queuedRuns.length > 0 && <div className="queue-card"><Clock3 size={14}/>{execution.queuedRuns.length} 个修改任务排队，将在开始时使用最新成功版本。</div>}
       </> : tab === 'activity' ? <>
         <div className="activity-view-heading"><h3>构建活动</h3><p>执行任务与项目问答独立。停止回答不会停止构建。</p></div>
-        {activityRun ? <><RunFeedback run={activityRun} events={events} sync={props.sync} historyLoading={props.historyLoading} historyError={props.historyError} busy={busy} errorSummary={budgetSummary?.runId === activityRun.id ? budgetSummary.summary : null} onCancel={() => void props.onCancelRun(activityRun)}/>{activityRun.status === 'failed' && <BudgetRecoveryCard key={activityRun.id} run={activityRun} onViewRun={id => void openRun(id)} onQuota={props.onBudgetQuota} onDiagnosis={(runId, summary) => setBudgetSummary({runId, summary})} onCreated={() => setSelectedRun(activityRun)} onReview={() => { setTab('chat'); requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.workspace-composer textarea')?.focus()); }}/>}</> : <div className="no-run-state"><Layers3 size={24}/><p>还没有构建任务。明确的修改需求经准入后才会进入这里。</p></div>}
+        {activityRun ? <><RunFeedback run={activityRun} events={events} sync={props.sync} historyLoading={props.historyLoading} historyError={props.historyError} busy={busy} errorSummary={budgetSummary?.runId === activityRun.id ? budgetSummary.summary : null} onCancel={() => void props.onCancelRun(activityRun)}/>{activityRun.status === 'failed' && <BudgetRecoveryCard key={activityRun.id} run={activityRun} onViewRun={id => void openRun(id)} onQuota={props.onBudgetQuota} onDiagnosis={(runId, summary) => setBudgetSummary({runId, summary})} onCreated={() => setSelectedRun(activityRun)} onReview={() => void prepareRequirementsReview()}/>}</> : <div className="no-run-state"><Layers3 size={24}/><p>还没有构建任务。明确的修改需求经准入后才会进入这里。</p></div>}
         {execution.activeRun?.pendingAttention && <RunAttention run={execution.activeRun} busy={busy} onAnswer={answer => void props.onAnswerRun(execution.activeRun!, answer)}/>}
         {execution.queuedRuns.map(run => <button className="queued-run-link" key={run.id} onClick={() => void openRun(run.id)}>等待中的修改任务 · {new Date(run.createdAt).toLocaleTimeString('zh-CN')}</button>)}
       </> : <>

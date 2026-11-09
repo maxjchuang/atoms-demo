@@ -1,3 +1,6 @@
+import { RequirementsCoordinationRequest, RequirementsCoordinationSnapshot, RequirementsError } from '@atoms/contracts/requirements';
+import { BudgetRecoveryRuntime, RecoveryError } from './budget-recovery.js';
+import { BudgetRecoveryError, type RecoveryExecutionRequestDto } from '@atoms/contracts/budget-recovery';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -35,7 +38,7 @@ type CheckValue = ReturnType<typeof Check.parse>;
 export type RecordValue = {
   isolationGeneration?: string; isolationPending?: boolean; isolationCancelRequested?: boolean;
   usageKnown?: boolean; pendingModelRequest?: boolean; usageObservationVersion?: 'settled-request-v1';
-  delivery?: DeliveryExecutionRequestDto;
+  executionBackend?:'host_local'|'docker_linux';recovery?: RecoveryExecutionRequestDto; recoveryInitialFeedback?:string|null; delivery?: DeliveryExecutionRequestDto;
   request: StartExecutionDto; hash: string; snapshot: ExecutionSnapshotDto;
   events: AgentEventDto[]; commands: Record<string, { hash: string; snapshot: ExecutionSnapshotDto }>;
   started: boolean; plan: PlanValue | null; planConfirmed: boolean; queueOrder: number;
@@ -55,6 +58,7 @@ class HttpError extends Error {
 }
 export interface AgentOptions {
   executionBackend?: 'host_local'|'docker_linux'; verification?: DockerVerification; dockerProbe?: boolean; brokerUrl?: string; brokerToken?: string;
+  copyRecoverySource?: (request:RecoveryExecutionRequestDto,workspace:string)=>Promise<void>; recoveryAudit?:()=>Promise<{confirmed:boolean;reason?:string|null}>;
   dataDir: string; serviceToken: string; apiInternalUrl?: string;
   mode?: 'fake' | 'dsh'; apiKey?: string; model?: string; adapter?: ModelAdapter;
   coordinationMode?: 'fake' | 'dsh'; coordinatorAdapter?: CoordinatorAdapter;
@@ -130,25 +134,26 @@ export class AgentRuntime {
     if (!record) throw new HttpError(404, 'NOT_FOUND', 'Execution not found');
     return record;
   }
-  start(raw: unknown, pathId: string, delivery?: DeliveryExecutionRequestDto) {
+  start(raw: unknown, pathId: string, delivery?: DeliveryExecutionRequestDto, recovery?:RecoveryExecutionRequestDto) {
     const request = StartExecutionRequest.parse(raw);
     if (pathId !== request.executionId) throw new HttpError(400, 'INVALID_REQUEST', 'Execution ID mismatch');
     if (!delivery && this.options.isDeliveryReserved?.(pathId)) throw new HttpError(409, 'CONFLICT', 'Execution ID belongs to delivery preparation, not legacy start');
     const hash = sha256(canonical(request));
     const existing = this.records.get(pathId);
     if (existing) {
+      if(existing.recovery&&!recovery)throw new HttpError(409,'CONFLICT','Recovery wrapper required');
       if (existing.hash !== hash) throw new HttpError(409, 'CONFLICT', 'Execution ID already has a different request');
       return { created: false, snapshot: clone(existing.snapshot) };
     }
     if (!this.adapter.ready()) throw new HttpError(503, 'RUNTIME_UNAVAILABLE', 'DeepSeek credentials are not configured');
     const item: RecordValue = {
-      request, hash, ...(delivery ? { delivery } : {}), snapshot: { protocolVersion: PROTOCOL_VERSION, id: pathId, runId: request.runId,
+      request, hash,executionBackend:this.options.executionBackend||'host_local', ...(delivery ? { delivery } : {}),...(recovery?{recovery}:{}), snapshot: { protocolVersion: PROTOCOL_VERSION, id: pathId, runId: request.runId,
         status: 'accepted', phase: null, revision: 1, lastSourceSeq: 0, pendingAttention: null, artifactId: null, updatedAt: now() },
-      events: [], commands: {}, started: false, plan: null, planConfirmed: request.mode === 'build',
+      events: [], commands: {}, started: false, plan: null, planConfirmed: recovery?true:request.mode === 'build',
       queueOrder: Date.now(), activeMs: 0, waitingAt: null, usage: { modelSteps: 0, inputTokens: 0, outputTokens: 0 },
       isolationGeneration: randomUUID().replaceAll('-',''),
       usageKnown: true, pendingModelRequest: false, usageObservationVersion: 'settled-request-v1',
-      ordinaryQuestions: 0, answers: [], repairRoundsUsed: 0, verificationErrors: null, repairClaimed: false,
+      ordinaryQuestions: 0, answers: recovery?clone(this.records.get(recovery.origin.execution.executionId)?.answers||[]):[], repairRoundsUsed: 0, verificationErrors: null, repairClaimed: false,
       tokenAccountingVersion: TOKEN_ACCOUNTING_VERSION,
     };
     this.records.set(pathId, item);
@@ -196,6 +201,8 @@ export class AgentRuntime {
     item.commands[input.commandId] = { hash, snapshot: clone(item.snapshot) }; this.persist();
     return clone(item.snapshot);
   }
+  isExecutionActive(id:string){return this.controllers.has(id)||this.activeSince.has(id);}
+  async disposeOwnedExecution(id:string){if(this.isExecutionActive(id))throw new HttpError(409,'CONFLICT','Execution resources are still active');await this.adapter.close(id);}
   events(id: string, after: number, limit: number) {
     const item = this.get(id);
     const items = item.events.filter((event) => event.sourceSeq > after).slice(0, limit);
@@ -215,6 +222,7 @@ export class AgentRuntime {
   }
   private async prepareWorkspace(item: RecordValue, workspace: string, signal: AbortSignal) {
     await mkdir(workspace, { recursive: true });
+    if(item.recovery){if(!this.options.copyRecoverySource)throw new Error('Recovery source handler unavailable');await this.options.copyRecoverySource(item.recovery,workspace);return;}
     for (const [name, content] of Object.entries(templateFiles)) await putFile(workspace, name, content);
     if (item.request.input.kind === 'version') {
       if (!this.options.apiInternalUrl) throw new Error('API_INTERNAL_URL is not configured');
@@ -243,12 +251,12 @@ export class AgentRuntime {
     const timer = setTimeout(() => controller.abort('budget'), Math.max(1, item.request.budget.maxWallTimeMs - item.activeMs));
     const root = path.join(this.options.dataDir, 'executions', id);
     const workspace = path.join(root, 'workspace'); const evidence = path.join(root, 'evidence');
-    const context: AdapterContext = { request: item.request, workspace,
+    const context: AdapterContext = { request: item.request,sourceBasis:item.recovery?'verified_checkpoint':item.request.input.kind==='template'?'empty_project':'published_version', workspace,
       home: path.join(this.options.dataDir, 'dsh', item.request.projectId), signal: controller.signal,
       remainingOutputTokens: () => item.usageKnown === false ? 0 : item.request.budget.maxOutputTokens - (item.usage?.outputTokens || 0),
       remainingActiveMs: () => Math.max(0, item.request.budget.maxWallTimeMs - item.activeMs - (Date.now() - startedAt)),
       usageIsKnown: () => item.usageKnown !== false, observedUsage: () => item.usage,
-      beginModelRequest: () => { item.pendingModelRequest = true; this.persist(); },
+      beginModelRequest: () => {if(item.recovery&&!item.started&&Date.now()>=Date.parse(item.recovery.authorization.startBefore))throw new HttpError(409,'INVALID_REQUEST','Recovery authorization expired before provider dispatch'); item.pendingModelRequest = true; this.persist(); },
       settleModelRequest: () => { item.pendingModelRequest = false; this.persist(); },
       markUsageUnknown: () => { item.usageKnown = false; this.persist(); },
       report: (content) => this.emit(item, { type: 'message.completed', payload: { messageId: `message_${randomUUID().replaceAll('-', '')}`, content } }),
@@ -268,6 +276,7 @@ export class AgentRuntime {
     };
     if (item.delivery) this.deliveryEngine!.context(item, context);
     try {
+      if(item.recovery&&!item.started&&Date.now()>=Date.parse(item.recovery.authorization.startBefore))throw new HttpError(409,'INVALID_REQUEST','Recovery start authorization expired before first model dispatch');
       if (this.options.executionBackend === 'docker_linux' && (!this.options.verification || !await this.options.verification.ready())) throw new HttpError(503, 'RUNTIME_UNAVAILABLE', 'Docker verification integration is not ready; host fallback is disabled');
       if (item.usageKnown === false) throw new Error('Model usage is unknown; further inference is fenced.');
       this.update(item, { status: 'running', pendingAttention: null,
@@ -298,7 +307,8 @@ export class AgentRuntime {
         }
         this.update(item, { phase: errors ? 'repairing' : 'generating' });
         this.emit(item, { type: 'phase.changed', payload: { phase: errors ? 'repairing' : 'generating' } });
-        const generated = await this.adapter.generate(context, item.plan, errors || undefined);
+        const generated = await this.adapter.generate(context, item.plan, errors || item.recoveryInitialFeedback || undefined);
+        if(typeof generated==='string')item.recoveryInitialFeedback=null;
         if (typeof generated !== 'string') {
           if (item.ordinaryQuestions >= COORDINATION_DEFAULTS.maxOrdinaryRunQuestions) throw new HttpError(422, 'BUDGET_EXCEEDED', '执行中的问题次数已达到上限，未扩大任务预算。');
           item.ordinaryQuestions++; item.waitingAt = Date.now();
@@ -361,7 +371,7 @@ export class AgentRuntime {
       } else {
         item.snapshot.status = 'failed';
         const code = controller.signal.aborted ? 'BUDGET_EXCEEDED'
-          : error instanceof HttpError || error instanceof DeliveryError ? ErrorCode.parse(error.code) : 'INTERNAL_ERROR';
+          : error instanceof HttpError || error instanceof RecoveryError || error instanceof DeliveryError ? (ErrorCode.safeParse(error.code).success?ErrorCode.parse(error.code):'INVALID_REQUEST') : 'INTERNAL_ERROR';
         this.emit(item, { type: 'execution.failed', payload: { code,
           message: error instanceof Error ? error.message.slice(0, 1500) : '执行失败' } });
       }
@@ -398,12 +408,13 @@ export function createAgentServer(options: AgentOptions) {
   const verification = broker ? new DockerVerification(broker,{dataDir:options.dataDir,allowUnreadyProbe:options.dockerProbe}) : undefined;
   options={...options,verification};
   const toolchainProvider=verification?()=>verification.toolchain():async()=>(await trustedTemplate()).descriptor;
-  const pool = new GenerationPool(); let planning!: DeliveryPlanningRuntime;
-  const runtime = new AgentRuntime({ ...options, generationPool: pool, isDeliveryReserved: (id) => planning?.reserved(id) ?? false });
+  if(options.recoveryAudit&&options.mode!=='fake')throw new Error('Synthetic recovery audit is restricted to explicit Fake tests');
+  let recovery!:BudgetRecoveryRuntime;const pool = new GenerationPool(); let planning!: DeliveryPlanningRuntime;
+  const runtime = new AgentRuntime({ ...options,copyRecoverySource:(r,w)=>recovery.copySource(r,w), generationPool: pool, isDeliveryReserved: (id) => planning?.reserved(id) ?? false });
   planning = new DeliveryPlanningRuntime({ dataDir: path.join(options.dataDir, 'delivery'), pool, mode: options.mode,
     apiKey: options.apiKey, model: options.model, apiUrl: options.apiInternalUrl, serviceToken: options.serviceToken,
     legacyExists: (id, runId) => runtime.records.has(id) || [...runtime.records.values()].some((item) => item.request.runId === runId), executionStarted: (id) => runtime.records.has(id), adapter: options.planningAdapter, toolchainProvider, trustedHostPlan: options.trustedHostPlan });
-  const delivery = new DeliveryExecutionRuntime(runtime, planning, { allowControlledRegression: options.allowControlledRegression, trustedSourceFault: options.trustedSourceFault }); runtime.deliveryEngine = delivery;
+  const delivery = new DeliveryExecutionRuntime(runtime, planning, { allowControlledRegression: options.allowControlledRegression, trustedSourceFault: options.trustedSourceFault }); runtime.deliveryEngine = delivery;recovery=new BudgetRecoveryRuntime(runtime,delivery,{dataDir:options.dataDir,backend:options.executionBackend,testAudit:options.recoveryAudit});
   for (const item of runtime.records.values()) if (item.delivery && ['interrupted', 'cancelled', 'failed'].includes(item.snapshot.status) && !delivery.report(item.request.executionId)) delivery.fail(item, item.snapshot.status as 'interrupted', 'Runtime restarted or execution terminated.');
   const coordinator = new CoordinatorRuntime({ ...options, mode: options.coordinationMode ?? options.mode });
   const server = createServer(async (req, res) => {
@@ -411,11 +422,13 @@ export function createAgentServer(options: AgentOptions) {
     const url = new URL(req.url || '/', 'http://runtime');
     const coordinationRequest = url.pathname.startsWith('/internal/v2/');
     const deliveryRequest = url.pathname.startsWith('/internal/delivery/v1/');
-    const isolationRequest = url.pathname.startsWith('/internal/isolation/v1/');
-    res.setHeader(isolationRequest ? 'x-atoms-isolation-version' : deliveryRequest ? 'x-atoms-delivery-version' : coordinationRequest ? 'x-atoms-coordination-version' : 'x-atoms-protocol-version', isolationRequest ? IsolationProtocolVersion : deliveryRequest ? DeliveryProtocolVersion : coordinationRequest ? CoordinationProtocolVersion : PROTOCOL_VERSION);
+    const isolationRequest = url.pathname.startsWith('/internal/isolation/v1/');const recoveryRequest=url.pathname.startsWith('/internal/budget-recovery/v1/');const requirementsRequest=url.pathname.startsWith('/internal/requirements/v1/');
+    res.setHeader(requirementsRequest?'x-atoms-requirements-version':recoveryRequest?'x-atoms-budget-recovery-version':isolationRequest ? 'x-atoms-isolation-version' : deliveryRequest ? 'x-atoms-delivery-version' : coordinationRequest ? 'x-atoms-coordination-version' : 'x-atoms-protocol-version', requirementsRequest||recoveryRequest?'0.1.0':isolationRequest ? IsolationProtocolVersion : deliveryRequest ? DeliveryProtocolVersion : coordinationRequest ? CoordinationProtocolVersion : PROTOCOL_VERSION);
     try {
       const expected = Buffer.from(`Bearer ${options.serviceToken}`); const actual = Buffer.from(req.headers.authorization || '');
       if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) throw new HttpError(401, 'UNAUTHENTICATED', 'Internal service authentication required');
+      if(requirementsRequest){if(req.headers['x-atoms-requirements-version']!=='0.1.0')throw new CoordinationError(400,'INVALID_REQUEST','Unsupported requirements version');const route=url.pathname.match(/^\/internal\/requirements\/v1\/coordination-turns\/([a-z][a-z0-9_-]{2,127})(?:\/(events|cancel))?$/);if(!route)throw new CoordinationError(404,'NOT_FOUND','Requirements route not found');const[,id,action]=route;const outer=()=>{const record=coordinator.get(id);if(!record.requirements)throw new CoordinationError(404,'NOT_FOUND','No requirements wrapper');const wrapper=record.requirements,reference={id:wrapper.requirements.id,hash:wrapper.requirements.hash,revision:wrapper.requirements.revision},f=wrapper.coordination.deliveryFacts;return RequirementsCoordinationSnapshot.parse({protocolVersion:'0.1.0',requirementsUsed:reference,purposeUsed:wrapper.purpose,delivery:{protocolVersion:'0.1.0',coordination:record.snapshot,deliveryFactsUsed:{projectId:f.projectId,revision:f.revision,asOf:f.asOf,hash:f.hash}},interpretation:record.requirementsSnapshot?.interpretation??null});};if(!action&&req.method==='PUT'){const wrapper=RequirementsCoordinationRequest.parse(await jsonBody(req,2097152));const result=coordinator.start(wrapper.coordination.coordination,id,wrapper.coordination,wrapper);return json(result.created?201:200,outer());}if(!action&&req.method==='GET')return json(200,outer());if(action==='cancel'&&req.method==='POST'){await coordinator.cancel(id,await jsonBody(req));return json(202,outer());}if(action==='events'&&req.method==='GET'){const current=outer();return json(200,{protocolVersion:'0.1.0',requirementsUsed:current.requirementsUsed,purposeUsed:current.purposeUsed,delivery:{protocolVersion:'0.1.0',deliveryFactsUsed:current.delivery.deliveryFactsUsed,page:coordinator.events(id,(()=>{const n=Number(url.searchParams.get('after')||0);if(!Number.isSafeInteger(n)||n<0)throw new CoordinationError(400,'INVALID_REQUEST','Invalid requirements cursor');return n;})(),(()=>{const n=Number(url.searchParams.get('limit')||100);if(!Number.isSafeInteger(n)||n<1||n>100)throw new CoordinationError(400,'INVALID_REQUEST','Invalid requirements page limit');return n;})())}});}throw new CoordinationError(404,'NOT_FOUND','Requirements route not found');}
+      if(recoveryRequest){if(req.headers['x-atoms-budget-recovery-version']!=='0.1.0')throw new RecoveryError(400,'INVALID_REQUEST','Unsupported recovery version');const route=url.pathname.match(/^\/internal\/budget-recovery\/v1\/executions\/([a-z][a-z0-9_-]{2,127})(?:\/(confirm-stop))?$/);if(!route)throw new RecoveryError(404,'NOT_FOUND','Recovery route not found');const[,id,action]=route;if(!action&&req.method==='GET')return json(200,await recovery.view(id));if(action==='confirm-stop'&&req.method==='POST')return json(200,await recovery.confirmStop(id,await jsonBody(req)));if(!action&&req.method==='PUT'){const result=await recovery.start(await jsonBody(req,2097152),id);return json(result.created?201:200,result.snapshot);}throw new RecoveryError(404,'NOT_FOUND','Recovery route not found');}
       if (isolationRequest) {
         if (req.headers['x-atoms-isolation-version'] !== IsolationProtocolVersion) throw new HttpError(400, 'INVALID_REQUEST', 'Unsupported isolation version');
         if (url.pathname !== IsolationCapabilitiesPath || req.method !== 'GET') throw new HttpError(404, 'NOT_FOUND', 'Isolation route not found');
@@ -525,14 +538,14 @@ export function createAgentServer(options: AgentOptions) {
       throw new HttpError(404, 'NOT_FOUND', 'Route not found');
     } catch (error) {
       const invalid = error && typeof error === 'object' && 'issues' in error;
-      const known = error instanceof HttpError || error instanceof CoordinationError || error instanceof DeliveryError;
-      const code = known ? error.code : invalid ? 'INVALID_REQUEST' : 'INTERNAL_ERROR';
+      const known = error instanceof HttpError || error instanceof RecoveryError || error instanceof CoordinationError || error instanceof DeliveryError;
+      const baseCode=known?error.code:invalid?'INVALID_REQUEST':'INTERNAL_ERROR';const code=requirementsRequest?(RequirementsError.shape.error.shape.code.safeParse(baseCode).success?baseCode:['RATE_LIMITED','BUDGET_EXCEEDED'].includes(baseCode)?'QUOTA_EXHAUSTED':baseCode==='STALE_REVISION'?'STALE_REQUIREMENTS':'RUNTIME_UNAVAILABLE'):recoveryRequest?(BudgetRecoveryError.shape.error.shape.code.safeParse(baseCode).success?baseCode:'RUNTIME_UNAVAILABLE'):baseCode;
       const status = known ? error.status : invalid ? 400 : 500;
       json(status, { error: { code, message: known ? error.message : invalid ? 'Request does not match protocol' : 'Internal runtime error',
         retryable: status === 503, requestId: `request_${randomUUID().replaceAll('-', '')}` } });
     }
   });
-  return { server, runtime, coordinator, planning, delivery,
+  return { server, runtime, coordinator, planning, delivery,recovery,
     async listen(port = 0, host = '127.0.0.1') {
       await new Promise<void>((resolve) => server.listen(port, host, resolve));
       const address = server.address(); if (!address || typeof address === 'string') throw new Error('No runtime address');

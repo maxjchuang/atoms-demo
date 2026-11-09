@@ -1,3 +1,4 @@
+import{policyAdmissibleCorrection}from'./fixtures/policy-admissible-correction.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createServer } from 'node:http';
@@ -40,7 +41,7 @@ test('every operation example uses the shared schema, complete Seed stays visibl
 });
 
 test('DSL schema failure uses one budgeted mock correction, with complete cases/Seed/required and cumulative known usage',async(t)=>{
-  const {good,bad}=await planningSchemaCapture();const fixture=sdkFixture([JSON.stringify(bad),JSON.stringify(good)],[1512,1000]);const {app,root,request}=await setup(t,fixture.factory);
+  const {good,bad}=await planningSchemaCapture();const fixture=sdkFixture([JSON.stringify(bad),JSON.stringify(policyAdmissibleCorrection(good))],[1512,1000]);const {app,root,request}=await setup(t,fixture.factory);
   await app.planning.start(request,request.preparationId);const record=await until(()=>app.planning.get(request.preparationId),r=>['completed','failed'].includes(r.snapshot.status));
   assert.equal(record.snapshot.status,'completed',JSON.stringify(record.snapshot.error));assert.equal(fixture.state.calls,2);assert.deepEqual(fixture.state.caps,[8192,6680]);
   assert.equal(record.snapshot.usage.modelSteps,2);assert.equal(record.snapshot.usage.inputTokens,1634);assert.equal(record.snapshot.usage.outputTokens,2512);assert.deepEqual(record.snapshot.result!.usage,record.snapshot.usage);
@@ -51,13 +52,13 @@ test('DSL schema failure uses one budgeted mock correction, with complete cases/
 });
 
 test('DSL retry is skipped when remaining original output cannot fund the previous observed cost',async(t)=>{
-  const {good,bad}=await planningSchemaCapture();const fixture=sdkFixture([JSON.stringify(bad),JSON.stringify(good)],[5269,1000]);const {app,root,request}=await setup(t,fixture.factory);
+  const {good,bad}=await planningSchemaCapture();const fixture=sdkFixture([JSON.stringify(bad),JSON.stringify(policyAdmissibleCorrection(good))],[5269,1000]);const {app,root,request}=await setup(t,fixture.factory);
   await app.planning.start(request,request.preparationId);const r=await until(()=>app.planning.get(request.preparationId),r=>r.snapshot.status==='failed');assert.equal(fixture.state.calls,1);assert.equal(r.snapshot.error!.code,'BUDGET_EXCEEDED');assert.equal(r.snapshot.usage.outputTokens,5269);assert.equal(r.snapshot.result,null);
   const log=await readFile(path.join(root,'delivery',request.preparationId,'model-diagnostics.jsonl'),'utf8');assert.match(log,/retry_skipped/);assert.match(log,/insufficient_settled_output/);
 });
 
 test('JSON and DSL failures share the same single retry, never a separate retry per error category',async(t)=>{
-  const {good,bad}=await planningSchemaCapture();for(const outputs of [[JSON.stringify(bad),'{',JSON.stringify(good)],['{',JSON.stringify(bad),JSON.stringify(good)]]){
+  const {good,bad}=await planningSchemaCapture();for(const outputs of [[JSON.stringify(bad),'{',JSON.stringify(good)],['{',JSON.stringify(bad),JSON.stringify(policyAdmissibleCorrection(good))]]){
     const fixture=sdkFixture(outputs,[100,100,100]);const {app,request}=await setup(t,fixture.factory);await app.planning.start(request,request.preparationId);const r=await until(()=>app.planning.get(request.preparationId),r=>r.snapshot.status==='failed');
     assert.equal(fixture.state.calls,2);assert.equal(r.snapshot.usage.modelSteps,2);assert.equal(r.snapshot.usage.outputTokens,200);assert.equal(r.snapshot.result,null);assert.equal(r.events.filter(e=>e.event.type==='planning.progress').length,1);
   }

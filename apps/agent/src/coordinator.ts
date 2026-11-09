@@ -1,3 +1,5 @@
+import { RequirementsCoordinationRequest, type RequirementsCoordinationRequestDto, type RequirementsCoordinationSnapshotDto } from '@atoms/contracts/requirements';
+import { settleRequirements } from './requirements-context.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -19,7 +21,7 @@ import { assertSealed } from './delivery-files.js';
 import { TOKEN_ACCOUNTING_VERSION } from './native-usage.js';
 
 type CoordinatorRecord = {
-  delivery?: DeliveryCoordinationRequestDto; request: StartCoordinationRequestDto; requestHash: string; order: number;
+  requirements?:RequirementsCoordinationRequestDto; requirementsSnapshot?:RequirementsCoordinationSnapshotDto; delivery?: DeliveryCoordinationRequestDto; request: StartCoordinationRequestDto; requestHash: string; order: number;
   snapshot: CoordinationExecutionSnapshotDto; events: CoordinationSourceEventDto[];
   commands: Record<string, { hash: string; snapshot: CoordinationExecutionSnapshotDto }>;
   tokenAccountingVersion?: typeof TOKEN_ACCOUNTING_VERSION;
@@ -80,21 +82,22 @@ export class CoordinatorRuntime {
     if (!record) throw new CoordinationError(404, 'NOT_FOUND', 'Coordination turn not found');
     return record;
   }
-  start(raw: unknown, pathId: string, delivery?: DeliveryCoordinationRequestDto) {
+  start(raw: unknown, pathId: string, delivery?: DeliveryCoordinationRequestDto,requirements?:RequirementsCoordinationRequestDto) {
     const request = StartCoordinationRequest.parse(raw);
     if (request.turnId !== pathId) throw new CoordinationError(400, 'INVALID_REQUEST', 'Coordination turn ID mismatch');
     validateContext(request);
+    if(requirements){RequirementsCoordinationRequest.parse(requirements);assertSealed(requirements);assertSealed(requirements.requirements);}
     if (delivery) { DeliveryCoordinationRequest.parse(delivery); try { assertSealed(delivery); assertSealed(delivery.deliveryFacts); } catch { throw new CoordinationError(400, 'INVALID_REQUEST', 'Delivery fact fingerprint mismatch'); } }
     const requestHash = sha256(canonicalJson(request)); const previous = this.records.get(pathId);
     if (previous) {
-      if (previous.requestHash !== requestHash || canonicalJson(previous.delivery ?? null) !== canonicalJson(delivery ?? null)) throw new CoordinationError(409, 'CONFLICT', 'Turn ID already has a different immutable request');
+      if (previous.requestHash !== requestHash || canonicalJson(previous.delivery ?? null) !== canonicalJson(delivery ?? null)||canonicalJson(previous.requirements??null)!==canonicalJson(requirements??null)) throw new CoordinationError(409, 'CONFLICT', 'Turn ID already has a different immutable request');
       return { created: false, snapshot: structuredClone(previous.snapshot) };
     }
     if (!this.adapter.ready()) throw new CoordinationError(503, 'RUNTIME_UNAVAILABLE', 'Project Router credentials are not configured');
     if ([...this.records.values()].filter((record) => record.request.projectId === request.projectId && !terminal.has(record.snapshot.status)).length >= COORDINATION_DEFAULTS.maxPendingTurnsPerProject) {
       throw new CoordinationError(429, 'RATE_LIMITED', 'Project Router queue is full');
     }
-    const record: CoordinatorRecord = { ...(delivery ? { delivery } : {}), request, requestHash, order: Date.now(), events: [], commands: {}, tokenAccountingVersion: TOKEN_ACCOUNTING_VERSION,
+    const record: CoordinatorRecord = { ...(delivery ? { delivery } : {}),...(requirements?{requirements}:{}), request, requestHash, order: Date.now(), events: [], commands: {}, tokenAccountingVersion: TOKEN_ACCOUNTING_VERSION,
       snapshot: { protocolVersion: CoordinationProtocolVersion, id: request.turnId, projectId: request.projectId,
         revision: 1, status: 'accepted', lastSourceSeq: 0, contextUsed: usedContext(request), result: null, error: null,
         usage: { modelSteps: 0, inputTokens: null, outputTokens: null }, updatedAt: now() } };
@@ -149,7 +152,7 @@ export class CoordinatorRuntime {
       if (controller.signal.aborted || terminal.has(record.snapshot.status)) return;
       this.emit(record, { type: 'coordination.progress', payload: { messageId: `message_${randomUUID().replaceAll('-', '')}`, content } });
     };
-    const context: CoordinationModelContext = { request, deliveryFacts: record.delivery?.deliveryFacts, signal: controller.signal,
+    const context: CoordinationModelContext = { request,requirements:record.requirements, deliveryFacts: record.delivery?.deliveryFacts, signal: controller.signal,
       projectHome: path.join(this.root, 'projects', request.projectId, 'dsh'),
       stableWorkspace: path.join(this.root, 'projects', request.projectId, 'context'), sources: [], report,
       remainingOutputTokens: () => request.budget.maxOutputTokens - (record.snapshot.usage.outputTokens || 0),
@@ -213,6 +216,7 @@ export class CoordinatorRuntime {
           report(`已核验 ${context.sources.length} 个发布版本源码文件；源码只作为解释依据。`);
         }
       }
+      if(record.requirements&&this.adapter.mode==='fake'&&decision!.kind==='change_proposal'&&!decision!.scope){const scope=record.requirements;const entries=scope.requirements.entries.filter(e=>e.state==='active');const refs=entries.map(e=>'q'+scope.requirements.entries.indexOf(e));const texts=entries.map(e=>e.text);if(scope.currentCandidate){refs.push('q_current');texts.push(scope.currentCandidate.requirementText);}decision={...decision,goal:(scope.requirements.base.kind==='empty_project'?'从零完整实现：':'修改真实已有应用：')+texts.join('；'),acceptance:texts.map(description=>({description})),scope:{implementation:scope.requirements.base.kind==='empty_project'?'new_app':'modify_app',included:refs,exclusions:[],coverage:refs.map((ref,index)=>({acceptanceIndex:index,requirements:[ref]})),kind:'increment'}};}
       if (controller.signal.aborted) throw new Error('Coordination aborted');
       if (record.delivery && (decision!.kind === 'consult' || decision!.kind === 'status')) {
         const facts = record.delivery.deliveryFacts;
@@ -221,6 +225,7 @@ export class CoordinatorRuntime {
         decision!.answer = `宿主交付事实（${facts.asOf}）：\n${summary.join('\n') || '尚无交付验收记录。'}\ncomplete 仅表示冻结约定全部通过；partial 含明确缺口，blocked 不可交付，legacy_unverified 未经本协议验证。\n\n${decision!.answer}`;
       }
       const result = settleDecision(request, decision!, context.sources, this.excludedTurns);
+      if(record.requirements){const facts=record.requirements.coordination.deliveryFacts;const terminal={...record.snapshot,result,status:'completed' as const,revision:record.snapshot.revision+1,updatedAt:now()};record.requirementsSnapshot=settleRequirements(record.requirements,decision!,result,{protocolVersion:'0.1.0',coordination:terminal,deliveryFactsUsed:{projectId:facts.projectId,revision:facts.revision,asOf:facts.asOf,hash:facts.hash}});}
       record.snapshot.result = result; record.snapshot.status = 'completed'; record.snapshot.revision++;
       this.memories.set(request.projectId, RouterMemory.parse({ projectId: request.projectId,
         revision: request.context.projectMemory.revision, summary: request.context.projectMemory.summary,

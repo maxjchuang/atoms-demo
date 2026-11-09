@@ -49,7 +49,9 @@ function CompleteSummary({ summary, snapshot, disabled, onReload, onViewRun, onQ
   useEffect(() => { identity.current = `${summary.projectId}:${summary.id}`; return () => { identity.current = ''; }; }, [summary.projectId, summary.id]);
   return <article className="complete-requirements-summary" data-summary-id={summary.id} data-proposal-id={summary.proposal.id}>
     <h4>{accepted ? '完整方案已明确接受' : '待审阅的完整累计方案'}</h4>{!accepted && <small>本方案仍待明确接受；已提出要求和模型建议不等于执行授权。</small>}<p className="complete-goal">{summary.draft.goal}</p>
-    <p>{summary.snapshot.base.kind === 'empty_project' ? '从零构建第一个完整应用；没有已有应用可供追加。' : `修改已发布版本 ${summary.snapshot.base.versionId}；不静默更换基线。`}</p>
+    <p className="summary-baseline-copy">{summary.proposal.basePolicy.kind === 'latest_on_dispatch'
+      ? `${summary.snapshot.base.kind === 'empty_project' ? '审阅时尚无已发布应用' : `审阅时基于已发布版本 ${summary.snapshot.base.versionId}`}；开始构建时使用届时最新成功版本，无则使用模板。`
+      : summary.proposal.basePolicy.expectedBaseVersionId === null ? '精确锁定当前尚无已发布版本的状态；基线变化须重新审阅。' : `精确锁定已发布版本 ${summary.proposal.basePolicy.expectedBaseVersionId}；基线变化须重新审阅。`}</p>
     <strong>累计验收要求（尚不是通过结果）</strong><ul>{summary.draft.acceptance.map(item => <li key={item.id}><span>{item.description}</span><small>对应来源要求：{summary.draft.coverage.find(mapping => mapping.acceptanceId === item.id)?.entryIds.map(id => { const entry = summary.snapshot.entries.find(value => value.id === id); return entry ? `${entry.text}（审阅时：${authorization[entry.authorization]}）` : id; }).join('；')}</small></li>)}</ul>
     <p>纳入本次方案：{summary.draft.includedEntryIds.map(id => summary.snapshot.entries.find(entry => entry.id === id)?.text ?? id).join('；')}</p>
     {summary.draft.exclusions.length > 0 && <aside><strong>明确展示的撤销、替换或未采用建议</strong>{summary.draft.exclusions.map(item => <div key={item.entryId}><p>{exclusion[item.reason]}：{summary.snapshot.entries.find(entry => entry.id === item.entryId)?.text}</p>{item.source && <blockquote>{item.source.quote}</blockquote>}</div>)}<small>接受前不把这些候选变更偷偷写成已确认状态。</small></aside>}

@@ -59,3 +59,11 @@ root静态审查发现typed review沿用了普通submitPrompt的无条件清draf
 新增1个纯subject谓词单元及3个慢回应/导航浏览器：离开项目后保留新dashboard草稿且不拉回；同项目新草稿及明确review目的保留；路由变化瞬间旧context不降普通POST。Mock保存合法review回执后延迟HTTP响应，证明已授权结果仍存在、无Run，不用provider或用户源码。
 
 最后实际复验：Web check通过；requirements定向7/7；`ATOMS_MOCK_PORT=5193 ... playwright test e2e/requirements.spec.ts --grep 'slow review|subject mismatch|review shortcut|ordinary ask|budget PLAN'`6/6（12.8秒）；build/diff通过。当前requirements文件共15项（原12+新3），完整单元应79项（原78+新1），本线未声称修正后全41浏览器/79单元已重跑。root可独立跑受影响集合后提交，代码现稳定。
+
+## latest/exact文案限定对齐
+
+上述第二批已由root独立接受：初版78单元/38浏览器；异步修正后完整79单元、requirements15/15（23秒）、check/build及14/12目视通过，Web提交 `b4c0356`、候选 `1255910`。随后API/root交叉review确认ordinary latest语义不能被总结卡误写成固定dispatch基线。
+
+仅修改 `Requirements.tsx` 的总结卡基线文案，不改wire、policy、权限或请求：latest标“审阅时基于版本/尚无已发布应用；开始构建时使用届时最新成功版本，无则模板”；exact标“精确锁定版本/当前无已发布版本状态；变化须重新审阅”。ReqPanel当前实际base展示不变。typedaccept仍精确比较当时snapshot/base，不代表latest的派发政策被更改。
+
+聚焦Mock browser覆盖latest/exact × published/empty四组合（四项均只读、不接受、不创建Run）4/4通过7.7秒；新增1个单元确认各policy的typed接受仍绑定原snapshot/base，浏览器不发送替代policy，连同原requirements定向共8/8。check/build/diff复验通过。未重跑完整新19浏览器/80单元，不把旧root15/79改写成新全量。仅文案、测试和本状态记录变动，无provider、用户源码、Shared/API/infra或Git操作。

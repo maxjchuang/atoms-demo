@@ -1,6 +1,6 @@
 # Agent验证与修复闭环稳定性：主管基线候选
 
-状态：设计审计中，尚未完成实现。替代把俄罗斯方块几个报错逐点修正就宣布稳定的交付标准。旧用户任务仍是失败，独立临时样例不能替代用户成功记录。
+状态：主管已批准Agent/API/Web分线方案，进入实现与独立验证；尚未完成交付。替代把俄罗斯方块几个报错逐点修正就宣布稳定的交付标准。旧用户任务仍是失败，独立临时样例不能替代用户成功记录。
 
 ## 目标与边界
 
@@ -36,3 +36,15 @@
 必须以通用故障矩阵验证：规划错误→纠正；生成错误→修复；工作目录失败→多轮修复；工作目录通过但clean失败→修复→双侧通过；重复失败/无进展；修复期间取消；预算不足；严格重启不重放/不扣重复额度；源码/计划/报告hash错配failclosed。验证器另有动画瞬态false-pass反例。
 
 真实模型验收使用独立临时空间、明确次数和原预算，重现用户完整需求；不能将手写fixture、单个成功样例或Schema通过称为整条能力稳定。用户原任务保持原始失败状态，任何新用户构建必须有对应授权。
+
+
+## 已冻结的本轮接口与策略
+
+- 复用现有strict执行/交付DTO、phase/message/report/evidence，不前置新公共状态或大协议；Agent私有controller不替代API业务状态机。
+- 可修的clean行为失败先生成nonfinal报告，保持原Run/writer，进入原剩余修复次数；终止才final。旧clean轮的ZIP/报告/证据独立不可变，当前报告单cleanBuild指最新，仍需按source/plan/hash审计。
+- 基础设施自动重试本轮为0；重启维持stop/reconcile→interrupted，不重放模型，不新增自动应用旧响应恢复路径。
+- 冻结后改变Plan仍要求独立新授权，不实现same-credit自动supersession。当前闭环针对同需求/同冻结计划的代码修复，不能暗改标准。
+- API补新终态Preparation的真实usage持久化（unknown仍null，不回填历史），测试nonfinal cleanfail到后续repair期间的锁/额度/发布fence，提供有界安全中文失败摘要。
+- Web补clean行为详情、每一历史Run报告入口、无Version准确文案；只有实际producer数据才显示轮次/下一步/余量，缺失即不猜。
+
+分线设计：`apps/agent/REPAIR-CONTROLLER-DESIGN.md`、`apps/api/REPAIR-CONTROLLER-BOUNDARY-DESIGN.md`、`apps/web/AGENT-REPAIR-CONTROLLER-UX-DESIGN.md`。这组基线是实现授权与验收约束，不是完成声明。

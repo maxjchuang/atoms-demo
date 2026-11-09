@@ -70,7 +70,7 @@ export function applyExecutionEvents(current: ConversationView, events: ProjectE
   return { ...current, workspace: { ...current.workspace, execution, executionEventCursor: execution.eventCursor } };
 }
 export const actorLabels: Record<ConversationMessageDto['actor'], string> = {
-  user: '你', coordinator: '项目负责人', worker: '构建执行器', system: '系统状态', legacy_assistant: '历史助手',
+  user: '你', coordinator: '项目负责人', worker: '程序员', system: '系统状态', legacy_assistant: '历史助手',
 };
 export const turnLabels: Record<CoordinationTurnDto['status'], string> = {
   queued: '消息已排队', processing: '正在处理你的消息', cancelling: '正在停止回答',

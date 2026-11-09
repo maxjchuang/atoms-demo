@@ -202,3 +202,14 @@ The DSH readonly planner requests Agent-private `planning-recipes-v1`: compact c
 Unified delivery repair now uses a typed stage controller and an atomically co-persisted decision journal. Required workspace/clean behavior failures share the same remaining repair allowance; all clean-round archives/reports/evidence remain immutable. No-progress, unknown usage and infrastructure failures stop rather than looping the model. Geometry needs continuous stable observations, and frozen timeouts too short to observe them fail plan review before Worker generation. See [REPAIR-CONTROLLER.md](./REPAIR-CONTROLLER.md) for the actual scope, zero-Provider HTTP fixture, serial tests and separate manual/product-quality limits.
 
 Failure clarification is bounded: only an unchanged-source repair with original repair allowance and known remaining model budget may enter an implementation question before a terminal stop. Its answer keeps the same frozen plan and accumulated counters. Changed-source cycles, exhausted budgets and already stopped Runs do not resume; test/requirement changes use the explicit new-plan confirmation path and a new Code charge.
+
+Repair exhaustion now releases compute into a `question` attention with `resolution: replan`. At most one optional read-only reflection uses the original known remaining budget (no extra code repair, max1000 output, strict JSON, tools disabled). Insufficient/unknown budget or invalid reflection produces the same waiting card without another request. Ordinary answers return409 for this card; explicit stop→replan→review/accept creates a separately authorized task. Cancel/trust/infrastructure stops remain fenced; waiting/restart never replays reflection. Review input is bounded by UTF8 bytes plus a2048-byte native reserve, and a soft deadline leaves cleanup time inside the original wall budget.
+
+Operator-only synthetic real reflection smoke (one provider call per command, no Run/quota/user data; execute only when authorized):
+
+```sh
+ATOMS_REAL_REFLECTION=1 node --env-file=.env --import tsx apps/agent/src/smoke-reflection-real.ts --real --fixture=test
+ATOMS_REAL_REFLECTION=1 node --env-file=.env --import tsx apps/agent/src/smoke-reflection-real.ts --real --fixture=implementation
+```
+
+Each call caps effective input8192/output1000/one step and prints a fresh evidence directory, numeric usage, classification and source-before/after hashes. Model conclusions are advisory, not proof that a test or implementation is correct. No automatic replacement task or plan mutation occurs.

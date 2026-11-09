@@ -63,7 +63,7 @@ async function run(t: any, scenario: 'clean_repair' | 'no_change' = 'clean_repai
         } };
     }
     await app.delivery.start(wrapper, wrapper.execution.executionId);
-    for (let i = 0; i < 4000 && !['succeeded', 'failed', 'cancelled',...(scenario==='no_change'?['waiting_input']:[])].includes(app.runtime.get(wrapper.execution.executionId).snapshot.status); i++)
+    for (let i = 0; i < 4000 && !['succeeded', 'failed', 'cancelled','waiting_input'].includes(app.runtime.get(wrapper.execution.executionId).snapshot.status); i++)
         await pause(50);
     const record = app.runtime.get(wrapper.execution.executionId);
     const report = DeliveryReport.parse(app.delivery.report(wrapper.execution.executionId));
@@ -93,7 +93,7 @@ test('real host workspace passes, exact clean fails in a controlled locale, unif
     assert.equal(record.repairController!.entries.at(-1)!.decision.action, 'advance');
     assert.equal(record.events.filter(e => e.event.type === 'artifact.ready').length, 1);
 });
-test('clean behavior failure with no remaining repair budget retains failure and never dispatches another Worker', { timeout: 120000 }, async (t) => { const { record, adapter, report } = await run(t, 'clean_repair', 0); assert.equal(record.snapshot.status, 'failed'); assert.equal(adapter.calls, 1); assert.equal(report.cleanBuild!.caseResults[0].status, 'failed'); assert.equal(report.evidence.filter(e => e.path.endsWith('round-report.json')).length, 1); assert.equal(record.snapshot.artifactId, null); });
+test('clean behavior failure with no remaining repair budget retains failure and never dispatches another Worker', { timeout: 120000 }, async (t) => { const { record, adapter, report } = await run(t, 'clean_repair', 0); assert.equal(record.snapshot.status, 'waiting_input'); assert.equal(record.snapshot.pendingAttention?.resolution, 'replan'); assert.equal(adapter.calls, 1); assert.equal(report.cleanBuild!.caseResults[0].status, 'failed'); assert.equal(report.evidence.filter(e => e.path.endsWith('round-report.json')).length, 1); assert.equal(record.snapshot.artifactId, null); });
 test('same-source no-progress waits for implementation detail only with repair room, preserving failed clean evidence and counters', { timeout: 120000 }, async (t) => {
  const {dataDir,record,adapter,report,plan}=await run(t,'no_change');assert.equal(record.snapshot.status,'waiting_input');assert.equal(adapter.calls,2);assert.equal(record.repairRoundsUsed,1);assert.equal(record.repairClaimed,false);assert.equal(report.attempts.length,1);assert.equal(record.repairController!.entries.at(-1)!.decision.action,'wait_answer');assert.equal(report.cleanBuild!.caseResults[0].status,'failed');assert.equal(record.delivery!.bundle.plan.hash,plan.hash);
  const root=path.join(dataDir,'executions',record.request.executionId);const bound=report.evidence.filter(e=>e.path.endsWith('round-report.json')||e.path.endsWith('source.zip'));assert.equal(bound.length,2);const prior=await Promise.all(bound.map(e=>readFile(path.join(root,e.path))));const used=JSON.stringify(record.usage);const active=record.activeMs;await pause(50);assert.equal(adapter.calls,2);assert.equal(JSON.stringify(record.usage),used);assert.equal(record.activeMs,active);assert.equal(report.attempts[0].sourceBeforeHash,report.cleanBuild!.sourceBeforeHash);for(const [i,e]of bound.entries()){const bytes=await readFile(path.join(root,e.path));assert.deepEqual(bytes,prior[i]);assert.equal(sha256(bytes),e.sha256);}assert.equal(record.snapshot.artifactId,null);

@@ -1,3 +1,4 @@
+import { RepairReflection, reflectionDescription, type RepairReflectionValue } from './repair-reflection.js';
 import {canonicalDeliveryJson} from '@atoms/contracts/delivery';
 import {atomicLedger} from './atomic-ledger.js';
 import {beginControllerEffect,finishControllerEffect,failureFingerprint,validateController,type RepairControllerState,type RepairStage,type StageBinding,type BudgetObservation,type StageFailure} from './repair-controller.js';
@@ -50,6 +51,7 @@ export type RecordValue = {repairController?:RepairControllerState;failureDiagno
   usage: { modelSteps: number; inputTokens: number; outputTokens: number };
   ordinaryQuestions: number; answers: ResolvedRunQuestion[];
   repairRoundsUsed: number; verificationErrors: string | null; repairClaimed: boolean;
+  reflection?: { status: 'started'|'completed'|'skipped'|'invalid'; review: RepairReflectionValue|null; reason: string; sourceHash: string|null };
   tokenAccountingVersion?: typeof TOKEN_ACCOUNTING_VERSION;
 };
 const terminal = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
@@ -173,6 +175,7 @@ export class AgentRuntime {
     const question = item.snapshot.pendingAttention;
     if (item.snapshot.status !== 'waiting_input' || !question || question.id !== input.attentionId
       || question.revision !== input.expectedRevision) throw new HttpError(409, 'STALE_REVISION', 'Question is no longer current');
+    if (question.resolution === 'replan') throw new HttpError(409, 'CONFLICT', 'This reflection requires explicit replanning; the old execution cannot resume');
     const answer = input.answer;
     if ((answer.kind === 'approve_plan' && question.kind !== 'plan_confirmation')
       || (answer.kind === 'select' && !question.options.some((option) => option.id === answer.optionId))
@@ -256,6 +259,7 @@ export class AgentRuntime {
     const workspace = path.join(root, 'workspace'); const evidence = path.join(root, 'evidence');
     const context: AdapterContext = { request: item.request,sourceBasis:item.recovery?'verified_checkpoint':item.request.input.kind==='template'?'empty_project':'published_version', workspace,
       home: path.join(this.options.dataDir, 'dsh', item.request.projectId), signal: controller.signal,
+      remainingInputTokens: () => item.usageKnown===false?0:item.request.budget.maxInputTokens-item.usage.inputTokens,
       remainingOutputTokens: () => item.usageKnown === false ? 0 : item.request.budget.maxOutputTokens - (item.usage?.outputTokens || 0),
       remainingActiveMs: () => Math.max(0, item.request.budget.maxWallTimeMs - item.activeMs - (Date.now() - startedAt)),
       usageIsKnown: () => item.usageKnown !== false, observedUsage: () => item.usage,
@@ -284,6 +288,30 @@ export class AgentRuntime {
     const begin=async(stage:RepairStage)=>{if(controller.signal.aborted)throw new Error('Execution aborted');if(item.delivery)effect={id:beginControllerEffect(item,stage,await binding(),budget(),()=>this.persist()),stage};};
     const finish=async(result:Parameters<typeof finishControllerEffect>[5])=>{if(!effect)return null;const decision=finishControllerEffect(item,effect.id,effect.stage,await binding(),budget(),result,()=>this.persist());effect=null;return decision;};
     const failure=(category:StageFailure['category'],details:unknown,evidenceRefs:string[]=[]):StageFailure=>({category,fingerprint:failureFingerprint(category,details),evidenceRefs});
+    const reflectAndWait = async (errors: string) => {
+      if (controller.signal.aborted || this.closed) throw new Error('Execution aborted');
+      const before = await binding();
+      const authority=()=>canonical({request:item.request,delivery:item.delivery,plan:item.plan,repairRoundsUsed:item.repairRoundsUsed});const authorityBefore=authority();
+      const assertReadOnly=async()=>{if((await binding()).sourceHash!==before.sourceHash||authority()!==authorityBefore)throw Object.assign(new Error('Read-only reflection changed source or frozen authority'),{controllerCategory:'trust'});};
+      if (!item.reflection) {
+        const remaining=budget().remaining;
+        const skipReason=!budget().known?'模型用量尚未确认':remaining.modelSteps<=0?'剩余模型步骤已用完':(remaining.inputTokens??0)<16000?'剩余输入预算不足':(remaining.outputTokens??0)<1000?'剩余输出预算不足':remaining.activeMs<15000?'剩余执行时间不足':!this.adapter.review?'当前适配器不支持只读复盘':null;const allowed=skipReason===null;
+        item.reflection={status:allowed?'started':'skipped',review:null,reason:allowed?'只读复盘进行中':skipReason!,sourceHash:before.sourceHash};this.persist();
+        if(allowed){
+          context.report('同计划修复次数已用完，正在执行一次只读复盘；不会修改源码或验收。');
+          const soft=new AbortController();const duration=Math.min(20000,Math.max(1,remaining.activeMs-5000));const softTimer=setTimeout(()=>soft.abort('reflection_timeout'),duration);const cancelReview=()=>soft.abort(controller.signal.reason);controller.signal.addEventListener('abort',cancelReview,{once:true});
+          try { const review=RepairReflection.parse(await this.adapter.review!({...context,request:clone(context.request),frozenSpecification:clone(context.frozenSpecification),frozenTestPlan:clone(context.frozenTestPlan),runAnswers:clone(context.runAnswers),signal:soft.signal,remainingActiveMs:()=>Math.max(1,Math.min(duration,context.remainingActiveMs!()-5000))},clone(item.plan!),errors));
+            await assertReadOnly();
+            item.reflection={status:'completed',review,reason:'已完成只读复盘',sourceHash:before.sourceHash};
+          } catch(error) {if(controller.signal.aborted||this.closed)throw error;await assertReadOnly();item.reflection={status:'invalid',review:null,reason:soft.signal.aborted?'只读复盘已到软时限，未追加模型请求':'只读复盘未返回有效结论，未追加模型请求',sourceHash:before.sourceHash};}
+          finally{clearTimeout(softTimer);controller.signal.removeEventListener('abort',cancelReview);}
+          this.persist();
+        }
+      }
+      item.verificationErrors=errors;item.waitingAt=Date.now();
+      const attention={id:`attention_reflection_${id}`,runId:item.request.runId,revision:1,kind:'question' as const,resolution:'replan' as const,title:'自动修复已停止，请确认下一步方案',description:reflectionDescription(item.reflection.review,item.reflection.reason),options:[],allowText:true,createdAt:now()};
+      this.update(item,{status:'waiting_input',pendingAttention:attention});this.emit(item,{type:'attention.created',payload:attention});
+    };
     try {
       if(item.recovery&&!item.started&&Date.now()>=Date.parse(item.recovery.authorization.startBefore))throw new HttpError(409,'INVALID_REQUEST','Recovery start authorization expired before first model dispatch');
       if (this.options.executionBackend === 'docker_linux' && (!this.options.verification || !await this.options.verification.ready())) throw new HttpError(503, 'RUNTIME_UNAVAILABLE', 'Docker verification integration is not ready; host fallback is disabled');
@@ -311,7 +339,7 @@ export class AgentRuntime {
       while (true) {
         if (controller.signal.aborted) throw new Error('Execution aborted');
         if (errors && !item.repairClaimed) {
-          if (item.repairRoundsUsed >= item.request.budget.maxRepairRounds) throw new HttpError(422, 'VERIFICATION_FAILED', '验证失败且修复次数已用完：' + errors.slice(-1000));
+          if (item.repairRoundsUsed >= item.request.budget.maxRepairRounds) { await reflectAndWait(errors); return; }
           // The existing Worker call may ask a question; only accepted code consumes a repair round.
         }
         this.update(item, { phase: errors ? 'repairing' : 'generating' });
@@ -331,6 +359,7 @@ export class AgentRuntime {
           if(after.sourceHash===previous){item.repairClaimed=false;generated={kind:'question',title:'请补充期望的实际表现',description:'自动修复尚未产生可验证进展。请用使用场景补充实现细节；回答只用于原有验收。若需改变目标或测试，请使用重新规划入口，确认后新Code需要构建额度。',options:[],allowText:true};}
         }
         const generationDecision=await finish({outcome:typeof generated==='string'?'passed':'question'});
+        if(generationDecision?.action==='stop'&&generationDecision.reason==='no_progress'&&errors){await reflectAndWait(errors);return;}
         if(generationDecision?.action==='stop')throw new HttpError(422,generationDecision.reason==='usage_unknown'?'BUDGET_EXCEEDED':'VERIFICATION_FAILED',generationDecision.reason==='usage_unknown'?'模型用量未知，控制器已停止后续验证或推理。':'修复未改变源码或重复已失败源码，已停止无进展循环。');
         if(typeof generated==='string')item.recoveryInitialFeedback=null;
         if (typeof generated !== 'string') {
@@ -351,12 +380,14 @@ export class AgentRuntime {
         checks = verified.checks; errors = verified.errors;
         const verificationCategory='failureCategory'in verified&&['code_check','required_behavior','trust'].includes(String(verified.failureCategory))?verified.failureCategory as StageFailure['category']:'infrastructure';
         const verifyDecision=await finish(errors?{outcome:'failed',failure:failure(verificationCategory,errors,checks.flatMap(c=>c.evidenceIds||[]))}:{outcome:'passed'});
+        if(errors&&verifyDecision?.action==='stop'&&['code_check','required_behavior'].includes(verificationCategory)&&item.repairRoundsUsed>=item.request.budget.maxRepairRounds){await reflectAndWait(errors);return;}
         if(errors&&verifyDecision?.action==='stop')throw new HttpError(422,'VERIFICATION_FAILED',verifyDecision.reason==='budget'||verifyDecision.reason==='usage_unknown'?'修复预算不足或用量未知，已停止。':'验证失败且没有可用的同计划修复次数。');
         item.verificationErrors = errors; item.repairClaimed = false; this.persist();
         if (!errors&&item.delivery){
           await begin('export_clean');const clean=await this.deliveryEngine!.finish(item,workspace,context);errors=clean.errors;
           const cleanDecision=await finish(errors?{outcome:'failed',failure:failure(clean.failureCategory??'infrastructure',errors,clean.evidenceRefs)}:{outcome:'passed'});
           item.verificationErrors=errors;this.persist();
+          if(errors&&cleanDecision?.action==='stop'&&clean.failureCategory==='clean_behavior'&&item.repairRoundsUsed>=item.request.budget.maxRepairRounds){await reflectAndWait(errors);return;}
           if(cleanDecision?.action==='stop')throw new HttpError(422,'VERIFICATION_FAILED','干净导出失败且控制器不允许继续：'+cleanDecision.reason);
         }
         if (!errors) break;

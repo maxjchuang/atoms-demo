@@ -17,6 +17,7 @@ export interface DeliveryRecord {
   stage:'preparing'|'executing'; preparationId:string; planningSeq:number;
   prepare?:PrepareDeliveryPlanRequestDto; prepareHash?:string; wrapper?:DeliveryExecutionRequestDto;
   putPending?:boolean; prepareAccepted?:boolean; executionPutPending?:boolean;executionAccepted?:boolean; runtimeStopped?:boolean; noReportExpected?:boolean; report?:DeliveryReportDto; invalid?:string;invalidReason?:string;
+  sealedIdentities?:{kind:'clean'|'export'|'archive';id:string;bodyHash:string}[];
   reportDirectory?:string; archiveFile?:string; verified?:boolean; finalUsage?:ReturnType<typeof import('@atoms/contracts/delivery').BudgetUsage.parse>;
 }
 export interface CoordinationRecord { dto: CoordinationTurnDto; codeId: string; operation: StartCoordinationRequestDto['operation'];

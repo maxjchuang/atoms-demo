@@ -1,3 +1,4 @@
+import { verifiedSemanticSource, reviewPlanSemantics, type SemanticSource } from './planning-semantics.js';
 import { DSH_NATIVE_READONLY_ENV } from './dsh-native-env.js';
 import { mkdirSync, readFileSync, existsSync, writeFileSync, renameSync } from 'node:fs';
 import { mkdir, writeFile, readFile, appendFile } from 'node:fs/promises';
@@ -63,7 +64,7 @@ export class DshPlanningAdapter implements PlanningAdapter {
     const home = path.join(context.directory, 'model'); await mkdir(home, { recursive: true });
     const patch = path.join(home, 'no-tools.yml'); await writeFile(patch, PLANNING_DSH_PATCH);
     verifyDshToolPolicy(home, patch, { requireThinkingOff: true });
-    let sources: { path: string; text: string }[] = [];
+    let sources: { path: string; text: string }[] = [];const semanticSources:SemanticSource[]=[];
     const input = context.request.input;
     if (input.kind === 'version' && context.apiUrl) {
       const base = `${context.apiUrl}/internal/v1/input-artifacts/${input.artifactId}`;
@@ -77,7 +78,7 @@ export class DshPlanningAdapter implements PlanningAdapter {
         const fileResponse = await fetch(`${base}/file?path=${encodeURIComponent(file.path)}`, { headers, signal: context.signal });
         const content = Buffer.from(await fileResponse.arrayBuffer());
         if (!fileResponse.ok || content.length !== file.bytes || sha256(content) !== file.sha256) throw new DeliveryError(400, 'BINDING_MISMATCH', 'Readonly source fingerprint mismatch');
-        sources.push({ path: file.path, text: content.toString() }); bytes += content.length;
+        sources.push({ path: file.path, text: content.toString() });if(/^source\/src\/.*\.(tsx?|jsx?)$/.test(file.path))semanticSources.push(verifiedSemanticSource(file.path,content.toString(),file.sha256)); bytes += content.length;
       }
     }
     const harness = (this.options.harnessFactory || ((options) => new DeepSeekHarness(options)))({ profile: 'sdk-minimal', patches: [patch], cwd: home, processCwd: home, dshHome: home,
@@ -107,7 +108,7 @@ export class DshPlanningAdapter implements PlanningAdapter {
       await writeModelDiagnostic(home, { stage: 'response_received', role: 'delivery-planning', id: context.request.preparationId, finishReason: result.finishReason, textLength: result.finalResponse.length, usageKnown: true, remaining: { activeMs: context.remainingActiveMs?.() ?? context.request.planningBudget.maxWallTimeMs, outputTokens: context.remainingOutput() } });
       if (context.signal.aborted) throw new Error('Planning aborted');
       const raw = parseModelJson({ text: result.finalResponse, finishReason: result.finishReason }, 'delivery-planning') as Record<string, unknown>;
-      return mapModelPlan(raw, context.request);
+      const compiled=mapModelPlan(raw, context.request);const semantic=reviewPlanSemantics(compiled.plan,semanticSources);await writeFile(path.join(home,'plan-semantic-review.json'),JSON.stringify(semantic));if(semantic.issues.length)throw new ModelPlanSchemaError(semantic.issues.slice(0,16).map(i=>({code:i.code,path:['cases',compiled.plan.cases.findIndex(c=>c.id===i.caseId),'steps',compiled.plan.cases.find(c=>c.id===i.caseId)!.steps.findIndex(s=>s.id===i.stepId)],requirement:i.detail+' Do not alter the requirement; choose a proven locator/trigger or retain it as required manual/unsupported.'})));return compiled;
     } catch (error) {
       if (accounting.isUnknown()) context.markUsageUnknown?.();
       await writeModelDiagnostic(home, { stage: error instanceof ModelPlanSchemaError ? 'dsl_schema_invalid' : error instanceof StructuredOutputError ? 'structured_rejected' : 'request_failed', role: 'delivery-planning', id: context.request.preparationId, ...(error instanceof ModelPlanSchemaError ? { errorClass: 'SchemaError' as const, errorCategory: 'dsl_schema_invalid', issues: error.issues, ...responseMeta } : error instanceof StructuredOutputError ? structuredDiagnostic(error) : { errorClass: error instanceof UsageAccountingError ? 'UsageAccountingError' as const : error && typeof error === 'object' && 'issues' in error ? 'SchemaError' as const : 'RequestError' as const, finishReason: null, textLength: null }), interruption: context.signal.reason === 'budget' ? 'budget' : context.signal.aborted ? 'cancelled' : error instanceof StructuredOutputError || error instanceof ModelPlanSchemaError ? null : 'sdk_or_transport', usageKnown: !accounting.isUnknown(), remaining: { activeMs: context.remainingActiveMs?.() ?? context.request.planningBudget.maxWallTimeMs, outputTokens: context.remainingOutput() } });

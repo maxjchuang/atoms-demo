@@ -93,7 +93,7 @@ cd /Users/max/Projects/github/atoms-demo-ngrok
 
 ### 在另一台电脑独立运行
 
-独立工具位于 [`tools/tunnel-monitor`](../tools/tunnel-monitor/README.md)。只复制该目录即可运行，不需要克隆仓库、安装项目依赖、Docker、体验码或模型凭据。需要 Node.js 22 或更新版本；另一台 Mac 的前台运行与登录自启步骤见工具自带说明。
+独立工具位于 [`tools/tunnel-monitor`](../tools/tunnel-monitor/README.md)。在另一台电脑拉取本仓库后，进入该工具目录直接运行，不使用压缩包，也不需要启动本项目服务、安装项目依赖、Docker、体验码或模型凭据。需要 Node.js 22 或更新版本；另一台 Mac 的首次配置、前台运行、登录自启、查看日志及后续拉取更新步骤见工具自带说明。
 
 独立版默认每轮完成后等待10分钟，同一入口连续3轮失败告警、连续2轮正常恢复。该默认值用于降低 ngrok 请求消耗；间隔可配置。监控请求与访客、服务器上现有监控共用套餐额度，不保证剩余额度足够，见[官方额度](https://ngrok.com/docs/pricing-limits)。
 

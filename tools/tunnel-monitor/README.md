@@ -1,15 +1,26 @@
 # 独立公网监控器
 
-只需把此目录复制到另一台电脑，安装 **Node.js 22 或更新版本**。无需 npm install、Docker、Atoms 仓库、本机部署文件或模型密钥。支持 macOS、Windows、Linux，默认前台运行。
+工具随本项目保存在 `tools/tunnel-monitor/`。在另一台电脑拉取仓库后，进入此目录即可独立运行，不需要压缩包，也不需要启动 Atoms 服务。安装 **Node.js 22 或更新版本**即可；无需 npm install、pnpm、Docker、本机部署文件或模型密钥。支持 macOS、Windows、Linux，默认前台运行。
 
 它从监控电脑检查三个显式配置的公网入口，不会启动、停止、重启隧道，不会创建项目、构建或修改额度。**它无法检查部署服务器上的进程，也不能自动发现新的 Cloudflare 临时域名。**
 
-## 开始使用
+## 在另一台 Mac 拉取并启动
 
-先复制 `config.example.json` 为 `config.json`，核对其中主入口、ngrok 备用入口、预览入口。配置路径可以为相对或绝对路径。
+第一次使用时，把 `<仓库地址>` 换成此项目的 Git 地址：
 
 ```sh
+git clone <仓库地址> atoms-demo
+cd atoms-demo/tools/tunnel-monitor
 node --version
+cp config.example.json config.json
+chmod 600 config.json
+```
+
+核对 `config.json` 中的 `targets.primary`（Cloudflare 工作台）、`targets.backup`（ngrok 备用入口）、`targets.preview`（预览网关）。示例地址是编写时的临时入口，使用前须与服务器当前地址核对；示例文件不是域名自动发现机制。配置路径可以为相对或绝对路径。
+
+然后执行：
+
+```sh
 node monitor.mjs check --config ./config.json
 node monitor.mjs run --config ./config.json
 ```
@@ -30,9 +41,31 @@ Node 的 HTTP 请求直接连接目标，不读取浏览器代理、Clash PAC �
 
 ## 配置和状态
 
+常用配置项：
+
+| 字段 | 默认值 | 用途 |
+| --- | --- | --- |
+| `intervalSeconds` | `600` | 每轮完成后的等待秒数 |
+| `timeoutMs` | `8000` | 单次请求的超时毫秒数 |
+| `failureThreshold` | `3` | 同一入口连续失败多少轮告警 |
+| `recoveryThreshold` | `2` | 已告警入口连续正常多少轮恢复 |
+| `stateDirectory` | `./state` | 状态及事件日志目录 |
+| `notifications.enabled` | `false` | 是否启用已配置的微信发送渠道 |
+
+查看最近结果及事件（在工具目录下，使用默认状态路径时）：
+
+```sh
+cat state/latest.json
+tail -n 20 state/events.ndjson
+```
+
+未启用通知时，`run` 静默持续运行，结果写入上述文件；不会自动发送微信或弹出桌面通知。单次 `check` 的输出也不会覆盖持续监控的状态。
+
 `stateDirectory` 相对于**配置文件所在目录**解析。默认 `./state`，其中包含 `latest.json`、`events.ndjson`、一份轮换文件 `events.ndjson.1` 和运行时 `run.lock`。单份事件日志默认最多 1 MiB；状态不含响应正文、体验码、会话、token 或签名链接。macOS/Linux 目录要求 0700、文件 0600；Windows 应使用账户私有目录并限制 ACL，不放在共享或同步目录。
 
 同一状态目录只能运行一个实例。SIGKILL、掉电等异常退出可能留下锁，launchd 自动重启也不会绕过该锁；先确认旧进程确实已停止，再核对并手动移除该目录中的 `run.lock`。不要同时运行两个后台任务。
+
+本机的 `config.json`、`state/` 和日志不要提交 Git；如需存放其他名称的配置或日志，优先放在仓库外的私有目录。示例配置不含凭据，真实 token 始终单独保存在仓库外。
 
 配置只在启动时加载。临时域名变化后，手动更新 `config.json` 的显式 origin 并重启此监控进程。配置只接受 HTTPS 的 Cloudflare Quick Tunnel 和 ngrok 域名，不能含用户名、密码、端口、路径、查询参数或片段。域名变化不会由远端自动探测，也不会自动修改服务器。
 
@@ -93,6 +126,23 @@ launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.example.atoms-p
 ```
 
 没有自动安装任务。本工具自己的事件日志会轮换；launchd 的 stdout/stderr 是独立文件，模板运行默认只输出错误，仍应由你定期检查其大小。使用基于版本目录的 Node 路径时，升级 Node 后记得同步修改 plist。Windows 可由任务计划程序、Linux 可由用户级 systemd 执行同一条 `run` 命令；选择账户私有状态目录，确保只有一个实例。
+
+用户退出登录、电脑休眠或关机期间，LaunchAgent 不能持续采样。监控机使用与服务器独立的网络，才能在服务器网络断开后继续访问通知服务。
+
+## 更新代码、配置与停止
+
+先停止此监控：前台按 Ctrl+C；后台使用上文的 `launchctl bootout`。然后在仓库无未提交代码改动时更新：
+
+```sh
+# 在仓库根目录执行
+git switch main
+git pull --ff-only origin main
+cd tools/tunnel-monitor
+node --test test.mjs
+node monitor.mjs check --config ./config.json
+```
+
+保留自己已有的 `config.json`，不要每次拉取后覆盖为示例。按新版示例核对配置项，临时域名改变时手动更新 `targets`。检查完成后重新执行 `run`，或使用 `launchctl bootstrap` 恢复后台监控。代码更新和配置修改都需要重启监控才会生效；这些操作不影响服务器上的业务服务及隧道。
 
 ## 测试
 

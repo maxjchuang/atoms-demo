@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "targets": {
+    "primary": "https://shed-mariah-velvet-ensemble.trycloudflare.com",
+    "preview": "https://brave-existing-regulation-insulin.trycloudflare.com",
+    "backup": "https://little-dolly-thrill.ngrok-free.dev"
+  },
+  "intervalSeconds": 600,
+  "timeoutMs": 8000,
+  "failureThreshold": 3,
+  "recoveryThreshold": 2,
+  "stateDirectory": "./state",
+  "maxLogBytes": 1048576,
+  "notifications": {
+    "enabled": false,
+    "provider": "pushplus",
+    "channel": "clawbot",
+    "tokenEnv": "ATOMS_MONITOR_PUSHPLUS_TOKEN"
+  }
+}

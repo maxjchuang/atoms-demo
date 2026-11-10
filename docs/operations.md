@@ -90,3 +90,15 @@ cd /Users/max/Projects/github/atoms-demo-ngrok
 私有记录在 `~/.atoms-m3/intel-public/monitor/`：`latest.json` 是逐项详情，`events.ndjson` 记录告警、恢复与域名变化，`notifications.ndjson` 记录通知请求结果；事件和通知日志各保留当前及一份轮换文件。`stdout.log`/`stderr.log` 用于守护进程启动排障。目录0700、文件0600，不提交Git。后台使用当前用户LaunchAgent `com.atoms-demo.tunnel-monitor`，不需要sudo，也不启动Docker VM或业务服务。
 
 已验证死亡且归属明确的监控实例锁可以安全回收；存活、身份不明或PID复用的锁拒绝接管，不向其他PID发送信号。脚本更新后用 `monitor stop`、`monitor start --notify` 加载新版。电脑休眠、关机或用户退出登录时无法持续采样；本机监控无法在整台服务器不可用时独立告警。
+
+### 在另一台电脑独立运行
+
+独立工具位于 [`tools/tunnel-monitor`](../tools/tunnel-monitor/README.md)。只复制该目录即可运行，不需要克隆仓库、安装项目依赖、Docker、体验码或模型凭据。需要 Node.js 22 或更新版本；另一台 Mac 的前台运行与登录自启步骤见工具自带说明。
+
+独立版默认每轮完成后等待10分钟，同一入口连续3轮失败告警、连续2轮正常恢复。该默认值用于降低 ngrok 请求消耗；间隔可配置。监控请求与访客、服务器上现有监控共用套餐额度，不保证剩余额度足够，见[官方额度](https://ngrok.com/docs/pricing-limits)。
+
+服务器上的 `./atoms monitor` 继续检查实际进程与部署身份；独立工具只通过公网检查配置的工作台、备用入口及预览网关。两者互相独立。独立工具不登录、不验证签名应用功能、不创建构建，也不能从公网判断服务器进程是否存活或自动发现新的临时域名。Cloudflare 地址改变后须更新独立工具配置。
+
+微信通知须单独配置并实测；未配置时只有本地状态和事件记录，不宣称已经接通微信。用户已有 ClawBot 绑定其他服务时，不重新扫码绑定通知平台，以免影响现有连接；沿用现有服务需要确认其发送接口。工具提供的可选 PushPlus ClawBot 通道只适用于已在该平台配置好的绑定，默认关闭。[渠道条件](https://pushplus.plus/doc/channel/clawbot.html)以服务商当前规定为准。
+
+独立监控也依赖所在电脑在线、唤醒且能访问目标及通知服务。同一 Wi-Fi 的两台电脑不能覆盖该 Wi-Fi 整体断网时的即时告警；要覆盖服务器断网，监控机应使用独立网络。公网探测失败只证明当前监控机访问失败，不能单凭它断言故障位于服务器、隧道还是监控机自身网络。

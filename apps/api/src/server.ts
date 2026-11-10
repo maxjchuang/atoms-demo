@@ -23,7 +23,7 @@ import { registerCoordination } from './coordination.js';
 
 export interface ApiOptions {
   dataDir: string; agentUrl: string; serviceToken: string; previewSecret: string; previewOrigin: string;
-  publicProfile?:PublicProfile;trustedProxy?:string[];allowedOrigins?: string[]; secureCookies?: boolean; demoCode?: string; demoProjectLimit?:number; pollMs?: number; autoSchedule?: boolean;
+  publicProfile?:PublicProfile;trustedProxy?:string[];allowedOrigins?: string[]; secureCookies?: boolean; demoCode?: string; demoProjectLimit?:number; pollMs?: number; idlePollMs?:number; autoSchedule?: boolean;
   legacyRequirementsFixture?:boolean;deliveryBudget?:Partial<ReturnType<typeof Budget.parse>>;legacyFixtureMode?:boolean; deliveryToolchainId?:string;deliveryToolchain?:ReturnType<typeof ToolchainDescriptor.parse>;deliveryPlanningMode?:'host_profile'|'model_proposed';deliveryProfileHint?:{id:string;hash:string};
   coordinationMessageLimit?:number;coordinationMessagesPerMinute?:number;
 }
@@ -522,18 +522,25 @@ export async function createApi(options: ApiOptions) {
       catch(error) {if(record.delivery){if(transportError(error))reportRuntimeConnection(record.dto.id,false);else delivery.invalid(record,error);}else store.transaction(() => { const current = store.state.runs.find((entry) => entry.dto.id === record.dto.id)!; if (!terminal(current.dto.status)) finish(current, current.dto.status === 'cancelling' ? 'cancelled' : 'failed', 'ARTIFACT_INVALID', '候选产物未通过完整性校验'); }); }
     }
   };
-  const tick = async () => {
+  const lastPolled=new Map<string,number>();
+  const dispatchNeeded=(r:RunRecord)=>r.dto.status!=='cancelling'&&!terminal(r.dto.status)&&(r.dto.executionId
+    ?r.delivery?!(r.delivery.stage==='preparing'?r.delivery.prepareAccepted:r.delivery.executionAccepted):true
+    :r.dto.status==='queued'&&!store.state.projects.find(p=>p.dto.id===r.dto.projectId)?.dto.activeRunId);
+  // Manual ticks deliberately force reconciliation; the timer keeps cheap expiry
+  // checks at 500 ms while waiting/late-report network reads use the idle cadence.
+  const tick = async (force=true) => {
     if (busy || closed) return; busy = true;
     try {
-      if(options.publicProfile)for(const record of store.state.runs.filter(r=>!terminal(r.dto.status)&&!codeActive(r.codeId)))store.transaction(()=>cancelRunCore(record));
+      if(options.publicProfile)for(const record of store.state.runs.filter(r=>!terminal(r.dto.status)&&r.dto.status!=='cancelling'&&!codeActive(r.codeId)))store.transaction(()=>cancelRunCore(record));
+      const needsDispatch=store.state.runs.some(dispatchNeeded);
       let runtimeReady = false;
-      try { runtimeReady = Boolean((await (await runtime('/internal/v1/health')).json() as { ready: boolean }).ready); }
+      if(needsDispatch)try { runtimeReady = Boolean((await (await runtime('/internal/v1/health')).json() as { ready: boolean }).ready); }
       catch {
         for (const record of store.state.runs.filter((entry) => !terminal(entry.dto.status))) reportRuntimeConnection(record.dto.id, false);
         // Existing work still retains its lock. A health error is not a stop confirmation.
       }
-      const isolationReady=options.publicProfile?await publicReady():true;
-      if(options.publicProfile)for(const record of store.state.runs.filter(r=>!terminal(r.dto.status)&&r.dto.status==='queued'&&!r.dto.executionId)){if(record.isolationWaiting===!isolationReady||(isolationReady&&!record.isolationWaiting))continue;store.transaction(()=>{record.isolationWaiting=!isolationReady;const message={id:id('message'),projectId:record.dto.projectId,runId:record.dto.id,role:'assistant' as const,status:'complete' as const,content:isolationReady?'隔离执行环境已就绪，将按原队列继续；没有重新调用项目 Router。':'正在等待当前隔离执行策略与环境验收就绪。修改意图已保存排队，尚未派发代码生成或消耗生成次数。',createdAt:now()};store.state.messages.push(message);emit(message.projectId,message.runId,{type:'message.updated',payload:message});});}
+      const isolationReady=needsDispatch&&options.publicProfile?await publicReady():true;
+      if(options.publicProfile)for(const record of store.state.runs.filter(r=>dispatchNeeded(r)&&r.dto.status==='queued'&&!r.dto.executionId)){if(record.isolationWaiting===!isolationReady||(isolationReady&&!record.isolationWaiting))continue;store.transaction(()=>{record.isolationWaiting=!isolationReady;const message={id:id('message'),projectId:record.dto.projectId,runId:record.dto.id,role:'assistant' as const,status:'complete' as const,content:isolationReady?'隔离执行环境已就绪，将按原队列继续；没有重新调用项目 Router。':'正在等待当前隔离执行策略与环境验收就绪。修改意图已保存排队，尚未派发代码生成或消耗生成次数。',createdAt:now()};store.state.messages.push(message);emit(message.projectId,message.runId,{type:'message.updated',payload:message});});}
       for (const project of runtimeReady&&isolationReady ? store.state.projects : []) {
         if (project.dto.activeRunId) continue;
         const record = store.state.runs.find((entry) => entry.dto.projectId === project.dto.id && entry.dto.status === 'queued' && !entry.dto.executionId);
@@ -556,14 +563,18 @@ export async function createApi(options: ApiOptions) {
           updateRun(record, { executionId, baseVersionId: project.dto.currentVersionId });
         });
       }
-      for(const record of store.state.runs.filter(r=>r.delivery&&(r.delivery.prepare||r.recovery)&&terminal(r.dto.status)&&!r.delivery.report?.final&&!r.delivery.invalid&&!r.delivery.noReportExpected)){try{await delivery.loadReport(record);}catch{/* Final failure reports can arrive after the terminal source event; read-only retry, never replay work. */}}
+      const due=(r:RunRecord)=>{const time=Date.now();if(!force&&r.dto.status!=='cancelling'&&!r.answerCommand&&!r.cancelCommand&&!dispatchNeeded(r)&&(terminal(r.dto.status)||r.dto.status==='waiting_input')&&time-(lastPolled.get(r.dto.id)??-Infinity)<(options.idlePollMs??5000))return false;lastPolled.set(r.dto.id,time);return true;};
+      for(const record of store.state.runs.filter(r=>r.delivery&&(r.delivery.prepare||r.recovery)&&terminal(r.dto.status)&&!r.delivery.report?.final&&!r.delivery.invalid&&!r.delivery.noReportExpected)){if(!due(record))continue;try{await delivery.loadReport(record);}catch{/* Final failure reports can arrive after the terminal source event; read-only retry, never replay work. */}}
       for (const reference of store.state.runs.filter((entry) => entry.dto.executionId && !terminal(entry.dto.status))) {
         let record = store.state.runs.find((entry) => entry.dto.id === reference.dto.id)!;
+        if(!due(record))continue;
         const path = `/internal/v1/executions/${record.dto.executionId}`;
         if(record.delivery){if(options.publicProfile&&record.dto.status!=='cancelling'&&!isolationReady&&(!record.delivery.prepareAccepted||record.delivery.stage==='executing'&&!record.delivery.executionAccepted))continue;try{await delivery.tick(record,ingest,publish);reportRuntimeConnection(record.dto.id,true);}catch(error){if(transportError(error))reportRuntimeConnection(record.dto.id,false);else delivery.invalid(record,error);}continue;}
+        if(options.publicProfile&&record.dto.status!=='cancelling'&&!isolationReady)continue;
         try {
-          // PUT is an idempotent outbox delivery, including after response loss or API restart.
-          await runtime(path, 'PUT', record.request);
+          // Public cancellation only stops the existing identity; never create work to cancel.
+          // Other legacy PUTs keep a fresh readiness fence, including after API restart.
+          if(!options.publicProfile||record.dto.status!=='cancelling')await runtime(path, 'PUT', record.request);
           record = store.state.runs.find((entry) => entry.dto.id === reference.dto.id)!;
           if (record.cancelCommand) { await runtime(`${path}/cancel`, 'POST', record.cancelCommand); store.transaction(() => { store.state.runs.find((entry) => entry.dto.id === reference.dto.id)!.cancelCommand = undefined; }); }
           else if (record.answerCommand) {
@@ -611,7 +622,7 @@ export async function createApi(options: ApiOptions) {
     authorize,ownProject,ownRun,mutation,sessionDto,workspace:workspaceFor,createRun:createRunCore,cancelRun:cancelRunCore,
     versionInfo:freshVersion,
     emitMessage:(message)=>emit(message.projectId,message.runId,{type:'message.updated',payload:message})});
-  const timer = options.autoSchedule === false ? null : setInterval(() => { void tick(); }, options.pollMs ?? 500);
+  const timer = options.autoSchedule === false ? null : setInterval(() => { void tick(false); }, options.pollMs ?? 500);
   const coordinationTimer=options.autoSchedule===false?null:setInterval(()=>{void coordination!.tick();},options.pollMs??500);
   timer?.unref();
   coordinationTimer?.unref();

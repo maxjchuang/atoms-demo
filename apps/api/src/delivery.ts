@@ -116,7 +116,16 @@ export function registerDelivery(h:Host){
    }
   };remember(previous);remember(report);
 
-  const dir=join(h.dataDir,'deliveries',r.delivery!.preparationId,`${report.revision}-${report.hash}`);await mkdir(dir,{recursive:true});
+  const dir=join(h.dataDir,'deliveries',r.delivery!.preparationId,`${report.revision}-${report.hash}`);
+  // A persisted report was assigned only after full evidence import. Exact replay
+  // may reuse those bytes, including after restart, but never hide local damage.
+  if(previous&&previous.id===report.id&&previous.revision===report.revision&&previous.hash===report.hash&&r.delivery!.reportDirectory===dir){
+   const stored=D.DeliveryReport.parse(JSON.parse((await readFile(join(dir,'report.json'))).toString()));
+   if(D.canonicalDeliveryJson(stored)!==D.canonicalDeliveryJson(report))throw new Error('Stored report integrity mismatch');
+   for(const evidence of report.evidence){const bytes=await readFile(join(dir,evidence.path));if(bytes.length!==evidence.bytes||hash(bytes)!==evidence.sha256)throw new Error('Stored evidence checksum mismatch');}
+   return report;
+  }
+  await mkdir(dir,{recursive:true});
   pathSet(report.evidence.map(e=>e.path));let total=0;
   for(const evidence of report.evidence){total+=evidence.bytes;if(total>r.request!.budget.maxArtifactBytes)throw new Error('Evidence exceeds budget');const bytes=await bounded(await request(prefix+`/evidence/${encodeURIComponent(evidence.id)}`),evidence.bytes);if(bytes.length!==evidence.bytes||hash(bytes)!==evidence.sha256)throw new Error('Evidence checksum mismatch');
    if(evidence.mediaType==='image/png'&&!bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])))throw new Error('Invalid PNG');
@@ -178,8 +187,8 @@ export function registerDelivery(h:Host){
    try{await request(path);}catch(error){if((error as {status?:number}).status===404){if((d.stage==='preparing'?d.putPending:d.executionPutPending)===false&&!(d.stage==='preparing'?d.prepareAccepted:d.executionAccepted)){if(d.stage==='executing'&&!r.recovery){const prefix=`/internal/delivery/v1/preparations/${d.preparationId}`;await request(prefix+'/cancel','POST',r.cancelCommand??{commandId:id('command')});const report=await loadReport(r,prefix);if(!report?.final)return;}persist(()=>{if(d.stage==='executing'&&d.wrapper&&!r.recovery)current(runId).delivery!.finalUsage=structuredClone(d.wrapper.bundle.binding.planningUsage);if(d.stage==='preparing')current(runId).delivery!.noReportExpected=true;h.finish(current(runId),'cancelled');});return;}throw error;}throw error;}
    if(!r.cancelCommand)persist(()=>{current(runId).cancelCommand={commandId:id('command')};});
    await request(path+'/cancel','POST',r.cancelCommand);
-  }else{
-   const previouslyUncertain=Boolean(d.executionPutPending),previouslyAccepted=Boolean(d.executionAccepted);const key=d.stage==='preparing'?'putPending':'executionPutPending';if(!(r.recovery&&!d.executionAccepted&&Date.now()>Date.parse(r.recovery.request.authorization.startBefore)))persist(()=>{current(runId).delivery![key]=true;});
+  }else if(!(d.stage==='preparing'?d.prepareAccepted:d.executionAccepted)){
+   const previouslyUncertain=Boolean(d.executionPutPending),previouslyAccepted=Boolean(d.executionAccepted);const key=d.stage==='preparing'?'putPending':'executionPutPending';if(!d[key]&&!(r.recovery&&!d.executionAccepted&&Date.now()>Date.parse(r.recovery.request.authorization.startBefore)))persist(()=>{current(runId).delivery![key]=true;});
    if(r.recovery&&!d.executionAccepted&&Date.now()>Date.parse(r.recovery.request.authorization.startBefore)){
     if(d.executionPutPending===false){persist(()=>{current(runId).delivery!.noReportExpected=true;h.finish(current(runId),'failed','CONFLICT','续跑授权已过期，未确认启动；保留原失败和唯一后继关系。');});return;}
     // A possibly delivered PUT is reconciled at the same identity; never manufacture a second execution.
@@ -194,7 +203,7 @@ export function registerDelivery(h:Host){
    }
    const snapshot=D.PlanPreparationSnapshot.parse(await data(path));
    if(snapshot.requestHash!==d.prepareHash||snapshot.id!==d.preparationId||snapshot.runId!==runId||snapshot.projectId!==r.dto.projectId||snapshot.executionId!==r.dto.executionId)throw new Error('Planning snapshot mismatch');
-   persist(()=>{current(runId).delivery!.runtimeStopped=['completed','failed','cancelled','interrupted'].includes(snapshot.status);if(snapshot.usage.modelSteps>0)markUsed(current(runId));});
+   const stopped=['completed','failed','cancelled','interrupted'].includes(snapshot.status);if(d.runtimeStopped!==stopped||snapshot.usage.modelSteps>0&&!r.started)persist(()=>{current(runId).delivery!.runtimeStopped=stopped;if(snapshot.usage.modelSteps>0)markUsed(current(runId));});
    if(r.delivery!.invalid&&r.delivery!.runtimeStopped){persist(()=>h.finish(current(runId),'failed','ARTIFACT_INVALID','交付证据无效，执行服务已确认停止。'));return;}
    if(snapshot.status==='completed'&&r.dto.status!=='cancelling'){freeze(r,snapshot);return;}
    if(['failed','cancelled','interrupted'].includes(snapshot.status)||snapshot.status==='completed'&&r.dto.status==='cancelling'){
@@ -204,7 +213,7 @@ export function registerDelivery(h:Host){
    if(r.answerCommand&&r.dto.status!=='cancelling'){await request(path+'/inputs','POST',r.answerCommand);persist(()=>{current(runId).answerCommand=undefined;});}
    const snapshot=D.DeliveryExecutionSnapshot.parse(await data(path));
    if(snapshot.binding.id!==d.wrapper!.bundle.binding.id||snapshot.binding.hash!==d.wrapper!.bundle.binding.hash||snapshot.execution.id!==r.dto.executionId||snapshot.execution.runId!==r.dto.id)throw new Error('Execution snapshot binding mismatch');
-   persist(()=>{current(runId).delivery!.finalUsage=snapshot.cumulativeUsage;current(runId).delivery!.runtimeStopped=['succeeded','failed','cancelled','interrupted'].includes(snapshot.execution.status);});
+   const stopped=['succeeded','failed','cancelled','interrupted'].includes(snapshot.execution.status);if(d.runtimeStopped!==stopped||JSON.stringify(d.finalUsage)!==JSON.stringify(snapshot.cumulativeUsage))persist(()=>{current(runId).delivery!.finalUsage=snapshot.cumulativeUsage;current(runId).delivery!.runtimeStopped=stopped;});
    if(r.delivery!.invalid&&r.delivery!.runtimeStopped){persist(()=>h.finish(current(runId),'failed','ARTIFACT_INVALID','交付证据无效，执行服务已确认停止。'));return;}
    try{if(!r.delivery!.invalid)await loadReport(r);}catch(error){if((error as {status?:number}).status!==404)throw error;}
    const page=D.DeliveryExecutionEventPage.parse(await data(path+`/events?after=${r.sourceSeq}&limit=100`));

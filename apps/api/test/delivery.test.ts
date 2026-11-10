@@ -1,7 +1,7 @@
 import * as R from '@atoms/contracts/requirements';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import {mkdtemp,rm,readFile,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -12,7 +12,7 @@ import {createFakeRuntime} from '../src/fake-runtime.js';
 import {createFakeDeliveryRuntime} from '../src/fake-delivery-runtime.js';
 import * as D from '@atoms/contracts/delivery';
 async function fixture(){
- const directory=await mkdtemp(join(tmpdir(),'atoms-delivery-test-')),runtime=createFakeDeliveryRuntime();const address=await runtime.app.listen({host:'127.0.0.1',port:0});
+ const directory=await mkdtemp(join(tmpdir(),'atoms-delivery-test-')),runtime=createFakeDeliveryRuntime();const calls={puts:0,evidence:0,reads:0,health:0};runtime.app.addHook('onRequest',async r=>{if(r.method==='PUT')calls.puts++;else if(r.url.includes('/evidence/'))calls.evidence++;else calls.reads++;if(r.url.endsWith('/health'))calls.health++;});const address=await runtime.app.listen({host:'127.0.0.1',port:0});
  const options={dataDir:directory,agentUrl:address,serviceToken:'delivery-test-token',previewSecret:'delivery-preview-secret',previewOrigin:'http://127.0.0.1:3002',autoSchedule:false,deliveryToolchain:runtime.toolchain};
  let api=await createApi(options),cookie='';api.seedCode('delivery-demo',{projectLimit:8,runLimit:20});
  const request=async(method:'GET'|'POST',url:string,body?:unknown,key=randomUUID())=>{const res=await api.app.inject({method,url,headers:{cookie,'x-atoms-requirements-version':R.RequirementsProtocolVersion,'x-atoms-coordination-version':'0.2.0','x-atoms-delivery-version':D.DeliveryProtocolVersion,'idempotency-key':key,...(body?{'content-type':'application/json'}:{})},payload:body?JSON.stringify(body):undefined});return {status:res.statusCode,data:res.headers['content-type']?.includes('application/json')?res.json():null,bytes:res.rawPayload,headers:res.headers};};
@@ -20,7 +20,7 @@ async function fixture(){
  const project=async()=>{const r=await request('POST','/api/v1/projects',{title:'Delivery fixture'});assert.equal(r.status,201);return r.data;};
  const run=async(projectId:string,prompt='创建可交互页面')=>{const r=await request('POST',`/api/v1/projects/${projectId}/runs`,{prompt,mode:'build'});assert.equal(r.status,202);return r.data.run;};
  const settle=async(runId:string)=>{for(let i=0;i<6;i++){await api.tick();const r=await request('GET',`/api/v1/runs/${runId}`);if(['succeeded','failed','cancelled','interrupted'].includes(r.data.status))return r.data;}throw new Error('Run did not settle '+JSON.stringify((await request('GET',`/api/v1/runs/${runId}`)).data));};
- return {get api(){return api;},runtime,request,project,run,settle,login,async restart(){await api.close();api=await createApi(options);},async close(){await api.close();await runtime.app.close();await rm(directory,{recursive:true,force:true});}};
+ return {get api(){return api;},runtime,calls,request,project,run,settle,login,async restart(){await api.close();api=await createApi(options);},async close(){await api.close();await runtime.app.close();await rm(directory,{recursive:true,force:true});}};
 }
 test('delivery default pipeline freezes real hashes and publishes one verified ZIP alias; restart/restore/edit retain origin',async()=>{
  const f=await fixture();try{const p=await f.project(),r=await f.run(p.id);const done=await f.settle(r.id);assert.equal(done.status,'succeeded');
@@ -143,3 +143,31 @@ test('ordinary published-source consultation preserves its entire body and tail 
  const sharing=await reply('',{kind:'sharing_help'});assert.match(sharing.message,/本机/);assert.match(sharing.message,/公网/);assert.ok(!sharing.message.includes('invented.example'));f.runtime.coordinator.setFactory(request=>({...fakeConsult(request),answer:'已发布源码中的实现逻辑与诊断解释应完整保留。',references:[{kind:'available_action',actionId:request.context.facts.availableActions.find(a=>a.kind==='deployment_help')!.id}]}));const referenced=await reply('');assert.equal(referenced.message,'已发布源码中的实现逻辑与诊断解释应完整保留。');const actionId=referenced.turn.result.references.find((r:any)=>r.kind==='available_action').actionId,action=await f.request('POST',`/api/v2/coordination-turns/${referenced.turn.id}/actions/${actionId}/resolve`,{});assert.equal(action.status,200);assert.equal(action.data.resolution.kind,'deployment_help');assert.match(action.data.resolution.message,/本机/);
  f.runtime.coordinator.setFactory(request=>({kind:'status',answer:'错误地说还在执行',observations:request.context.facts.runs,contextUsed:contextUsedFor(request),references:[],memoryUpdates:[]}));const status=await reply('');assert.match(status.message,/已交付成功版本/);assert.ok(!status.message.includes('错误地说还在执行'));assert.equal((await f.request('GET','/api/v1/session')).data.quota.runsUsed,quota.runsUsed);assert.equal(f.runtime.executeCalls,1);const after=D.DeliveryReadView.parse((await f.request('GET','/api/delivery/v1/runs/'+built.id)).data);if(after.state!=='available')throw Error('Lost report');assert.equal(after.binding.reportHash,reportHash);assert.deepEqual(after.gaps,view.gaps);
  }finally{await f.close();}});
+
+// Waiting is projected through the real source-event ingest path; no model runs.
+async function waitForInput(f:Awaited<ReturnType<typeof fixture>>,runId:string){
+ const record=f.api.store.state.runs.find(r=>r.dto.id===runId)!,execution=f.runtime.executions.get(record.dto.executionId!)!;
+ const attention={id:'attention_idle_fixture',runId,revision:1,kind:'plan_confirmation' as const,title:'Fixture plan',description:'Synthetic waiting state',options:[],allowText:false,plan:{summary:'Fixture only',tasks:['Resume'],acceptance:[{id:'acceptance_idle',description:'Fixture'}]},createdAt:new Date().toISOString()};
+ execution.events.push({protocolVersion:'0.1.0',executionId:record.dto.executionId!,runId,sourceSeq:execution.events.length+1,occurredAt:new Date().toISOString(),event:{type:'attention.created',payload:attention}});
+ await f.api.tick();assert.equal(record.dto.status,'waiting_input');return attention;
+}
+test('accepted waiting polls and API restart reuse verified local evidence with zero PUTs, disk rewrites or store commits',async()=>{
+ const f=await fixture();try{f.runtime.setHold(true);const p=await f.project(),r=await f.run(p.id);await f.api.tick();await f.api.tick();await waitForInput(f,r.id);
+ const record=f.api.store.state.runs[0],dir=record.delivery!.reportDirectory!,paths=['report.json',...record.delivery!.report!.evidence.map(e=>e.path)];
+ const mtimes=await Promise.all(paths.map(async p=>(await stat(join(dir,p),{bigint:true})).mtimeNs));const before=structuredClone(f.api.store.state),calls={...f.calls};
+ const changes=()=>Number((f.api.store.db.prepare('SELECT total_changes() AS n').get() as {n:number}).n),initial=changes();
+ for(let i=0;i<12;i++)await f.api.tick();assert.equal(changes(),initial);assert.deepEqual(f.api.store.state,before);assert.equal(f.calls.puts,calls.puts);assert.equal(f.calls.evidence,calls.evidence);assert.equal(f.calls.health,calls.health);assert.deepEqual(await Promise.all(paths.map(async p=>(await stat(join(dir,p),{bigint:true})).mtimeNs)),mtimes);
+ await f.restart();const restartChanges=changes();await f.api.tick();assert.equal(changes(),restartChanges);assert.deepEqual(f.api.store.state,before);assert.equal(f.calls.puts,calls.puts);assert.equal(f.calls.evidence,calls.evidence);assert.equal(f.api.store.state.projects[0].dto.activeRunId,r.id);assert.equal(f.api.store.state.runs.filter(r=>r.started).length,1);assert.equal(f.api.store.state.versions.length,0);
+ // Scheduled mode suppresses network reconciliation inside the default 5 s window.
+ const reads=f.calls.reads;for(let i=0;i<15;i++)await f.api.tick(false);assert.equal(f.calls.reads,reads);
+ }finally{await f.close();}
+});
+test('same-report reuse fails closed on truncated/deleted local evidence or report, including after restart',async()=>{
+ for(const damage of ['evidence','missing','report']){const f=await fixture();try{f.runtime.setHold(true);const p=await f.project(),r=await f.run(p.id);await f.api.tick();await f.api.tick();await waitForInput(f,r.id);const record=f.api.store.state.runs[0],d=record.delivery!,target=join(d.reportDirectory!,damage==='report'?'report.json':d.report!.evidence[0].path);if(damage==='missing')await rm(target);else await writeFile(target,'truncated');await f.restart();const calls={...f.calls};await f.api.tick();assert.equal(f.calls.evidence,calls.evidence);assert.ok(f.api.store.state.runs[0].delivery!.invalid);assert.equal(f.api.store.state.versions.length,0);assert.equal(f.api.store.state.projects[0].dto.activeRunId,r.id);
+ }finally{await f.close();}}
+});
+test('waiting commands bypass the idle gate and reconnect preserves the same execution without another PUT',async()=>{
+ const f=await fixture();try{f.runtime.setHold(true);const p=await f.project(),r=await f.run(p.id);await f.api.tick();await f.api.tick();await waitForInput(f,r.id);const puts=f.calls.puts;f.runtime.setUnavailable(true);await f.api.tick();assert.equal(f.api.store.state.runs[0].runtimeDisconnected,true);f.runtime.setUnavailable(false);await f.api.tick();assert.equal(f.api.store.state.runs[0].runtimeDisconnected,false);assert.equal(f.calls.puts,puts);
+ const cancelled=await f.request('POST',`/api/v1/runs/${r.id}/cancel`,{});assert.equal(cancelled.status,202);await f.api.tick(false);assert.equal(f.api.store.state.runs[0].dto.status,'cancelled');assert.equal(f.calls.puts,puts);assert.equal(f.api.store.state.projects[0].dto.activeRunId,null);
+ }finally{await f.close();}
+});
